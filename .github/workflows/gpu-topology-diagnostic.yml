@@ -1,0 +1,95 @@
+name: Read-only GPU topology verification
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'src/gpu_topology*'
+      - 'src/gpu_inventory*'
+      - 'src/Build-Gpu-Topology-Diagnostic.ps1'
+      - 'tests/test_gpu_topology.c'
+      - '.github/workflows/gpu-topology-diagnostic.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  host:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Initialize persistent activity log before checkout
+        shell: bash
+        run: |
+          mkdir -p "$RUNNER_TEMP/gu-log"
+          {
+            echo "event=${GITHUB_EVENT_NAME} repo=${GITHUB_REPOSITORY} sha=${GITHUB_SHA} ref=${GITHUB_REF} run=${GITHUB_RUN_ID} attempt=${GITHUB_RUN_ATTEMPT}"
+            date -u
+            uname -a
+            gcc --version | head -n 1
+            clang --version | head -n 1
+          } > "$RUNNER_TEMP/gu-log/host.log" 2>&1
+      - uses: actions/checkout@v4
+      - name: Compile and execute bounded host tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          (
+            trap 'rc=$?; echo "HOST_EXIT=$rc"; git status --short; df -h .; exit "$rc"' EXIT
+            gcc -std=c11 -O2 -Wall -Wextra -Werror -pedantic -Isrc tests/test_gpu_topology.c src/gpu_topology.c src/gpu_inventory.c -o "$RUNNER_TEMP/test_gpu_topology"
+            "$RUNNER_TEMP/test_gpu_topology"
+            clang -std=c11 -O2 -Wall -Wextra -Werror -pedantic -Isrc tests/test_gpu_topology.c src/gpu_topology.c src/gpu_inventory.c -o "$RUNNER_TEMP/test_gpu_topology_clang"
+            "$RUNNER_TEMP/test_gpu_topology_clang"
+            gcc -std=c11 -O1 -g -fsanitize=undefined -fno-sanitize-recover=all -Wall -Wextra -Werror -pedantic -Isrc tests/test_gpu_topology.c src/gpu_topology.c src/gpu_inventory.c -o "$RUNNER_TEMP/test_gpu_topology_ubsan"
+            "$RUNNER_TEMP/test_gpu_topology_ubsan"
+          ) 2>&1 | tee -a "$RUNNER_TEMP/gu-log/host.log"
+      - name: Preserve final host status
+        if: always()
+        shell: bash
+        run: |
+          { echo "final_utc=$(date -u +%FT%TZ)"; git status --short || true; } >> "$RUNNER_TEMP/gu-log/host.log" 2>&1
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: gpu-topology-host-activity-${{ github.run_id }}
+          path: ${{ runner.temp }}/gu-log/host.log
+          if-no-files-found: error
+  efi:
+    runs-on: windows-latest
+    steps:
+      - name: Initialize persistent EFI build log before checkout
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path "$env:RUNNER_TEMP\gu-log" | Out-Null
+          @("event=$env:GITHUB_EVENT_NAME sha=$env:GITHUB_SHA ref=$env:GITHUB_REF run=$env:GITHUB_RUN_ID", "utc=$((Get-Date).ToUniversalTime().ToString('o'))", "host=$env:RUNNER_OS", "powershell=$($PSVersionTable.PSVersion)") | Out-File -Encoding utf8 "$env:RUNNER_TEMP\gu-log\efi.log"
+      - uses: actions/checkout@v4
+      - name: Compile isolated diagnostic EFI with MSVC
+        shell: pwsh
+        run: |
+          try {
+            $ErrorActionPreference='Stop'
+            $output = & .\src\Build-Gpu-Topology-Diagnostic.ps1 -SaveLog 2>&1
+            $output | Tee-Object -FilePath "$env:RUNNER_TEMP\gu-log\efi.log" -Append
+            if($LASTEXITCODE -and $LASTEXITCODE -ne 0) {throw "MSVC failed: $LASTEXITCODE"}
+            if(-not (Test-Path .\src\build_diagnostic\GPU-TOPOLOGY-DIAGNOSTIC.EFI)){throw 'EFI missing'}
+            'BUILD_EXIT=0' | Out-File -Append "$env:RUNNER_TEMP\gu-log\efi.log"
+          } catch {
+            "BUILD_EXIT=1 $($_.Exception.Message)" | Out-File -Append "$env:RUNNER_TEMP\gu-log\efi.log"
+            throw
+          }
+      - name: Preserve final EFI status
+        if: always()
+        shell: pwsh
+        run: |
+          "final_utc=$((Get-Date).ToUniversalTime().ToString('o'))" | Out-File -Append "$env:RUNNER_TEMP\gu-log\efi.log"
+          git status --short 2>&1 | Out-File -Append "$env:RUNNER_TEMP\gu-log\efi.log"
+          Get-PSDrive -PSProvider FileSystem | Format-Table | Out-String | Out-File -Append "$env:RUNNER_TEMP\gu-log\efi.log"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: gpu-topology-efi-activity-${{ github.run_id }}
+          path: ${{ runner.temp }}/gu-log/efi.log
+          if-no-files-found: error
+      - uses: actions/upload-artifact@v4
+        if: success()
+        with:
+          name: gpu-topology-diagnostic-unsigned-${{ github.sha }}
+          path: src/build_diagnostic/GPU-TOPOLOGY-DIAGNOSTIC.EFI
+          if-no-files-found: error
