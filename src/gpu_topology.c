@@ -19,6 +19,22 @@ int GuTopoPathValid(const GU_TOPO_PATH *p) {
   return 0;
 }
 
+/* The last PCI node must identify the same function as GetLocation().
+ * Otherwise a fabricated/changed path could assign the wrong bridge chain. */
+static int EndpointMatches(const GU_TOPO_PCI *node) {
+  const GU_TOPO_PATH *p=&node->path;
+  size_t body=Body(p),at=0,last=0;
+  if(body<6)return 0;
+  while(at<body) {
+    size_t n=(size_t)p->bytes[at+2] | ((size_t)p->bytes[at+3]<<8);
+    if(n<4 || n>body-at)return 0;
+    last=at;at+=n;
+  }
+  return p->bytes[last]==1U && p->bytes[last+1]==1U &&
+    body-last==6U && p->bytes[last+4]==node->identity.function &&
+    p->bytes[last+5]==node->identity.device;
+}
+
 static int Prefix(const GU_TOPO_PATH *prefix, const GU_TOPO_PATH *path) {
   size_t length;
   if (!GuTopoPathValid(prefix) || !GuTopoPathValid(path)) return 0;
@@ -113,7 +129,8 @@ int GuTopoAssess(const GU_TOPO_CAPTURE *s, GU_TOPO_REPORT *r) {
   for(i=0;i<s->pci_count;i++) {
     const GU_GPU_RECORD *id=&s->pci[i].identity;
     if(!id->handle || !id->pci || id->segment>65535 || id->bus>255 ||
-       id->device>31 || id->function>7 || !GuTopoPathValid(&s->pci[i].path))
+       id->device>31 || id->function>7 || !GuTopoPathValid(&s->pci[i].path) ||
+       !EndpointMatches(&s->pci[i]))
        return r->status;
     for(j=0;j<i;j++)
       if(SameBdf(id,&s->pci[j].identity) || id->handle==s->pci[j].identity.handle ||
@@ -151,7 +168,13 @@ int GuTopoAssess(const GU_TOPO_CAPTURE *s, GU_TOPO_REPORT *r) {
     else if((size_t)owner==r->gpu_index[1])r->gop_count[1]++;
     else if((s->pci[owner].identity.pci_id&0xffffU)==0x1002U)r->amd_gop_count++;
   }
-  r->gop_relationships_observed=(r->gop_count[0] || r->gop_count[1]);
+  r->gop_relationships_observed=(r->gop_count[0] && r->gop_count[1]);
+  /* Each GPU needs an actual associated GOP path. Absence is not evidence that
+   * the proprietary NVIDIA firmware driver is detached or safe to Stop. */
+  if(!r->gop_relationships_observed)incomplete=1;
+  /* Lack of an OpenProtocolInformation result on either target makes UEFI
+   * protocol ownership unknown, even if its PCI ancestry is established. */
+  for(i=0;i<2;i++)if(!s->pci[r->gpu_index[i]].openers_known)incomplete=1;
   /* NVIDIA GOP absence is recorded, never interpreted as unbound/independent. */
   for(i=0;i<s->console_count;i++) {
     int owner=DisplayOwner(s,&s->console[i]);

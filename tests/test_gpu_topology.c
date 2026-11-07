@@ -38,6 +38,7 @@ static void Pci(size_t i,GU_GPU_IDENTITY ident,GU_TOPO_PATH path,uint16_t cls,
   p->identity.pci=(void *)(uintptr_t)(i*2+2);
   p->path=path;p->bridge=(cls==0x0604U);p->root_port=(uint8_t)root;
   p->secondary=secondary;p->subordinate=subordinate;
+  p->openers_known=1;p->by_driver=(cls==0x0300U);
 }
 static void Baseline(void) {
   GU_GPU_IDENTITY ra={0x12341022U,0,0,0,1,0};
@@ -98,14 +99,14 @@ int main(void) {
   Baseline();snapshot.pci[0].bridge=0;
   CHECK(GuTopoAssess(&snapshot,&report)==GU_TOPO_INCOMPLETE);
   Baseline();snapshot.pci[0].path=Path(-1,0,5,0);
-  CHECK(GuTopoAssess(&snapshot,&report)==GU_TOPO_INCOMPLETE);
+  CHECK(GuTopoAssess(&snapshot,&report)==GU_TOPO_INVALID);
 
   Baseline();snapshot.pci[2].identity.device=1;
   snapshot.pci[2].path=snapshot.pci[0].path;
   snapshot.pci[2].secondary=1;snapshot.pci[2].subordinate=4;
   snapshot.pci[3].path=Path(1,0,0,0);
-  /* Duplicate PCI path is ambiguous and must never select a shared owner. */
-  CHECK(GuTopoAssess(&snapshot,&report)==GU_TOPO_CONFLICT);
+  /* Conflicting PCI identity/path cannot be used as a shared owner. */
+  CHECK(GuTopoAssess(&snapshot,&report)==GU_TOPO_INVALID);
 
   Baseline();snapshot.console[0]=snapshot.pci[1].path;
   CHECK(GuTopoAssess(&snapshot,&report)==GU_TOPO_CONFLICT);
@@ -117,8 +118,17 @@ int main(void) {
   Baseline();snapshot.console[0]=Path(-1,0,15,0);
   CHECK(GuTopoAssess(&snapshot,&report)==GU_TOPO_INCOMPLETE);
   Baseline();snapshot.gop[0].path=Path(-1,0,15,0);
-  CHECK(GuTopoAssess(&snapshot,&report)==GU_TOPO_COMPLETE);
+  CHECK(GuTopoAssess(&snapshot,&report)==GU_TOPO_INCOMPLETE);
   CHECK(report.unmatched_gops==1 && report.gop_count[0]==0);
+
+  Baseline();snapshot.pci[1].openers_known=0;
+  CHECK(GuTopoAssess(&snapshot,&report)==GU_TOPO_INCOMPLETE);
+  Baseline();snapshot.gop[1].path=Path(-1,0,15,0);
+  CHECK(GuTopoAssess(&snapshot,&report)==GU_TOPO_INCOMPLETE);
+  Baseline();snapshot.pci[0].path.bytes[17]=9; /* root path and BDF diverge */
+  CHECK(GuTopoAssess(&snapshot,&report)==GU_TOPO_INVALID);
+  Baseline();snapshot.pci[3].path.bytes[23]=5; /* endpoint path and BDF diverge */
+  CHECK(GuTopoAssess(&snapshot,&report)==GU_TOPO_INVALID);
 
   Baseline();snapshot.pci[1].path.bytes[14]=1; /* six-byte PCI node now too long */
   CHECK(GuTopoAssess(&snapshot,&report)==GU_TOPO_INVALID);

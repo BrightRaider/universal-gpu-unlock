@@ -24,12 +24,13 @@ its pre-boot PCI bus will remain the same across firmware configuration changes.
 - Identifies exact GPUs through **the same** `GuCollectGpuInventory` and
   `GuFindPinnedGpuPair` routine as the existing source, not by array position.
 - Validates nearest PCI bridge parents using complete path-prefix ancestry;
-  bridge bus windows must contain the GPU bus. A PCIe Root Port requires PCIe
+  bridge bus windows must contain the GPU bus. Each terminal PCI path node must agree with its BDF device/function. A PCIe Root Port requires PCIe
   capability Port Type 4. Roots must be distinct. Missing handles cannot be
   invented from PCI bus numbers.
 - Enumerates `EFI_GRAPHICS_OUTPUT_PROTOCOL` handles and associates each GOP
-  device path with its longest matching display-controller PCI path. Logs
-  `OpenProtocolInformation` BY_DRIVER counts; an owner count is not proof of
+  device path with its longest matching display-controller PCI path. Both
+  NVIDIA GOP associations and successful PCI owner queries are required for
+  a complete topology observation. Logs `OpenProtocolInformation` BY_DRIVER counts; an owner count is not proof of
   a particular NVIDIA driver's private GOP context or of a safe Stop operation.
 - Reads `ConOut` device path(s) from the UEFI global variable **without
   writing it**; demands an AMD display GOP association and no NVIDIA ConOut
