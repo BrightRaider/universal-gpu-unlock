@@ -3,6 +3,7 @@
 #include "port.h"
 
 #include "checks.h"
+#include "gpu_discovery.h"
 
 #include "profile.h"
 
@@ -18,61 +19,7 @@
 
 #include "driver_nvram.h"
 
-static EFI_GUID PciGuid=EFI_PCI_IO_PROTOCOL_GUID;
-
 static EFI_GUID GlobalGuid={0x8be4df61,0x93ca,0x11d2,{0xaa,0x0d,0,0xe0,0x98,0x03,0x2b,0x8c}};
-
-static EFI_STATUS Discover(EFI_HANDLE image,EFI_SYSTEM_TABLE *t) {
-
-  EFI_HANDLE *h=NULL,target=NULL;EFI_PCI_IO_PROTOCOL *io=NULL;UINTN count=0,found=0;
-
-  EFI_STATUS s=t->BootServices->LocateHandleBuffer(ByProtocol,&PciGuid,NULL,&count,&h);
-
-  if(s==EFI_SUCCESS&&(!h||!count||count>1024))s=EFI_UNSUPPORTED;
-
-  UINT16 detected_dev_id = 0;
-
-  for(UINTN i=0;s==EFI_SUCCESS&&i<count;i++) {
-
-    EFI_PCI_IO_PROTOCOL *p=NULL;UINT32 id=0;
-
-    s=t->BootServices->HandleProtocol(h[i],&PciGuid,(VOID **)&p);
-
-    if(s!=EFI_SUCCESS||!p||!p->Pci.Read){s=EFI_UNSUPPORTED;break;}
-
-    s=p->Pci.Read(p,EfiPciIoWidthUint32,0,1,&id);
-
-    if(s==EFI_SUCCESS&&GuIsSupportedPciId(id)){found++;target=h[i];io=p;detected_dev_id=(UINT16)(id>>16);}
-
-  }
-
-  if(h)t->BootServices->FreePool(h);
-
-  if(s!=EFI_SUCCESS||found!=1||!io)return EFI_UNSUPPORTED;
-
-  GuInit(t->BootServices,io);Gu.image=image;Gu.handle=target;
-
-  Gu.device_id=detected_dev_id;Gu.is_ampere=GuIsAmpereDeviceId(detected_dev_id);Gu.is_turing=GuIsTuringDeviceId(detected_dev_id);
-
-  UINT32 c[64];UINTN seg,bus,dev,fun;GU_CAPS caps;
-
-  if(!io->GetLocation)return EFI_UNSUPPORTED;
-
-  s=io->GetLocation(io,&seg,&bus,&dev,&fun);
-
-  if(s==EFI_SUCCESS)s=io->Pci.Read(io,EfiPciIoWidthUint32,0,64,c);
-
-  if(s!=EFI_SUCCESS||!GuCheckConfig(c,seg,bus,dev,fun,&caps)||((c[2]>>16)!=0x0300U&&(c[2]>>16)!=0x0302U))return EFI_UNSUPPORTED;
-
-  Gu.bar_base=(c[4]&~0xfU);
-
-  Gu.bar_size=0x1000000;
-
-  Gu.pm_cap=caps.pm;Gu.pcie_cap=caps.pcie;Gu.pcie_version=caps.pcie_version;Gu.msi_cap=caps.msi;Gu.msix_cap=caps.msix;
-
-  return EFI_SUCCESS;
-
-}
 
 EFI_STATUS EFIAPI UefiMain(EFI_HANDLE image,EFI_SYSTEM_TABLE *t) {
 
@@ -90,7 +37,7 @@ EFI_STATUS EFIAPI UefiMain(EFI_HANDLE image,EFI_SYSTEM_TABLE *t) {
 
   const char *stage="discover";CHAR16 choice=L'S';
 
-  s=Discover(image,t);if(s!=EFI_SUCCESS)goto failed;
+  s=GuDiscoverSingleGpu(image,t);if(s!=EFI_SUCCESS)goto failed;
 
   if (Gu.is_ampere) {
 
