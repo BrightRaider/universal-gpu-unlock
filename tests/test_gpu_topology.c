@@ -123,6 +123,10 @@ int main(void) {
 
   Baseline();snapshot.pci[1].openers_known=0;
   CHECK(GuTopoAssess(&snapshot,&report)==GU_TOPO_INCOMPLETE);
+  Baseline();snapshot.pci[1].by_driver=0;
+  CHECK(GuTopoAssess(&snapshot,&report)==GU_TOPO_INCOMPLETE);
+  Baseline();snapshot.pci[1].by_driver=2;
+  CHECK(GuTopoAssess(&snapshot,&report)==GU_TOPO_CONFLICT);
   Baseline();snapshot.gop[1].path=Path(-1,0,15,0);
   CHECK(GuTopoAssess(&snapshot,&report)==GU_TOPO_INCOMPLETE);
   Baseline();snapshot.pci[0].path.bytes[17]=9; /* root path and BDF diverge */

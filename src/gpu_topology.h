@@ -20,6 +20,7 @@ typedef struct {
   uint8_t bridge;     /* Class 06:04 */
   uint8_t secondary, subordinate; /* PCI bridge bus-number window. */
   unsigned by_driver; /* OpenProtocolInformation BY_DRIVER observers, if available. */
+  void *first_owner_agent; /* Handle token only, NOT a verified driver identity. */
   uint8_t openers_known;
 } GU_TOPO_PCI;
 

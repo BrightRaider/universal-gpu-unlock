@@ -174,7 +174,11 @@ int GuTopoAssess(const GU_TOPO_CAPTURE *s, GU_TOPO_REPORT *r) {
   if(!r->gop_relationships_observed)incomplete=1;
   /* Lack of an OpenProtocolInformation result on either target makes UEFI
    * protocol ownership unknown, even if its PCI ancestry is established. */
-  for(i=0;i<2;i++)if(!s->pci[r->gpu_index[i]].openers_known)incomplete=1;
+  for(i=0;i<2;i++) {
+    const GU_TOPO_PCI *node=&s->pci[r->gpu_index[i]];
+    if(!node->openers_known || !node->by_driver)incomplete=1;
+    if(node->by_driver>1)bad=1;
+  }
   /* NVIDIA GOP absence is recorded, never interpreted as unbound/independent. */
   for(i=0;i<s->console_count;i++) {
     int owner=DisplayOwner(s,&s->console[i]);

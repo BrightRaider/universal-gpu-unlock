@@ -26,7 +26,7 @@ static GU_TOPO_CAPTURE Snapshot;
 static GU_TOPO_REPORT Report;
 static EFI_SYSTEM_TABLE *System;
 #ifdef GU_TOPO_SAVE_LOG
-static char LogBytes[65536];
+static char LogBytes[131072];
 static size_t LogUsed;
 static int LogOverflow;
 static EFI_GUID LoadedGuid=EFI_LOADED_IMAGE_PROTOCOL_GUID;
@@ -44,6 +44,23 @@ static void Say(const char *format, ...) {
   for(i=0;i<n;i++)wide[i]=(CHAR16)(unsigned char)line[i];wide[n]=0;
   if(System && System->ConOut && System->ConOut->OutputString)
     (VOID)System->ConOut->OutputString(System->ConOut,wide);
+}
+
+/* Emit bounded device-path evidence; lengths alone cannot verify ancestry. */
+static void SayPath(const char *kind, size_t index, const GU_TOPO_PATH *path) {
+  static const char hex_digits[]="0123456789abcdef";
+  size_t at;
+  for(at=0;at<path->length;at+=24) {
+    char hex[49];
+    size_t i,used=path->length-at;
+    if(used>24)used=24;
+    for(i=0;i<used;i++) {
+      hex[2*i]=hex_digits[path->bytes[at+i]>>4];
+      hex[2*i+1]=hex_digits[path->bytes[at+i]&15];
+    }
+    hex[2*used]=0;
+    Say("%s[%zu] PATH_OFFSET=%zu PATH_BYTES=%s\r\n",kind,index,at,hex);
+  }
 }
 
 static int PathCopy(const EFI_DEVICE_PATH_PROTOCOL *source, GU_TOPO_PATH *out) {
@@ -138,8 +155,12 @@ static int ReadPci(EFI_BOOT_SERVICES *bs, EFI_HANDLE h, GU_TOPO_PCI *node) {
         if(entries && bs->FreePool)(VOID)bs->FreePool(entries);
         return 0;
       }
-      for(i=0;i<count;i++)
-        if(entries[i].Attributes & EFI_OPEN_PROTOCOL_BY_DRIVER)node->by_driver++;
+      for(i=0;i<count;i++) {
+        if(entries[i].Attributes & EFI_OPEN_PROTOCOL_BY_DRIVER) {
+          if(!node->by_driver)node->first_owner_agent=entries[i].AgentHandle;
+          node->by_driver++;
+        }
+      }
     }
     if(entries && ( !bs->FreePool || EFI_ERROR(bs->FreePool(entries))))return 0;
   }
@@ -253,14 +274,23 @@ EFI_STATUS EFIAPI UefiMain(EFI_HANDLE image, EFI_SYSTEM_TABLE *table) {
       Snapshot.pci_count,Snapshot.gop_count,Snapshot.console_count);
   for(i=0;i<Snapshot.pci_count;i++) {
     const GU_TOPO_PCI *p=&Snapshot.pci[i];
-    Say("PCI[%zu] %04x:%02x:%02x.%u %04x:%04x SUB=%04x:%04x CLASS=%04x ROOTPORT=%u BUSWINDOW=%02x-%02x BY_DRIVER=%u KNOWN=%u PATH=%zu\r\n",
+    Say("PCI[%zu] %04x:%02x:%02x.%u %04x:%04x SUB=%04x:%04x CLASS=%04x ROOTPORT=%u BUSWINDOW=%02x-%02x BY_DRIVER=%u KNOWN=%u AGENT=%p PATH=%zu\r\n",
       i,(unsigned)p->identity.segment,(unsigned)p->identity.bus,
       (unsigned)p->identity.device,(unsigned)p->identity.function,
       (unsigned)(p->identity.pci_id&65535U),(unsigned)(p->identity.pci_id>>16),
       (unsigned)(p->identity.subsystem_id&65535U),(unsigned)(p->identity.subsystem_id>>16),
       (unsigned)p->identity.class_code,(unsigned)p->root_port,
       (unsigned)p->secondary,(unsigned)p->subordinate,
-      p->by_driver,(unsigned)p->openers_known,p->path.length);
+      p->by_driver,(unsigned)p->openers_known,p->first_owner_agent,p->path.length);
+    SayPath("PCI",i,&p->path);
+  }
+  for(i=0;i<Snapshot.gop_count;i++) {
+    Say("GOP[%zu] PATH_LEN=%zu\r\n",i,Snapshot.gop[i].path.length);
+    SayPath("GOP",i,&Snapshot.gop[i].path);
+  }
+  for(i=0;i<Snapshot.console_count;i++) {
+    Say("CONOUT[%zu] PATH_LEN=%zu\r\n",i,Snapshot.console[i].length);
+    SayPath("CONOUT",i,&Snapshot.console[i]);
   }
   if(pci_ok && gop_ok && Report.pair_exact) {
     for(i=0;i<2;i++) {

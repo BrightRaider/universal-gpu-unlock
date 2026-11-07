@@ -30,7 +30,9 @@ its pre-boot PCI bus will remain the same across firmware configuration changes.
 - Enumerates `EFI_GRAPHICS_OUTPUT_PROTOCOL` handles and associates each GOP
   device path with its longest matching display-controller PCI path. Both
   NVIDIA GOP associations and successful PCI owner queries are required for
-  a complete topology observation. Logs `OpenProtocolInformation` BY_DRIVER counts; an owner count is not proof of
+  a complete topology observation. A missing or multiple BY_DRIVER owner record
+  for an NVIDIA GPU is not accepted as a complete owner observation. Logs
+  `OpenProtocolInformation` BY_DRIVER counts and first agent handle token; an owner count is not proof of
   a particular NVIDIA driver's private GOP context or of a safe Stop operation.
 - Reads `ConOut` device path(s) from the UEFI global variable **without
   writing it**; demands an AMD display GOP association and no NVIDIA ConOut
@@ -69,7 +71,8 @@ On removable media with UEFI Shell, run the image by its explicitly chosen
 path, e.g. `fs0:\GPU-TOPOLOGY-DIAGNOSTIC.EFI`. Filesystem mappings vary.
 With `-SaveLog`, archive or delete the **diagnostic log file** before running
 again; the program refuses overwrites to preserve original evidence.
-Capture all `PCI[n]`, `GPU[n]`, `GOP_*`, `CONOUT_*` and final `STATUS` lines,
+Capture all `PCI[n]`, `PCI PATH_OFFSET`, `GPU[n]`, `GOP[n]`, `CONOUT[n]`
+path hex chunks and final `STATUS` lines,
 and retain the SHA-256 and build arguments. Never interpret `STATUS=COMPLETE`
 as permission to detach a driver or proceed to a firmware transaction.
 
