@@ -10,3 +10,5 @@ build_dxe/
 src/build_dxe/
 src/local/
 local/
+src/build_diagnostic/
+build_diagnostic/
