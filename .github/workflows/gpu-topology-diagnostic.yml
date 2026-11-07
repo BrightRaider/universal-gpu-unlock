@@ -39,6 +39,12 @@ jobs:
             "$RUNNER_TEMP/test_gpu_topology_clang"
             gcc -std=c11 -O1 -g -fsanitize=undefined -fno-sanitize-recover=all -Wall -Wextra -Werror -pedantic -Isrc tests/test_gpu_topology.c src/gpu_topology.c src/gpu_inventory.c -o "$RUNNER_TEMP/test_gpu_topology_ubsan"
             "$RUNNER_TEMP/test_gpu_topology_ubsan"
+            for compiler in gcc clang; do
+              for test in gpu_inventory gpu_discovery; do
+                "$compiler" -std=c11 -O2 -Wall -Wextra -Werror -pedantic -Isrc "tests/test_${test}.c" src/gpu_inventory.c -o "$RUNNER_TEMP/test_${test}_${compiler}"
+                "$RUNNER_TEMP/test_${test}_${compiler}"
+              done
+            done
           ) 2>&1 | tee -a "$RUNNER_TEMP/gu-log/host.log"
       - name: Preserve final host status
         if: always()
