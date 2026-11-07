@@ -39,6 +39,8 @@ try {
         'port.c',
         'compat.c',
         'checks.c',
+        'gpu_inventory.c',
+        'gpu_discovery.c',
         'profile.c',
         'sha256.c',
         'runtime.c',

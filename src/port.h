@@ -18,7 +18,7 @@ static inline BOOLEAN GuIsAmpereDeviceId(UINT16 dev) {
   return (dev == 0x2204U ||  /* RTX 3090 */
           dev == 0x2208U ||  /* RTX 3090 Ti */
           dev == 0x2206U ||  /* RTX 3080 Ti */
-          dev == 0x220aU ||  /* RTX 3080 10GB */
+          dev == 0x220aU ||  /* RTX 3080 (VRAM verified per exact card) */
           dev == 0x2216U ||  /* RTX 3080 12GB */
           dev == 0x2207U ||  /* CMP 90HX */
           dev == 0x2482U ||  /* RTX 3070 Ti (GA104) */
