@@ -6,37 +6,42 @@
 #include "compat/compat.h"
 #include "port.h"
 
-static const struct {
-  const char *name,*hash;
-  UINTN bytes;
-} PinsAd102[5]={
- {"gpu-unlock/610.43.03/booter_load_ad102.bin","6ee05b20e1dc244c08c052f36ef28469b8d09f4955d1fe33e48a179e11a7fd49",57672},
- {"gpu-unlock/610.43.03/v67-ad102-610.43.03-four-plm.bin","44c36b2d6b3424e53e18f3e55db85c833655de071ce66ce42749588a4a7dc8cb",64000},
- {"gpu-unlock/610.43.03/gsp_ga10x.bin","572373620a37418f24dc16b5031c39338778c3257e48e8408de9a57291b24f3a",84277400},
- {"gpu-unlock/610.43.03/gsp_boot_ad102.bin","45d6335a8185d6ff13e8d1484cea73f68d3d13aa1c19dc080ed1c3482dd5bac0",36864},
- {"gpu-unlock/610.43.03/gsp_boot_desc_ad102.bin","83f8f3f1f5f9496e0ea8fc7103c2beb64d0b6de2f5ffe725f13514de5a95fa42",84}
+static const GU_ARCH_ASSETS GuAssetsAda = {
+  "Ada",
+  L"\\GA102-ASSETS\\gsp_ga10x.bin",
+  {
+    {L"\\AD102-ASSETS\\booter_load_ad102.bin", "gpu-unlock/610.43.03/booter_load_ad102.bin", "6ee05b20e1dc244c08c052f36ef28469b8d09f4955d1fe33e48a179e11a7fd49", 57672},
+    {L"\\AD102-ASSETS\\v67-ad102-610.43.03-four-plm.bin", "gpu-unlock/610.43.03/v67-ad102-610.43.03-four-plm.bin", "44c36b2d6b3424e53e18f3e55db85c833655de071ce66ce42749588a4a7dc8cb", 64000},
+    {L"\\AD102-ASSETS\\gsp_ga10x.bin", "gpu-unlock/610.43.03/gsp_ga10x.bin", "572373620a37418f24dc16b5031c39338778c3257e48e8408de9a57291b24f3a", 84277400},
+    {L"\\AD102-ASSETS\\gsp_boot_ad102.bin", "gpu-unlock/610.43.03/gsp_boot_ad102.bin", "45d6335a8185d6ff13e8d1484cea73f68d3d13aa1c19dc080ed1c3482dd5bac0", 36864},
+    {L"\\AD102-ASSETS\\gsp_boot_desc_ad102.bin", "gpu-unlock/610.43.03/gsp_boot_desc_ad102.bin", "83f8f3f1f5f9496e0ea8fc7103c2beb64d0b6de2f5ffe725f13514de5a95fa42", 84}
+  }
 };
 
-static const struct {
-  const char *name,*hash;
-  UINTN bytes;
-} PinsGa102[5]={
- {"gpu-unlock/610.43.03/booter_load_ga102.bin","056cbc064a888f80717726c54d7f64fcd68044d123870c95a74f37f4975dcaa4",61256},
- {"gpu-unlock/610.43.03/v67-ga102-610.43.03.bin","2a0aa1f86d0b6afff5214d641d87d46dc98ef06ed908ff05d0ddbad5ffb7e197",64000},
- {"gpu-unlock/610.43.03/gsp_ga10x.bin","572373620a37418f24dc16b5031c39338778c3257e48e8408de9a57291b24f3a",84277400},
- {"gpu-unlock/610.43.03/gsp_boot_ga102.bin","3df651acb174fd5f5561a1996965b192f50c5d763168446ed0d4ead19d895768",24576},
- {"gpu-unlock/610.43.03/gsp_boot_desc_ga102.bin","cc5a3fc1f4c47f2fe107b1b68f0176d8a448e6dec84b575e5560ccef5262bf15",84}
+static const GU_ARCH_ASSETS GuAssetsAmpere = {
+  "Ampere",
+  L"\\AD102-ASSETS\\gsp_ga10x.bin",
+  {
+    {L"\\GA102-ASSETS\\booter_load_ga102.bin", "gpu-unlock/610.43.03/booter_load_ga102.bin", "056cbc064a888f80717726c54d7f64fcd68044d123870c95a74f37f4975dcaa4", 61256},
+    {L"\\GA102-ASSETS\\v67-ga102-610.43.03.bin", "gpu-unlock/610.43.03/v67-ga102-610.43.03.bin", "2a0aa1f86d0b6afff5214d641d87d46dc98ef06ed908ff05d0ddbad5ffb7e197", 64000},
+    {L"\\GA102-ASSETS\\gsp_ga10x.bin", "gpu-unlock/610.43.03/gsp_ga10x.bin", "572373620a37418f24dc16b5031c39338778c3257e48e8408de9a57291b24f3a", 84277400},
+    {L"\\GA102-ASSETS\\gsp_boot_ga102.bin", "gpu-unlock/610.43.03/gsp_boot_ga102.bin", "3df651acb174fd5f5561a1996965b192f50c5d763168446ed0d4ead19d895768", 24576},
+    {L"\\GA102-ASSETS\\gsp_boot_desc_ga102.bin", "gpu-unlock/610.43.03/gsp_boot_desc_ga102.bin", "cc5a3fc1f4c47f2fe107b1b68f0176d8a448e6dec84b575e5560ccef5262bf15", 84}
+  }
 };
+
+const GU_ARCH_ASSETS *GuGetArchAssets(VOID) {
+  return Gu.is_ampere ? &GuAssetsAmpere : &GuAssetsAda;
+}
 
 BOOLEAN GuAd104AssetsValid(VOID) {
   if (Gu.is_turing) return FALSE; /* No pinned TU102 assets exist yet: fail closed. */
-  for(UINTN i=0;i<5;i++) {
-    const char *name = Gu.is_ampere ? PinsGa102[i].name : PinsAd102[i].name;
-    const char *hash = Gu.is_ampere ? PinsGa102[i].hash : PinsAd102[i].hash;
-    UINTN bytes = Gu.is_ampere ? PinsGa102[i].bytes : PinsAd102[i].bytes;
-    if(!GuAssets[i].name || strcmp(GuAssets[i].name,name) ||
-       GuAssets[i].firmware.size!=bytes ||
-       !GuHashMatches(GuAssets[i].firmware.data,bytes,hash))return FALSE;
+  const GU_ARCH_ASSETS *arch = GuGetArchAssets();
+  for (UINTN i = 0; i < GU_ASSET_COUNT; i++) {
+    if (!GuAssets[i].name || strcmp(GuAssets[i].name, arch->entries[i].name) ||
+        GuAssets[i].firmware.size != arch->entries[i].bytes ||
+        !GuHashMatches(GuAssets[i].firmware.data, arch->entries[i].bytes, arch->entries[i].hash))
+      return FALSE;
   }
   return TRUE;
 }

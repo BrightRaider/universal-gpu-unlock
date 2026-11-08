@@ -212,119 +212,28 @@ static EFI_STATUS ReadFile(EFI_FILE_PROTOCOL *root,const CHAR16 *name,UINTN expe
 }
 
 EFI_STATUS GuBootLoadAssets(VOID) {
-
-  static const CHAR16 *ada_names[]={
-
-    L"\\AD102-ASSETS\\booter_load_ad102.bin",
-
-    L"\\AD102-ASSETS\\v67-ad102-610.43.03-four-plm.bin",
-
-    L"\\AD102-ASSETS\\gsp_ga10x.bin",
-
-    L"\\AD102-ASSETS\\gsp_boot_ad102.bin",
-
-    L"\\AD102-ASSETS\\gsp_boot_desc_ad102.bin"
-
-  };
-
-  static const CHAR16 *ampere_names[]={
-
-    L"\\GA102-ASSETS\\booter_load_ga102.bin",
-
-    L"\\GA102-ASSETS\\v67-ga102-610.43.03.bin",
-
-    L"\\GA102-ASSETS\\gsp_ga10x.bin",
-
-    L"\\GA102-ASSETS\\gsp_boot_ga102.bin",
-
-    L"\\GA102-ASSETS\\gsp_boot_desc_ga102.bin"
-
-  };
-
-  static const char *ada_full[]={
-
-    "gpu-unlock/610.43.03/booter_load_ad102.bin",
-
-    "gpu-unlock/610.43.03/v67-ad102-610.43.03-four-plm.bin",
-
-    "gpu-unlock/610.43.03/gsp_ga10x.bin",
-
-    "gpu-unlock/610.43.03/gsp_boot_ad102.bin",
-
-    "gpu-unlock/610.43.03/gsp_boot_desc_ad102.bin"
-
-  };
-
-  static const char *ampere_full[]={
-
-    "gpu-unlock/610.43.03/booter_load_ga102.bin",
-
-    "gpu-unlock/610.43.03/v67-ga102-610.43.03.bin",
-
-    "gpu-unlock/610.43.03/gsp_ga10x.bin",
-
-    "gpu-unlock/610.43.03/gsp_boot_ga102.bin",
-
-    "gpu-unlock/610.43.03/gsp_boot_desc_ga102.bin"
-
-  };
-
-  static const UINTN ada_sizes[]={57672,64000,84277400,36864,84};
-
-  static const UINTN ampere_sizes[]={61256,64000,84277400,24576,84};
-
-
-
-  const CHAR16 **names = Gu.is_ampere ? ampere_names : ada_names;
-
-  const char **full = Gu.is_ampere ? ampere_full : ada_full;
-
-  const UINTN *sizes = Gu.is_ampere ? ampere_sizes : ada_sizes;
-
-
-
-  if(!Root||Gu.started)return EFI_NOT_READY;
-
-  if(Gu.is_turing) {
-
+  if (!Root || Gu.started) return EFI_NOT_READY;
+  if (Gu.is_turing) {
     GuLog("Asset load refused: no TU102 firmware assets are available for Turing\n");
-
     GuBootSay(L"\r\n[ERROR] RTX 20 (Turing) firmware assets are not included in this release. Nothing was changed.\r\n");
-
     return EFI_UNSUPPORTED;
-
   }
-
-  for(UINTN i=0;i<5;i++) {
-
-    VOID *p=NULL;
-
-    EFI_STATUS s=ReadFile(Root,names[i],sizes[i],&p);
-
-    if(s!=EFI_SUCCESS && i==2) {
-
+  const GU_ARCH_ASSETS *arch = GuGetArchAssets();
+  for (UINTN i = 0; i < GU_ASSET_COUNT; i++) {
+    VOID *p = NULL;
+    EFI_STATUS s = ReadFile(Root, arch->entries[i].path, arch->entries[i].bytes, &p);
+    if (s != EFI_SUCCESS && i == 2 && arch->alt_gsp_path) {
       /* Shared gsp_ga10x.bin fallback between directories */
-
-      const CHAR16 *alt_gsp = Gu.is_ampere ? L"\\AD102-ASSETS\\gsp_ga10x.bin" : L"\\GA102-ASSETS\\gsp_ga10x.bin";
-
-      s=ReadFile(Root,alt_gsp,sizes[i],&p);
-
+      s = ReadFile(Root, arch->alt_gsp_path, arch->entries[i].bytes, &p);
     }
-
-    if(s!=EFI_SUCCESS) {
-
-      GuLog("Asset load failed: %s (%s)\n", full[i], Gu.is_ampere ? "Ampere" : (Gu.is_turing ? "Turing" : "Ada"));
-
+    if (s != EFI_SUCCESS) {
+      GuLog("Asset load failed: %s (%s)\n", arch->entries[i].name, arch->arch_name);
       return s;
-
     }
-
-    GuAssets[i].name=full[i];GuAssets[i].firmware=(struct firmware){sizes[i],p};
-
+    GuAssets[i].name = arch->entries[i].name;
+    GuAssets[i].firmware = (struct firmware){arch->entries[i].bytes, p};
   }
-
-  return GuAd104AssetsValid()?EFI_SUCCESS:EFI_CRC_ERROR;
-
+  return GuAd104AssetsValid() ? EFI_SUCCESS : EFI_CRC_ERROR;
 }
 
 static EFI_STATUS ReadWindowsBinary(EFI_FILE_PROTOCOL *root,const CHAR16 *name,UINTN *file_size,VOID **data) {
