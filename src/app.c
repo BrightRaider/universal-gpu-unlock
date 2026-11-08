@@ -21,6 +21,15 @@
 
 static EFI_GUID GlobalGuid={0x8be4df61,0x93ca,0x11d2,{0xaa,0x0d,0,0xe0,0x98,0x03,0x2b,0x8c}};
 
+static EFI_STATUS GuRebootSystem(EFI_SYSTEM_TABLE *t, EFI_STATUS s) {
+  (VOID)GuBootClose();
+  if (t->BootServices->Stall) t->BootServices->Stall(3000000);
+  if (t->RuntimeServices && t->RuntimeServices->ResetSystem) {
+    t->RuntimeServices->ResetSystem(EfiResetWarm, EFI_SUCCESS, 0, NULL);
+  }
+  return s;
+}
+
 EFI_STATUS EFIAPI UefiMain(EFI_HANDLE image,EFI_SYSTEM_TABLE *t) {
 
   if(!image||!t||!t->BootServices||!t->RuntimeServices||!t->RuntimeServices->GetVariable)return EFI_INVALID_PARAMETER;
@@ -96,17 +105,7 @@ EFI_STATUS EFIAPI UefiMain(EFI_HANDLE image,EFI_SYSTEM_TABLE *t) {
 
     }
 
-    (VOID)GuBootClose();
-
-    if (t->BootServices->Stall) t->BootServices->Stall(3000000);
-
-    if (t->RuntimeServices && t->RuntimeServices->ResetSystem) {
-
-      t->RuntimeServices->ResetSystem(EfiResetWarm, EFI_SUCCESS, 0, NULL);
-
-    }
-
-    return s;
+    return GuRebootSystem(t, s);
 
   }
 
@@ -124,17 +123,7 @@ EFI_STATUS EFIAPI UefiMain(EFI_HANDLE image,EFI_SYSTEM_TABLE *t) {
 
     GuBootSay(L"Rebooting system in 3 seconds...\r\n");
 
-    (VOID)GuBootClose();
-
-    if (t->BootServices->Stall) t->BootServices->Stall(3000000);
-
-    if (t->RuntimeServices && t->RuntimeServices->ResetSystem) {
-
-      t->RuntimeServices->ResetSystem(EfiResetWarm, EFI_SUCCESS, 0, NULL);
-
-    }
-
-    return s;
+    return GuRebootSystem(t, s);
 
   }
 
