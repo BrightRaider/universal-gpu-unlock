@@ -410,30 +410,30 @@ EFI_STATUS GuBootChoose(CHAR16 *choice) {
     }
   }
 
-  if(hide_s3) {
+  GuBootSay(
+    L"\r\n=======================================================\r\n"
+    L" UNIVERSAL GPU UNLOCK v1.7.5 (Multi-Gen Edition)\r\n"
+    L"=======================================================\r\n"
+  );
+  if (hide_s3) {
     GuBootSay(
-      L"\r\n=======================================================\r\n"
-      L" UNIVERSAL GPU UNLOCK v1.7.5 (Multi-Gen Edition)\r\n"
-      L"=======================================================\r\n"
       L"  [U] Full GPU Unlock (proven rock-solid, RAM-only)\r\n"
       L"  [I] Install DXE Driver to UEFI NVRAM (Auto-boot, USB stays in)\r\n"
-      L"  [R] Remove DXE Driver from UEFI NVRAM\r\n"
-      L"  [S] Stock Windows (Skip unlock, normal boot)\r\n\r\n"
-      L"Select mode [U/I/R/S] (default: Stock Windows in 30s): "
     );
   } else {
     GuBootSay(
-      L"\r\n=======================================================\r\n"
-      L" UNIVERSAL GPU UNLOCK v1.7.5 (Multi-Gen Edition)\r\n"
-      L"=======================================================\r\n"
       L"  [U] Standard Unlock (proven rock-solid, RAM-only)\r\n"
       L"  [P] Experimental S3 Persistence Unlock (Boot-Script)\r\n"
       L"  [I] Install DXE Driver to UEFI NVRAM (Auto-boot / S3, USB stays in)\r\n"
-      L"  [R] Remove DXE Driver from UEFI NVRAM\r\n"
-      L"  [S] Stock Windows (Skip unlock, normal boot)\r\n\r\n"
-      L"Select mode [U/P/I/R/S] (default: Stock Windows in 30s): "
     );
   }
+  GuBootSay(
+    L"  [R] Remove DXE Driver from UEFI NVRAM\r\n"
+    L"  [S] Stock Windows (Skip unlock, normal boot)\r\n\r\n"
+  );
+  GuBootSay(hide_s3
+    ? L"Select mode [U/I/R/S] (default: Stock Windows in 30s): "
+    : L"Select mode [U/P/I/R/S] (default: Stock Windows in 30s): ");
 
   for(UINTN i=0;i<300;i++) {
 
