@@ -55,6 +55,7 @@ if (Test-Path -LiteralPath $versionH) {
         $Script:AppVersion = $matches[1]
     }
 }
+. (Join-Path $scriptDir "Deploy-UsbCommon.ps1")
 $Script:AssetsPath = Join-Path $Script:RepoRoot 'assets'
 $Script:ReleaseEfi = Join-Path $Script:RepoRoot 'bin\BOOTX64.EFI'
 $Script:DxeEfi = Join-Path $Script:RepoRoot 'bin\AdaUnlockDxe.efi'
@@ -504,102 +505,8 @@ function Find-UsbCaptureFolders {
 }
 
 function Deploy-ToUsb([string]$Letter) {
-    $cleanLetter = $Letter.TrimEnd(':')
-    $driveRoot = "$($cleanLetter):\"
-    if (-not (Test-Path -LiteralPath $driveRoot)) {
-        throw "Target drive '$driveRoot' does not exist."
-    }
-
-    $vol = Get-Volume -DriveLetter $cleanLetter
-    if ($vol.FileSystem -ne 'FAT32') {
-        throw "Drive $($cleanLetter): is formatted as $($vol.FileSystem). UEFI requires FAT32."
-    }
-
-    $targetBootDir = Join-Path $driveRoot "EFI\BOOT"
-    $targetAssetsDir = Join-Path $driveRoot "AD102-ASSETS"
-
-    New-Item -ItemType Directory -Path $targetBootDir -Force | Out-Null
-    New-Item -ItemType Directory -Path $targetAssetsDir -Force | Out-Null
-
-    # Handle S3 Menu Option
-    $hideS3Cfg = Join-Path $targetBootDir "hide_s3.cfg"
-    if ($chkHideS3 -and $chkHideS3.IsChecked) {
-        Set-Content -LiteralPath $hideS3Cfg -Value "HIDE_S3=1" -Encoding ascii
-    } else {
-        if (Test-Path -LiteralPath $hideS3Cfg) { Remove-Item -LiteralPath $hideS3Cfg -Force }
-    }
-
-    # 1. Copy Universal Bootloader & DXE Driver
-    if (Test-Path -LiteralPath $Script:ReleaseEfi) {
-        Copy-Item -LiteralPath $Script:ReleaseEfi -Destination (Join-Path $targetBootDir "BOOTX64.EFI") -Force
-    } else {
-        throw "BOOTX64.EFI missing from bin/"
-    }
-
-    if (Test-Path -LiteralPath $Script:DxeEfi) {
-        Copy-Item -LiteralPath $Script:DxeEfi -Destination (Join-Path $targetBootDir "AdaUnlockDxe.efi") -Force
-        # The boot menu's [I] option registers this exact path.
-        $targetDriversDir = Join-Path $driveRoot "EFI\Drivers"
-        New-Item -ItemType Directory -Path $targetDriversDir -Force | Out-Null
-        Copy-Item -LiteralPath $Script:DxeEfi -Destination (Join-Path $targetDriversDir "AdaUnlockDxe.efi") -Force
-    }
-
-    # 2. Copy AD102-ASSETS and GA102-ASSETS
-    $assetsCopied = 0
-    if (Test-Path -LiteralPath $Script:AssetsPath) {
-        $assets = Get-ChildItem -LiteralPath $Script:AssetsPath -File
-        foreach ($a in $assets) {
-            Copy-Item -LiteralPath $a.FullName -Destination (Join-Path $targetAssetsDir $a.Name) -Force
-            $assetsCopied++
-        }
-    }
-    $gaAssetsPath = Join-Path $Script:RepoRoot 'GA102-ASSETS'
-    if (Test-Path -LiteralPath $gaAssetsPath) {
-        $targetGaDir = Join-Path $driveRoot 'GA102-ASSETS'
-        New-Item -ItemType Directory -Path $targetGaDir -Force | Out-Null
-        $gaAssets = Get-ChildItem -LiteralPath $gaAssetsPath -File
-        foreach ($ga in $gaAssets) {
-            Copy-Item -LiteralPath $ga.FullName -Destination (Join-Path $targetGaDir $ga.Name) -Force
-            $assetsCopied++
-        }
-    }
-
-    # 3. Copy Setup and Benchmark Scripts
-    $setupBat = Join-Path $Script:RepoRoot "Setup.bat"
-    $checkBat = Join-Path $Script:RepoRoot "Check-GPU-Unlock.bat"
-    if (Test-Path -LiteralPath $setupBat) { Copy-Item -LiteralPath $setupBat -Destination (Join-Path $driveRoot "Setup.bat") -Force }
-    if (Test-Path -LiteralPath $checkBat) { Copy-Item -LiteralPath $checkBat -Destination (Join-Path $driveRoot "Check-GPU-Unlock.bat") -Force }
-
-    # 4. Write USB README
-    $readmeContent = @"
-# UNIVERSAL GPU UNLOCK $Script:AppVersion - Bootable USB Drive
-Hardware Rate-Limiter Override for Ada Lovelace, Ampere & Turing GPUs
-Architect: BrightRaider | Desktop GUI: Ahsan Umair
-
-## Boot Menu Modes:
-- [U] Full GPU Unlock (Proven rock-solid, volatile RAM-only)
-- [P] Experimental S3 Persistence Unlock (Boot-Script registration)
-- [I] Install DXE Driver to UEFI NVRAM (Auto-boot on startup)
-- [R] Remove DXE Driver from UEFI NVRAM
-- [S] Stock Windows (Skip unlock, normal boot)
-
-## Quick Start:
-1. Reboot PC and press your Boot Menu key (F8 for ASUS, F11 for MSI/ASRock, F12 for Gigabyte).
-2. Select your USB drive (e.g. 'UEFI: USB Drive').
-3. Choose your desired mode ([U] for standard unlock, [P] for S3 persistence).
-4. Windows boots with 100% full unrestricted tensor compute capacity!
-"@
-    Set-Content -LiteralPath (Join-Path $driveRoot "README-USB.txt") -Value $readmeContent -Encoding utf8
-
-    return [pscustomobject]@{
-        Drive        = $driveRoot
-        BootEfi      = (Join-Path $targetBootDir "BOOTX64.EFI")
-        AssetsCopied = $assetsCopied
-        Status       = "Universal 1-Click Deployment Complete! Bootloader and assets staged."
-        IsProbe      = $false
-        ProfileMode  = "Universal"
-        RequiresBoot = $false
-    }
+    $hide = [bool]($chkHideS3 -and $chkHideS3.IsChecked)
+    return Deploy-UniversalToUsb -Drive $Letter -RepoRoot $Script:RepoRoot -HideS3 $hide -AppVersion $Script:AppVersion
 }
 
 function Get-GpuUnlockStatus {

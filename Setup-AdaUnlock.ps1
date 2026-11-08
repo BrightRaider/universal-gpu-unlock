@@ -150,99 +150,17 @@ Write-Host ""
 Write-Host "[3/4] Copying Universal Bootloader & Firmware Assets (Ada & Ampere)..." -ForegroundColor Cyan
 
 $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
-$efiSrc = Join-Path $scriptDir "bin\BOOTX64.EFI"
-$ad102Src = Join-Path $scriptDir "AD102-ASSETS"
-$ga102Src = Join-Path $scriptDir "GA102-ASSETS"
-$certSrc = Join-Path $scriptDir "AdaUnlock_SecureBoot.cer"
-
-$efiDstDir = Join-Path $driveLetter "EFI\BOOT"
-New-Item -ItemType Directory -Path $efiDstDir -Force | Out-Null
-Copy-Item $efiSrc (Join-Path $efiDstDir "BOOTX64.EFI") -Force
-Write-Host "  [OK] UEFI Bootloader copied to $driveLetter\EFI\BOOT\BOOTX64.EFI" -ForegroundColor Green
-
-$dxeSrc = Join-Path $scriptDir "bin\AdaUnlockDxe.efi"
-if (Test-Path $dxeSrc) {
-    $dxeDstDir = Join-Path $driveLetter "EFI\Drivers"
-    New-Item -ItemType Directory -Path $dxeDstDir -Force | Out-Null
-    Copy-Item $dxeSrc (Join-Path $dxeDstDir "AdaUnlockDxe.efi") -Force
-    # Also place in EFI\BOOT for NVRAM [I] installer
-    Copy-Item $dxeSrc (Join-Path $efiDstDir "AdaUnlockDxe.efi") -Force
-    Write-Host "  [OK] DXE Driver copied to $driveLetter\EFI\Drivers\AdaUnlockDxe.efi" -ForegroundColor Green
-}
+. (Join-Path (Join-Path $scriptDir "tools") "Deploy-UsbCommon.ps1")
 
 # Bootloader S3 Menu Customization
 Write-Host ""
 Write-Host "  OPTIONAL: Bootloader Menu Customization" -ForegroundColor Gray
 $s3Answer = Read-Host "  Hide experimental S3 Sleep Persistence [P] from boot menu? (y/N - default: No)"
-$hideS3Cfg = Join-Path $efiDstDir "hide_s3.cfg"
-if ($s3Answer -match "^[yYjJ]") {
-    Set-Content -Path $hideS3Cfg -Value "# Hide S3" -Encoding Ascii
-    Write-Host "  [OK] Bootloader configured to hide S3: [U/I/R/S] menu active." -ForegroundColor Green
-} else {
-    if (Test-Path $hideS3Cfg) { Remove-Item $hideS3Cfg -Force }
-    Write-Host "  [OK] Bootloader configured with full options: [U/P/I/R/S] menu active." -ForegroundColor Green
-}
+$hideS3 = ($s3Answer -match "^[yYjJ]")
 
-if (Test-Path $ad102Src) {
-    $adDst = Join-Path $driveLetter "AD102-ASSETS"
-    New-Item -ItemType Directory -Path $adDst -Force | Out-Null
-    Copy-Item (Join-Path $ad102Src "*") $adDst -Force
-    Write-Host "  [OK] Ada (AD102/AD103) assets copied to $driveLetter\AD102-ASSETS\" -ForegroundColor Green
-}
-
-if (Test-Path $ga102Src) {
-    $gaDst = Join-Path $driveLetter "GA102-ASSETS"
-    New-Item -ItemType Directory -Path $gaDst -Force | Out-Null
-    Copy-Item (Join-Path $ga102Src "*") $gaDst -Force
-    $gspDst = Join-Path $gaDst "gsp_ga10x.bin"
-    if (-not (Test-Path $gspDst)) {
-        $gspSrc = Join-Path $ad102Src "gsp_ga10x.bin"
-        if (Test-Path $gspSrc) {
-            Copy-Item $gspSrc $gspDst -Force
-        }
-    }
-    Write-Host "  [OK] Ampere (GA102) assets copied to $driveLetter\GA102-ASSETS\" -ForegroundColor Green
-}
-
-$tu102Src = Join-Path $scriptDir "TU102-ASSETS"
-if (Test-Path $tu102Src) {
-    $tuDst = Join-Path $driveLetter "TU102-ASSETS"
-    New-Item -ItemType Directory -Path $tuDst -Force | Out-Null
-    Copy-Item (Join-Path $tu102Src "*") $tuDst -Force
-    $gspDst = Join-Path $tuDst "gsp_ga10x.bin"
-    if (-not (Test-Path $gspDst)) {
-        $gspSrc = Join-Path $ad102Src "gsp_ga10x.bin"
-        if (Test-Path $gspSrc) {
-            Copy-Item $gspSrc $gspDst -Force
-        }
-    }
-    Write-Host "  [OK] Turing (TU102/TU104/TU106) assets copied to $driveLetter\TU102-ASSETS\" -ForegroundColor Green
-}
-
-
-if (Test-Path $certSrc) {
-    Copy-Item $certSrc (Join-Path $driveLetter "AdaUnlock_SecureBoot.cer") -Force
-    Write-Host "  [OK] Secure Boot certificate copied to $driveLetter\AdaUnlock_SecureBoot.cer" -ForegroundColor Green
-}
-
-$checkBat = Join-Path $scriptDir "Check-GPU-Unlock.bat"
-$toolsDir = Join-Path $scriptDir "tools"
-if (Test-Path $checkBat) {
-    Copy-Item $checkBat (Join-Path $driveLetter "Check-GPU-Unlock.bat") -Force
-    $toolsDst = Join-Path $driveLetter "tools"
-    New-Item -ItemType Directory -Path $toolsDst -Force | Out-Null
-    if (Test-Path (Join-Path $toolsDir "quick_check.py")) {
-        Copy-Item (Join-Path $toolsDir "quick_check.py") (Join-Path $toolsDst "quick_check.py") -Force
-    }
-    Write-Host "  [OK] 1-Click Verification tool copied to $driveLetter\Check-GPU-Unlock.bat" -ForegroundColor Green
-
-    $uccCmd = Join-Path $scriptDir "Universal-Control-Center.cmd"
-    $uccVbs = Join-Path $scriptDir "Universal-Control-Center.vbs"
-    $uccPs1 = Join-Path $toolsDir "Universal-Control-Center.ps1"
-    if (Test-Path $uccCmd) { Copy-Item $uccCmd (Join-Path $driveLetter "Universal-Control-Center.cmd") -Force }
-    if (Test-Path $uccVbs) { Copy-Item $uccVbs (Join-Path $driveLetter "Universal-Control-Center.vbs") -Force }
-    if (Test-Path $uccPs1) { Copy-Item $uccPs1 (Join-Path $toolsDst "Universal-Control-Center.ps1") -Force }
-    Write-Host "  [OK] Optional Control Center GUI copied to $driveLetter\Universal-Control-Center.cmd" -ForegroundColor Green
+$deployResult = Deploy-UniversalToUsb -Drive $driveLetter -RepoRoot $scriptDir -HideS3 $hideS3 -AppVersion $AppVersion -OnLog {
+    param($msg, $color)
+    if ($color) { Write-Host $msg -ForegroundColor $color } else { Write-Host $msg }
 }
 
 # 5. Integrity Verification (SHA-256)
