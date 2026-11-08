@@ -4,10 +4,6 @@
 #include <Protocol/DevicePath.h>
 #include <stddef.h>
 
-#define GU_BOARD_ID 0x268410deU
-#define GU_BOARD_SUBSYSTEM 0x40c31458U
-#define GU_BAR0_BASE 0xfb000000ULL
-#define GU_PCI_BUS 45U
 
 #include "gpu_device_ids.h"
 
