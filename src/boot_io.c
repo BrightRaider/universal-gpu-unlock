@@ -175,40 +175,64 @@ EFI_STATUS GuBootOpen(EFI_HANDLE image,EFI_SYSTEM_TABLE *t) {
 
 }
 
-static EFI_STATUS ReadFile(EFI_FILE_PROTOCOL *root,const CHAR16 *name,UINTN expected,VOID **data) {
+static EFI_STATUS ReadFileData(EFI_FILE_PROTOCOL *root, const CHAR16 *name,
+                               UINTN min_size, UINTN max_size,
+                               UINTN *file_size, VOID **data) {
+  *data = NULL;
+  if (file_size) *file_size = 0;
+  EFI_FILE_PROTOCOL *f = NULL;
+  UINT64 info_words[128];
+  UINTN info_bytes = sizeof(info_words);
 
-  *data=NULL;EFI_FILE_PROTOCOL *f=NULL;UINT64 info_words[128];UINTN info_bytes=sizeof(info_words);
+  EFI_STATUS s = root->Open(root, &f, (CHAR16 *)name, EFI_FILE_MODE_READ, 0);
+  if (s != EFI_SUCCESS || !f) return s == EFI_SUCCESS ? EFI_DEVICE_ERROR : s;
 
-  EFI_STATUS s=root->Open(root,&f,(CHAR16 *)name,EFI_FILE_MODE_READ,0);
-
-  if(s!=EFI_SUCCESS||!f)return s==EFI_SUCCESS?EFI_DEVICE_ERROR:s;
-
-  s=f->GetInfo(f,&InfoGuid,&info_bytes,info_words);
-
-  EFI_FILE_INFO *info=(VOID *)info_words;
-
-  if(s==EFI_SUCCESS&&(info_bytes<sizeof(EFI_FILE_INFO)||info_bytes>sizeof(info_words)||
-
-     info->FileSize!=expected||(info->Attribute&EFI_FILE_DIRECTORY)))s=EFI_COMPROMISED_DATA;
-
-  VOID *p=NULL;
-
-  if(s==EFI_SUCCESS){p=GuAlloc(expected);if(!p)s=EFI_OUT_OF_RESOURCES;}
-
-  for(UINTN at=0;s==EFI_SUCCESS&&at<expected;) {
-
-    UINTN n=expected-at;if(n>1048576)n=1048576;UINTN wanted=n;
-
-    s=f->Read(f,&n,(UINT8 *)p+at);if(s==EFI_SUCCESS&&n!=wanted)s=EFI_DEVICE_ERROR;at+=n;
-
+  s = f->GetInfo(f, &InfoGuid, &info_bytes, info_words);
+  EFI_FILE_INFO *info = (VOID *)info_words;
+  if (s == EFI_SUCCESS && (info_bytes < sizeof(EFI_FILE_INFO) ||
+      info_bytes > sizeof(info_words) ||
+      info->FileSize < min_size || info->FileSize > max_size ||
+      (info->Attribute & EFI_FILE_DIRECTORY))) {
+    s = EFI_COMPROMISED_DATA;
   }
 
-  if(s==EFI_SUCCESS){UINT8 tail;UINTN n=1;s=f->Read(f,&n,&tail);if(s==EFI_SUCCESS&&n)s=EFI_COMPROMISED_DATA;}
+  UINTN sz = (UINTN)info->FileSize;
+  VOID *p = NULL;
+  if (s == EFI_SUCCESS) {
+    p = GuAlloc(sz);
+    if (!p) s = EFI_OUT_OF_RESOURCES;
+  }
 
-  EFI_STATUS closed=f->Close(f);if(s==EFI_SUCCESS)s=closed;
+  for (UINTN at = 0; s == EFI_SUCCESS && at < sz;) {
+    UINTN n = sz - at;
+    if (n > 1048576) n = 1048576;
+    UINTN wanted = n;
+    s = f->Read(f, &n, (UINT8 *)p + at);
+    if (s == EFI_SUCCESS && n != wanted) s = EFI_DEVICE_ERROR;
+    at += n;
+  }
 
-  if(s!=EFI_SUCCESS){GuFree(p);return s;}*data=p;return EFI_SUCCESS;
+  if (s == EFI_SUCCESS && min_size == max_size) {
+    UINT8 tail;
+    UINTN n = 1;
+    s = f->Read(f, &n, &tail);
+    if (s == EFI_SUCCESS && n) s = EFI_COMPROMISED_DATA;
+  }
 
+  EFI_STATUS closed = f->Close(f);
+  if (s == EFI_SUCCESS) s = closed;
+  if (s != EFI_SUCCESS) {
+    GuFree(p);
+    return s;
+  }
+
+  *data = p;
+  if (file_size) *file_size = sz;
+  return EFI_SUCCESS;
+}
+
+static EFI_STATUS ReadFile(EFI_FILE_PROTOCOL *root, const CHAR16 *name, UINTN expected, VOID **data) {
+  return ReadFileData(root, name, expected, expected, NULL, data);
 }
 
 EFI_STATUS GuBootLoadAssets(VOID) {
@@ -236,42 +260,18 @@ EFI_STATUS GuBootLoadAssets(VOID) {
   return GuAd104AssetsValid() ? EFI_SUCCESS : EFI_CRC_ERROR;
 }
 
-static EFI_STATUS ReadWindowsBinary(EFI_FILE_PROTOCOL *root,const CHAR16 *name,UINTN *file_size,VOID **data) {
-
-  *data=NULL;*file_size=0;EFI_FILE_PROTOCOL *f=NULL;UINT64 info_words[128];UINTN info_bytes=sizeof(info_words);
-
-  EFI_STATUS s=root->Open(root,&f,(CHAR16 *)name,EFI_FILE_MODE_READ,0);
-
-  if(s!=EFI_SUCCESS||!f)return s==EFI_SUCCESS?EFI_DEVICE_ERROR:s;
-
-  s=f->GetInfo(f,&InfoGuid,&info_bytes,info_words);
-
-  EFI_FILE_INFO *info=(VOID *)info_words;
-
-  if(s==EFI_SUCCESS&&(info_bytes<sizeof(EFI_FILE_INFO)||info->FileSize<65536||info->FileSize>33554432||(info->Attribute&EFI_FILE_DIRECTORY)))
-
-    s=EFI_COMPROMISED_DATA;
-
-  UINTN sz=(UINTN)info->FileSize;VOID *p=NULL;
-
-  if(s==EFI_SUCCESS){p=GuAlloc(sz);if(!p)s=EFI_OUT_OF_RESOURCES;}
-
-  for(UINTN at=0;s==EFI_SUCCESS&&at<sz;) {
-
-    UINTN n=sz-at;if(n>1048576)n=1048576;UINTN wanted=n;
-
-    s=f->Read(f,&n,(UINT8 *)p+at);if(s==EFI_SUCCESS&&n!=wanted)s=EFI_DEVICE_ERROR;at+=n;
-
+static EFI_STATUS ReadWindowsBinary(EFI_FILE_PROTOCOL *root, const CHAR16 *name, UINTN *file_size, VOID **data) {
+  VOID *p = NULL;
+  EFI_STATUS s = ReadFileData(root, name, 65536, 33554432, file_size, &p);
+  if (s != EFI_SUCCESS) return s;
+  if (((UINT8 *)p)[0] != 'M' || ((UINT8 *)p)[1] != 'Z') {
+    GuFree(p);
+    *data = NULL;
+    if (file_size) *file_size = 0;
+    return EFI_COMPROMISED_DATA;
   }
-
-  EFI_STATUS closed=f->Close(f);if(s==EFI_SUCCESS)s=closed;
-
-  if(s!=EFI_SUCCESS){GuFree(p);return s;}
-
-  if(((UINT8 *)p)[0]!='M'||((UINT8 *)p)[1]!='Z'){GuFree(p);return EFI_COMPROMISED_DATA;}
-
-  *data=p;*file_size=sz;return EFI_SUCCESS;
-
+  *data = p;
+  return EFI_SUCCESS;
 }
 
 /* Find the partition node of a device path, bounded by the caller's byte count. */
