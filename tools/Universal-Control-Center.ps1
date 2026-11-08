@@ -288,15 +288,6 @@ function Get-GpuHardwareInfo {
 }
 
 
-function Disable-FastStartup {
-    try {
-        Set-ItemProperty -Path "HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager\Power" -Name "HiberbootEnabled" -Value 0 -Force
-        return $true
-    } catch {
-        return $false
-    }
-}
-
 function Get-PreflightChecks {
     $checks = [ordered]@{}
 
