@@ -20,8 +20,6 @@
 
 #include "driver_nvram.h"
 
-static EFI_GUID GlobalGuid={0x8be4df61,0x93ca,0x11d2,{0xaa,0x0d,0,0xe0,0x98,0x03,0x2b,0x8c}};
-
 static EFI_STATUS GuRebootSystem(EFI_SYSTEM_TABLE *t, EFI_STATUS s) {
   (VOID)GuBootClose();
   if (t->BootServices->Stall) t->BootServices->Stall(3000000);
@@ -33,17 +31,9 @@ static EFI_STATUS GuRebootSystem(EFI_SYSTEM_TABLE *t, EFI_STATUS s) {
 
 EFI_STATUS EFIAPI UefiMain(EFI_HANDLE image,EFI_SYSTEM_TABLE *t) {
 
-  if(!image||!t||!t->BootServices||!t->RuntimeServices||!t->RuntimeServices->GetVariable)return EFI_INVALID_PARAMETER;
+  if(!image||!t||!t->BootServices||!t->RuntimeServices)return EFI_INVALID_PARAMETER;
 
-  UINT8 secure=1;UINTN n=1;UINT32 attrs=0;
-
-  EFI_STATUS s=t->RuntimeServices->GetVariable(L"SecureBoot",&GlobalGuid,&attrs,&n,&secure);
-
-  /* Authenticode signature verified by UEFI firmware against custom DB key. Allow SecureBoot. */
-
-  (void)secure;
-
-  s=GuBootOpen(image,t);if(s!=EFI_SUCCESS)return s;
+  EFI_STATUS s=GuBootOpen(image,t);if(s!=EFI_SUCCESS)return s;
 
   const char *stage="discover";CHAR16 choice=L'S';
 
