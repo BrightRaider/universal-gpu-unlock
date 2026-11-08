@@ -7,3 +7,5 @@ BOOLEAN GuMsiReleased(VOID);
 EFI_STATUS GuMsiFinish(VOID);
 BOOLEAN GuMsiReadyForWindows(VOID);
 BOOLEAN GuMsiMutated(VOID);
+EFI_STATUS GuExecuteUnlock(EFI_SYSTEM_TABLE *t, EFI_HANDLE image, const char **stage);
+EFI_STATUS GuRegisterS3(EFI_SYSTEM_TABLE *t);

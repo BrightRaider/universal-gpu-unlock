@@ -168,42 +168,11 @@ EFI_STATUS EFIAPI UefiMain(EFI_HANDLE image,EFI_SYSTEM_TABLE *t) {
   GuLog("--- Processing Primary GPU [1/%u]: DevID 0x%04x ---\n",
         (unsigned)device_count, (unsigned)devices[0].device_id);
 
-  stage="MSI-preflight";s=GuMsiPreflight(t,image,Gu.handle);if(s!=EFI_SUCCESS||Gu.fault)goto failed;
-  stage="MSI-release";s=GuMsiRelease();if(s!=EFI_SUCCESS||Gu.fault)goto failed;
-  if(!GuMsiReleased()||!GuAd104ColdEntry()){s=EFI_NOT_READY;goto failed;}
-  Gu.display_check=GuMsiReleased;Gu.display_ok=TRUE;Gu.armed=TRUE;
-
-  UINT64 mask=0xffffffffffffULL;
-  struct pci_dev dev={
-    .vendor=0x10de,
-    .device=Gu.device_id,
-    .dev={.dma_mask=&mask,.coherent_dma_mask=0xfffffffffULL},
-    .current_state=PCI_D0,
-    .pm_cap=Gu.pm_cap,
-    .refs=1
-  };
-  struct gpu_unlock_610_shared shared={0};
-  stage="shared-assets";int result=gpu_unlock_610_load_shared(&dev,&shared);
-  if(!result){stage="firmware-transaction";result=gpu_unlock_610_unlock(&dev,&shared);}
-  gpu_unlock_610_release_shared(&shared);
-  GuLog("Transaction result=%d safe=%u retained=%u started=%u quiesced=%u flrs=%u DMA_live=%u\n",
-        result, GuSafeToReturn(), Gu.retained, Gu.started, Gu.quiesced, Gu.flrs, Gu.dma_count);
-  if(result||Gu.fault||!GuSafeToReturn()){s=EFI_DEVICE_ERROR;goto failed;}
-
-  stage="release-exclusive-claim";s=GuMsiFinish();if(s!=EFI_SUCCESS||Gu.fault)goto failed;
+  s = GuExecuteUnlock(t, image, &stage);
+  if (s != EFI_SUCCESS || Gu.fault) goto failed;
 
   if (enable_s3) {
-    static EFI_GUID S3SaveStateGuid = EFI_S3_SAVE_STATE_PROTOCOL_GUID;
-    EFI_S3_SAVE_STATE_PROTOCOL *s3 = NULL;
-    EFI_STATUS s3_status = t->BootServices->LocateProtocol(&S3SaveStateGuid, NULL, (VOID **)&s3);
-    if (s3_status == EFI_SUCCESS && s3 && s3->Write) {
-      UINT32 val_ss0 = 0x88888888;
-      UINT32 val_ss1 = 0x00000008;
-      UINT64 addr_ss0 = (UINT64)Gu.bar_base + 0x0082381cULL;
-      UINT64 addr_ss1 = (UINT64)Gu.bar_base + 0x00823820ULL;
-      (VOID)s3->Write(s3, EFI_BOOT_SCRIPT_MEM_WRITE_OPCODE, EfiBootScriptWidthUint32, addr_ss0, (UINTN)1, &val_ss0);
-      (VOID)s3->Write(s3, EFI_BOOT_SCRIPT_MEM_WRITE_OPCODE, EfiBootScriptWidthUint32, addr_ss1, (UINTN)1, &val_ss1);
-    }
+    (VOID)GuRegisterS3(t);
   }
 
   GuBootUnsilence();
