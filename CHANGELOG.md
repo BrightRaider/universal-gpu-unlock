@@ -6,6 +6,30 @@ For packaged binaries and downloads, visit [GitHub Releases](https://github.com/
 
 ---
 
+## [Unreleased]
+### Refactoring & Code Quality
+- **Unified Unlock & S3 Registration Flow:** Extracted identical unlock transaction sequences (`GuExecuteUnlock`) and S3 boot-script state registration (`GuRegisterS3`) across `src/app.c` and `src/dxe_main.c` into `src/unlock_release.c`.
+- **Architectural Asset Tables:** Consolidated 6 parallel firmware asset arrays in `src/boot_io.c` (`GuBootLoadAssets`) and pinned arrays in `src/profile.c` into a unified `GU_ARCH_ASSETS` table.
+- **Unified Device ID X-Macros:** Merged duplicate GPU PCI Device ID definitions across `src/port.h` and `src/vendor/prep_610.h` into a single X-Macro header (`src/gpu_device_ids.h`).
+- **Bounded File I/O Helper:** Merged `ReadFile` and `ReadWindowsBinary` in `src/boot_io.c` into a single size-bounded helper `ReadFileData()`.
+- **Boot Menu & Reboot Consolidation:** Deduplicated menu text and headers in `src/boot_io.c` (`GuBootChoose`) and unified NVRAM install/remove reboot sequences (`GuRebootSystem`) in `src/app.c`.
+- **Centralized Version Header:** Introduced `src/version.h` (`v1.7.9`) as the single source of truth, consumed directly by C EFI applications and dynamically read by `Setup-AdaUnlock.ps1` and `tools/Universal-Control-Center.ps1`.
+- **Modular USB Deployment Engine:** Extracted redundant USB drive preparation and asset copying logic into a shared module `tools/Deploy-UsbCommon.ps1`.
+- **Single Source for GPU Benchmark:** Deduplicated embedded Python code from `Check-GPU-Unlock.bat` to reference `tools/quick_check.py` with expanded support for 19 card profiles across Ada, Ampere, and Turing.
+- **Unified Toolchain Locator:** Replaced duplicate `vswhere.exe` / `vcvars64.bat` detection across `src/Build-*.ps1` with shared helper `src/Find-VcVars.ps1`.
+- **Dead Code Elimination:**
+  - Removed unused static variables `WindowsPartition`, `WindowsName`, and `GuLogText` in `src/boot_io.c`, eliminating legacy dependencies on `boot_profile.h` and `local/boot_profile.h`.
+  - Removed obsolete hardcoded constants `GU_BOARD_ID`, `GU_BOARD_SUBSYSTEM`, `GU_BAR0_BASE`, `GU_PCI_BUS` in `src/port.h`.
+  - Removed discarded `GetVariable(SecureBoot)` call in `src/app.c`.
+  - Removed deprecated `GuDiscoverSingleGpu` in `src/gpu_discovery.c` and updated unit tests to validate `GuDiscoverAllGpus` and `GuBindDevice`.
+  - Removed unused `Disable-FastStartup` function in `tools/Universal-Control-Center.ps1`.
+  - Removed obsolete `$NonInteractive` parameter and `.vbs` copying in `Setup-AdaUnlock.ps1`.
+- **Modular Control Center Architecture:** Decoupled `tools/Universal-Control-Center.ps1` by moving ~765 lines of XAML to `tools/Universal-Control-Center.xaml` and partitioning engine logic into `Universal-Control-Center-Detection.ps1`, `Universal-Control-Center-Deployment.ps1`, and `Universal-Control-Center-Diagnostics.ps1`.
+- **Sanitized Naming & Comments:** Renamed legacy board/chip-specific identifiers (`GuAd104*` -> `Gu*`, `GuMsi*` -> `GuUnlock*`, `msi_release.c/.h` -> `unlock_release.c/.h`), removed references to non-existent `CHANGES.md`, and added transparent backward-compatibility shims for vendor code.
+- **Code Style:** Formatted dense multiline statements in `src/boot_io.c`, `src/port.c`, `src/app.c`, and `src/compat.c` using `clang-format` (with `src/vendor/` strictly preserved).
+
+---
+
 ## [v1.7.9] - 2026-11-08
 ### Fixed
 - **Resolved `final-Windows-verification` Status `0x8000000000000006` Halt on Ampere GA106 (Resolves [#11](https://github.com/BrightRaider/universal-gpu-unlock/issues/11)):** Fixed `ChipMatchesTarget` in `src/msi_release.c` to mask the architecture nibble `((chip >> 24) & 0x0fU) == 0x07`, cleanly matching Ampere GA106 and LHR cards reporting `PMC=0xb76000a1` (as well as GA102 `0x17xxxxxx`, Turing `0x16xxxxxx`, and Ada `0x19xxxxxx`). Isolated Ada-exclusive SM speed select readout and open PLM assertions so that Ampere and Turing cards proceed directly to `GuBootWindows()`. Verified on physical hardware (Palit RTX 3060 12GB on MSI Z390) by @Fr4Ckt3r, confirming full unrestricted 46.08 TFLOPS tensor compute throughput and seamless boot to Windows.
