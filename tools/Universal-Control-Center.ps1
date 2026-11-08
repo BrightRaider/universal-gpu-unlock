@@ -1,4 +1,4 @@
-<#
+﻿<#
 .SYNOPSIS
     Windows GPU UNLOCK - Executive Control, Compatibility Checker & Deployment Utility
 .DESCRIPTION
@@ -267,7 +267,7 @@ function Get-GpuHardwareInfo {
                 $match = "Hardware-Match: Gigabyte H610M H + RTX 3060 GA106 (100% Verified & Compatible)"
             }
             elseif ($nvidiaGpu.IsSupported) {
-                $match = "Hardware Match: $($nvidiaGpu.Name) ($($nvidiaGpu.Architecture)) on $($info['Motherboard']) — 100% Compatible (Universal Zero-Compile)"
+                $match = "Hardware Match: $($nvidiaGpu.Name) ($($nvidiaGpu.Architecture)) on $($info['Motherboard'])  -  100% Compatible (Universal Zero-Compile)"
             }
         }
         $info['ProfileAssessment'] = $match
@@ -463,7 +463,7 @@ function Get-RemovableDrives {
                         DriveLetter  = "$($part.DriveLetter):"
                         Letter       = [string]$part.DriveLetter
                         DiskNumber   = $disk.Number
-                        FriendlyName = "$($disk.FriendlyName) ($($part.DriveLetter):)"
+                        FriendlyName = "{0} ({1}:)" -f $disk.FriendlyName, $part.DriveLetter
                         FileSystem   = [string]$vol.FileSystem
                         SizeGb       = [math]::Round($part.Size / 1GB, 2)
                         IsBoot       = [bool]$disk.IsBoot
@@ -2032,7 +2032,7 @@ function Refresh-AuditData {
 
         if ($txtAssessmentTitle) { $txtAssessmentTitle.Text = "100% COMPATIBLE & READY (OUT-OF-THE-BOX)" }
         if ($txtAssessmentSub) { $txtAssessmentSub.Text = "Hardware Status: $($gpu.Name) ($($gpu.Architecture)) on $($info['Motherboard']) is fully supported!" }
-        $txtAssessment.Text = "Universal GPU Unlock: Full tensor core and FP8/FP16/TF32 rate-limiter bypass available for your system. Dynamic topology discovery unlocks your GPU directly in volatile RAM — zero VBIOS modification, full BitLocker protection, and OEM warranty intact."
+        $txtAssessment.Text = "Universal GPU Unlock: Full tensor core and FP8/FP16/TF32 rate-limiter bypass available for your system. Dynamic topology discovery unlocks your GPU directly in volatile RAM  -  zero VBIOS modification, full BitLocker protection, and OEM warranty intact."
         if ($txtBadgeCompat) { $txtBadgeCompat.Text = "✔ 100% COMPATIBLE: $($gpu.Architecture)" }
     }
     else {
@@ -2146,7 +2146,7 @@ function Update-UsbTabInfo {
 
         if ($txtUsbRouteInfo) {
             if ($nvidiaGpu) {
-                $txtUsbRouteInfo.Text = "Hardware Status: $($info['Motherboard']) | $($nvidiaGpu.Name) ($($nvidiaGpu.Architecture))`nResult: 100% COMPATIBLE — Plug & Play Universal USB Route (Zero Compilation Required)"
+                $txtUsbRouteInfo.Text = "Hardware Status: $($info['Motherboard']) | $($nvidiaGpu.Name) ($($nvidiaGpu.Architecture))`nResult: 100% COMPATIBLE  -  Plug & Play Universal USB Route (Zero Compilation Required)"
             } else {
                 $txtUsbRouteInfo.Text = "System: $($info['Motherboard'])`nResult: No compatible NVIDIA GPU detected."
             }
