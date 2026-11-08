@@ -42,17 +42,7 @@ static EFI_GUID PointerGuid={0x31878c87,0x0b75,0x11d5,{0x9a,0x4f,0,0x90,0x27,0x3
 /* CAP0001: the Z790 pointer splitter also consumes an absolute pointer on the same USB device. */
 static EFI_GUID AbsPointerGuid={0x8d59d32b,0xc655,0x4ae9,{0x9b,0x15,0xf2,0x59,0x04,0x99,0x2a,0x43}};
 static EFI_GUID UsbHcGuid={0x3e745226,0x9818,0x45b6,{0xa2,0xac,0xd7,0xcd,0x0e,0x8b,0xa2,0xbc}};
-static const UINT8 UsbHostPath[]={2,1,12,0,0xd0,0x41,3,10,0,0,0,0,1,1,6,0,2,1,1,1,6,0,0,0,1,1,6,0,0,8,1,1,6,0,1,0,127,255,4,0};
 static EFI_GUID BindingGuid=EFI_DRIVER_BINDING_PROTOCOL_GUID,ImageGuid=EFI_LOADED_IMAGE_PROTOCOL_GUID;
-static const UINT8 PciPath[]={2,1,12,0,0xd0,0x41,3,10,0,0,0,0,1,1,6,0,1,3,1,1,6,0,0,0,127,255,4,0};
-static const UINT8 GopPath[]={2,1,12,0,0xd0,0x41,3,10,0,0,0,0,1,1,6,0,1,3,1,1,6,0,0,0,2,3,8,0,0,3,1,0x80,127,255,4,0};
-static const UINT8 OutFile[]={4,6,20,0,0x7d,0x49,0x8a,0x62,0xf6,0x2b,0x64,0x42,0x87,0x41,6,0x9d,0xbd,0x33,0x99,0xd6,127,255,4,0};
-static const UINT8 GfxFile[]={4,6,20,0,0xdd,0xab,0xe7,0x43,0x52,0xe3,0xfb,0x4c,0xa2,0x30,0x4c,0xdc,0x1d,0x35,0x0e,0x5c,127,255,4,0};
-static const UINT8 NvFile[]={4,4,28,0,'n',0,'v',0,'g',0,'o',0,'p',0,'-',0,'a',0,'d',0,'1',0,'x',0,'x',0,0,0,127,255,4,0};
-/* CAP0001: NVIDIA GOP also creates two idle output children (_ADR 0x80010320/0x80010340)
- * with no consumers. They are pinned exactly and vanish with the stage-3 GOP stop. */
-static const UINT8 IdlePath[1][36]={
-  {2,1,12,0,0xd0,0x41,3,10,0,0,0,0,1,1,6,0,1,3,1,1,6,0,0,0,2,3,8,0,0x20,3,1,0x80,127,255,4,0}};
 
 static BOOLEAN Equal(const VOID *a,const VOID *b,UINTN n){return !memcmp(a,b,n);}
 static BOOLEAN Guid(const EFI_GUID *a,const EFI_GUID *b){return Equal(a,b,16);}
@@ -61,16 +51,19 @@ static EFI_STATUS Interface(EFI_HANDLE h,EFI_GUID *g,VOID **p) {
   *p=NULL;EFI_STATUS s=Plan.table->BootServices->HandleProtocol(h,g,p);
   return s==EFI_SUCCESS&&!*p?EFI_COMPROMISED_DATA:s;
 }
-/* Match exact, bounded, single-instance paths; never accept a prefix alone. */
-static BOOLEAN Path(EFI_HANDLE h,const UINT8 *bytes,UINTN count) {
-  EFI_DEVICE_PATH_PROTOCOL *p=NULL;
-  if(Interface(h,&PathGuid,(VOID **)&p)!=EFI_SUCCESS)return FALSE;
+/* A GOP belongs to the target GPU only if its device path extends the GPU's own
+ * path. Without this, an iGPU GOP enumerated first would be detached instead. */
+static BOOLEAN GopOnTarget(EFI_HANDLE gop) {
+  const UINT8 *g=NULL,*p=NULL;
+  if(Interface(gop,&PathGuid,(VOID **)&g)!=EFI_SUCCESS||
+     Interface(Plan.pci,&PathGuid,(VOID **)&p)!=EFI_SUCCESS)return FALSE;
   UINTN at=0;
-  while(at+4<=count) {
-    UINTN n=p->Length[0]+((UINTN)p->Length[1]<<8);
-    if(n<4||n>count-at||!Equal(p,bytes+at,n))return FALSE;
-    if(p->Type==END_DEVICE_PATH_TYPE)return n==4&&p->SubType==END_ENTIRE_DEVICE_PATH_SUBTYPE&&at+4==count;
-    at+=n;p=(VOID *)((UINT8 *)p+n);
+  for(UINTN nodes=0;nodes<32;nodes++) {
+    UINTN n=p[at+2]+((UINTN)p[at+3]<<8);
+    if(n<4||n>4096-at)return FALSE;
+    if(p[at]==END_DEVICE_PATH_TYPE)return n==4&&p[at+1]==END_ENTIRE_DEVICE_PATH_SUBTYPE;
+    if(!Equal(g+at,p+at,n))return FALSE;
+    at+=n;
   }
   return FALSE;
 }
@@ -341,10 +334,14 @@ static EFI_STATUS Gops(BOOLEAN first) {
     if(!g->Mode||!g->Mode->Info||g->Mode->SizeOfInfo<sizeof(*g->Mode->Info)||!g->Mode->FrameBufferBase||!g->Mode->FrameBufferSize)continue;
     if(Plan.stage>=3){continue;}
     physical++;
-    if(first&&!Plan.gop) {Plan.gop=h[i];Plan.gop_interface=g;Plan.mode=*g->Mode;Plan.info=*g->Mode->Info;}
+    if(first&&!Plan.gop&&GopOnTarget(h[i])) {Plan.gop=h[i];Plan.gop_interface=g;Plan.mode=*g->Mode;Plan.info=*g->Mode->Info;}
     else if(h[i]==Plan.gop&&(!Equal(g->Mode,&Plan.mode,sizeof(Plan.mode))||!Equal(g->Mode->Info,&Plan.info,sizeof(Plan.info))))s=EFI_NOT_READY;
   }
   if(h&&b->FreePool(h)!=EFI_SUCCESS)s=EFI_DEVICE_ERROR;
+  if(s==EFI_SUCCESS&&first&&!Plan.gop) {
+    GuLog("Gops: no active GOP belongs to the target GPU\n");
+    s=EFI_NOT_READY;
+  }
   if(s==EFI_SUCCESS&&physical<(Plan.stage>=3?0u:1u))s=EFI_NOT_READY;
   return s;
 }
@@ -451,7 +448,7 @@ EFI_STATUS GuMsiPreflight(EFI_SYSTEM_TABLE *t,EFI_HANDLE self,EFI_HANDLE pci) {
   if(Plan.mutated||Plan.ready)return EFI_ALREADY_STARTED;
   memset(&Plan,0,sizeof(Plan));Plan.table=t;Plan.self=self;Plan.pci=pci;
   if(!t||!t->BootServices||!self||!pci||Gu.handle!=pci||Gu.image!=self||Gu.bs!=t->BootServices||
-     !Gu.profile_verified||!Gu.prom_verified||Gu.started||Gu.owned||Gu.armed)return EFI_INVALID_PARAMETER;
+     !Gu.profile_verified||!Gu.prom_checked||Gu.started||Gu.owned||Gu.armed)return EFI_INVALID_PARAMETER;
   EFI_BOOT_SERVICES *b=t->BootServices;
   if(!b->DisconnectController||!b->OpenProtocol||!b->CloseProtocol||!b->RaiseTPL||!b->RestoreTPL||
      !b->ProtocolsPerHandle||!b->OpenProtocolInformation||!b->LocateHandleBuffer||!b->HandleProtocol)return EFI_UNSUPPORTED;
@@ -641,17 +638,46 @@ EFI_STATUS GuMsiFinish(VOID) {
   return s;
 }
 BOOLEAN GuMsiMutated(VOID){return Plan.mutated;}
+/* PMC_BOOT_0 bits 31:24 name the architecture: Turing 0x16, Ampere 0x17/0xb7, Ada 0x19. */
+static BOOLEAN ChipMatchesTarget(UINT32 chip) {
+  if (chip == 0xffffffffU || (chip & 0xffff0000U) == 0xbadf0000U) return FALSE;
+  UINT32 arch = (chip >> 24) & 0x0fU;
+  if (Gu.is_turing) return arch == 0x06U;
+  if (Gu.is_ampere) return arch == 0x07U;
+  return arch == 0x09U;
+}
 BOOLEAN GuMsiReadyForWindows(VOID) {
-  if(!Plan.ready||Plan.stage!=3||Plan.claimed||Gu.owned||Gu.fault||!Gu.quiesced||Gu.flrs!=1||!GuSafeToReturn())return FALSE;
+  if (!Plan.ready || Plan.stage != 3 || Plan.claimed || Gu.owned || Gu.fault || !Gu.quiesced || Gu.flrs != 1 || !GuSafeToReturn()) {
+    GuLog("GuMsiReadyForWindows: state check failed (ready=%u stage=%zu claimed=%u owned=%u fault=%u quiesced=%u flrs=%u safe=%u)\n",
+          Plan.ready, (size_t)Plan.stage, Plan.claimed, Gu.owned, Gu.fault, Gu.quiesced, Gu.flrs, GuSafeToReturn());
+    return FALSE;
+  }
   UINT32 c[64];
-  if(Alive()!=EFI_SUCCESS||Gops(FALSE)!=EFI_SUCCESS||ReadConfig(c)!=EFI_SUCCESS||!ConfigStable(c)||
-     Snapshot(&Current)!=EFI_SUCCESS||!Expected(3,FALSE))return FALSE;
+  if (Alive() != EFI_SUCCESS || Gops(FALSE) != EFI_SUCCESS || ReadConfig(c) != EFI_SUCCESS || !ConfigStable(c) ||
+      Snapshot(&Current) != EFI_SUCCESS || !Expected(3, FALSE)) {
+    GuLog("GuMsiReadyForWindows: environment/edge verification failed\n");
+    return FALSE;
+  }
   /* Fresh status after USB Close and before StartImage; no log callbacks. */
-  UINT32 chip=GuRead32(0),cpu=GuRead32(0x110100),hi=GuRead32(0x1fa828);
-  UINT32 ss0=GuRead32(0x82381c),ss1=GuRead32(0x823820),readout=GuRead32(0x823818),plm=GuRead32(0x823804);
-  BOOLEAN chip_ok = (chip!=0xffffffff && (chip&0xffff0000)!=0xbadf0000 &&
-                     ((chip>>24)==0x19 || (chip>>24)==0x18 || (chip>>24)==0x16));
-  return !Gu.fault&&chip_ok&&(cpu&0x10)&&cpu!=0xffffffff&&
-    (cpu&0xffff0000)!=0xbadf0000&&!(hi>>4)&&ss0==0x88888888&&ss1==8&&
-    !(readout&0x07ffffff)&&readout!=0xffffffff&&plm==0xffffffff;
+  UINT32 chip = GuRead32(0), cpu = GuRead32(0x110100), hi = GuRead32(0x1fa828);
+  UINT32 ss0 = GuRead32(0x82381c), ss1 = GuRead32(0x823820), readout = GuRead32(0x823818), plm = GuRead32(0x823804);
+  BOOLEAN chip_ok = ChipMatchesTarget(chip);
+
+  GuLog("GuMsiReadyForWindows: chip=%#x chip_ok=%u cpu=%#x hi=%#x ss0=%#x ss1=%#x readout=%#x plm=%#x\n",
+        chip, chip_ok, cpu, hi, ss0, ss1, readout, plm);
+
+  if (Gu.fault || !chip_ok || !(cpu & 0x10) || cpu == 0xffffffff ||
+      (cpu & 0xffff0000) == 0xbadf0000 || (hi >> 4) != 0 ||
+      ss0 != 0x88888888 || ss1 != 8) {
+    GuLog("GuMsiReadyForWindows: hardware register check failed\n");
+    return FALSE;
+  }
+  if (!Gu.is_ampere && !Gu.is_turing) {
+    /* Ada-specific SM speed-select readout and open PLM check */
+    if ((readout & 0x07ffffff) || readout == 0xffffffff || plm != 0xffffffff) {
+      GuLog("GuMsiReadyForWindows: Ada-specific readout/plm check failed\n");
+      return FALSE;
+    }
+  }
+  return TRUE;
 }

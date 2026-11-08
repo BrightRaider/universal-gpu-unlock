@@ -52,11 +52,21 @@ Every recent run consistently confirms:
 3. Press **`[U]`** for Standard Unlock. The runtime executes in ~300 ms, displays the 4-stage progress dashboard, and immediately hands control over to Windows Boot Manager (`bootmgfw.efi`).
 4. **Behavior:** The GPU remains unlocked for the entire duration of your Windows session. Once you shut down, the volatile RAM state resets, and the system boots 100% factory stock on the next boot without the USB drive.
 
-### Mode B: Zero-Touch NVRAM Autopilot (Permanent UEFI Driver)
-*Best for workstations and daily-driver systems where you want full unlocked performance on every boot without ever touching a USB stick or boot menu.*
-1. Boot from the USB drive and press **`[I]` (Install DXE Driver to NVRAM / SSD)**.
-2. The runtime copies `AdaUnlockDxe.efi` to your internal storage drive's EFI System Partition (ESP) and registers an autonomous driver entry in the UEFI NVRAM (`Driver####`).
-3. **Execution Model:** During every future system power-on, the motherboard's early **DXE Dispatcher** executes the driver before Windows Boot Manager even starts. The GPU is cleanly unlocked during initial POST, and Windows boots directly into the fully unleashed compute state.
+### Mode B: NVRAM Autopilot (UEFI Driver on the USB Drive)
+*Best for workstations and daily-driver systems where you want full unlocked performance on every boot without opening the boot menu. The USB drive stays connected.*
+1. Boot from the USB drive and press **`[I]` (Install DXE Driver to NVRAM)**.
+2. The runtime registers a driver entry in the UEFI NVRAM (`Driver####`, first free slot) that points to `\EFI\Drivers\AdaUnlockDxe.efi` on that USB drive. The file is not copied to internal storage.
+3. **Execution Model:** During every future system power-on with the USB drive connected, the firmware runs the driver before Windows Boot Manager starts. Without the USB drive the entry is skipped and the system boots stock.
+4. **On failure:** If the unlock fails after the GPU was touched, the driver shuts the PC down, because only a power-off guarantees the GPU is no longer using system memory. Remove the USB drive to boot without the unlock. Press **`[R]`** in the boot menu to remove the entry.
+5. **NVRAM safety:** `[I]` uses the first free `Driver####` slot or reuses its own entry. `[R]` removes only entries whose description and file path belong to AdaUnlock, and reports when none exist. If `DriverOrder` cannot be read, both options stop without changing NVRAM.
+
+### Boot Behavior
+- **Windows selection:** A volume with `bootmgfw.efi` always beats a generic `bootx64.efi`. If several qualify, the first active matching entry in the firmware's `BootOrder` wins. USB volumes are never selected.
+- **Multiple GPUs:** Only the first supported GPU is processed, and a warning is shown. If it does not own an active GOP, the run stops before anything is changed.
+- **Display:** Only a GOP on the target GPU is detached, so a monitor on the integrated GPU keeps working.
+- **VBIOS:** The check only confirms that the ROM is readable and plausible. It does not compare against a per-card hash.
+- **Errors:** Messages stay enabled after the unlock starts. Once the NVIDIA display driver is detached, they are only visible on another display, so check the `RUNxxxx.TXT` log on the USB drive.
+- **Known issue on Ampere:** See [issue #11](https://github.com/BrightRaider/universal-gpu-unlock/issues/11). A run can stop at `stage=final-Windows-verification`. Power off fully and boot without the USB drive.
 
 ---
 

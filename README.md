@@ -45,7 +45,9 @@
 
 - **Any Vendor:** Compatible with Founders Edition, ASUS, MSI, Gigabyte, ZOTAC, PNY, Palit, Gainward, etc.
 - **Any Platform:** Intel (Z690, Z790, Z890, B760) and AMD (AM4/AM5, X570, B550, B650, X670E, X870E).
-- **Multi-Drive & Multi-GPU:** Automatically boots your primary Windows OS drive and supports multi-dGPU platforms.
+- **Multi-Drive:** Prefers `bootmgfw.efi` and follows your firmware's boot order when several Windows volumes exist.
+- **Multi-GPU:** Only the first supported GPU is unlocked, and it must be the one driving the boot display. Other GPUs stay stock.
+- **Known issue on RTX 30 (Ampere):** A run can stop at `stage=final-Windows-verification` and leave a black screen. Power off fully and boot without the USB drive. See [issue #11](https://github.com/BrightRaider/universal-gpu-unlock/issues/11).
 
 ---
 

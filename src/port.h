@@ -120,7 +120,7 @@ typedef struct {
   BOOLEAN is_ampere;
   BOOLEAN is_turing;
   BOOLEAN fault, retained, started, quiesced, armed, owned, display_ok, saved;
-  BOOLEAN profile_verified, prom_verified;
+  BOOLEAN profile_verified, prom_checked;
   BOOLEAN transaction_attempted;
   BOOLEAN master_attributes_pending;
   UINT64 master_original_attributes;

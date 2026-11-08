@@ -1,6 +1,6 @@
 /* SPDX-License-Identifier: GPL-2.0-only */
 
-/* USB log/assets only. Windows ESP is opened read-only. No boot variables. */
+/* USB log/assets only. Windows ESP is opened read-only. Boot variables are only read. */
 
 #include "boot_io.h"
 
@@ -34,6 +34,8 @@ static EFI_GUID LoadedGuid=EFI_LOADED_IMAGE_PROTOCOL_GUID,FsGuid=EFI_SIMPLE_FILE
 
 static EFI_GUID PathGuid=EFI_DEVICE_PATH_PROTOCOL_GUID,InfoGuid=EFI_FILE_INFO_ID;
 
+static EFI_GUID GlobalGuid={0x8be4df61,0x93ca,0x11d2,{0xaa,0x0d,0,0xe0,0x98,0x03,0x2b,0x8c}};
+
 static const EFI_GUID WindowsPartition=GU_WINDOWS_PARTITION_INITIALIZER;
 
 static const CHAR16 WindowsName[]=L"\\EFI\\Microsoft\\Boot\\bootmgfw.efi";
@@ -44,6 +46,17 @@ static const CHAR16 * const WindowsCandidates[] = {
   L"\\EFI\\Boot\\bootx64.efi",
   L"EFI\\Boot\\bootx64.efi"
 };
+
+#define GU_WINDOWS_NATIVE_CANDIDATES 2U /* Leading WindowsCandidates entries that name bootmgfw.efi. */
+
+#define GU_MAX_WINDOWS_CANDIDATES 16U
+
+typedef struct {
+  EFI_HANDLE volume;
+  EFI_DEVICE_PATH_PROTOCOL *path;
+  UINTN path_bytes,rank;
+  const CHAR16 *name;
+} GU_WINDOWS_CANDIDATE;
 
 static UINTN GuStrLen(const CHAR16 *s) {
   UINTN len = 0;
@@ -272,6 +285,16 @@ EFI_STATUS GuBootLoadAssets(VOID) {
 
   if(!Root||Gu.started)return EFI_NOT_READY;
 
+  if(Gu.is_turing) {
+
+    GuLog("Asset load refused: no TU102 firmware assets are available for Turing\n");
+
+    GuBootSay(L"\r\n[ERROR] RTX 20 (Turing) firmware assets are not included in this release. Nothing was changed.\r\n");
+
+    return EFI_UNSUPPORTED;
+
+  }
+
   for(UINTN i=0;i<5;i++) {
 
     VOID *p=NULL;
@@ -342,51 +365,101 @@ static EFI_STATUS ReadWindowsBinary(EFI_FILE_PROTOCOL *root,const CHAR16 *name,U
 
 }
 
+/* Find the partition node of a device path, bounded by the caller's byte count. */
+static const HARDDRIVE_DEVICE_PATH *FindHardDrive(const VOID *path,UINTN limit) {
+  const UINT8 *p=path;UINTN at=0;
+  for(UINTN nodes=0;nodes<64&&limit-at>=4;nodes++) {
+    UINTN n=p[at+2]+((UINTN)p[at+3]<<8);
+    if(n<4||n>limit-at||p[at]==END_DEVICE_PATH_TYPE)return NULL;
+    if(p[at]==MEDIA_DEVICE_PATH&&p[at+1]==MEDIA_HARDDRIVE_DP&&n>=sizeof(HARDDRIVE_DEVICE_PATH))
+      return (const VOID *)(p+at);
+    at+=n;
+  }
+  return NULL;
+}
+
+/* Among equally ranked volumes, follow the firmware's own BootOrder so the OS
+ * the machine would normally boot wins. Falls back to the first candidate. */
+static UINTN PreferredWindowsCandidate(const GU_WINDOWS_CANDIDATE *c,UINTN count,UINTN rank) {
+  static const CHAR16 hex[]=L"0123456789ABCDEF";
+  EFI_RUNTIME_SERVICES *rs=Table->RuntimeServices;
+  UINT16 order[128];UINTN order_bytes=sizeof(order),first=count;UINT32 attrs=0;
+  for(UINTN i=0;i<count;i++)if(c[i].rank==rank){first=i;break;}
+  if(!rs||!rs->GetVariable||rs->GetVariable(L"BootOrder",&GlobalGuid,&attrs,&order_bytes,order)!=EFI_SUCCESS)return first;
+  for(UINTN i=0;i<order_bytes/sizeof(UINT16);i++) {
+    CHAR16 name[]=L"Boot0000";UINT8 option[2048];UINTN option_bytes=sizeof(option);
+    for(UINTN d=0;d<4;d++)name[7-d]=hex[(order[i]>>(4*d))&0xf];
+    if(rs->GetVariable(name,&GlobalGuid,&attrs,&option_bytes,option)!=EFI_SUCCESS||option_bytes<8||!(option[0]&1))continue;
+    UINTN list_bytes=option[4]+((UINTN)option[5]<<8),at=6;
+    while(at+2<=option_bytes&&(option[at]||option[at+1]))at+=2;
+    at+=2;
+    if(at>option_bytes||list_bytes>option_bytes-at)continue;
+    const HARDDRIVE_DEVICE_PATH *wanted=FindHardDrive(option+at,list_bytes);
+    if(!wanted)continue;
+    for(UINTN j=0;j<count;j++) {
+      if(c[j].rank!=rank)continue;
+      const HARDDRIVE_DEVICE_PATH *have=FindHardDrive(c[j].path,c[j].path_bytes);
+      if(have&&!memcmp(have->Signature,wanted->Signature,sizeof(have->Signature)))return j;
+    }
+  }
+  return first;
+}
+
 EFI_STATUS GuBootLoadWindows(VOID) {
   if(Windows||!Table||Gu.started)return EFI_NOT_READY;
-  EFI_BOOT_SERVICES *b=Table->BootServices;EFI_HANDLE *h=NULL,volume=NULL;UINTN count=0,matches=0,path_bytes=0;
+  EFI_BOOT_SERVICES *b=Table->BootServices;EFI_HANDLE *h=NULL,volume=NULL;UINTN count=0,matches=0,stored=0,path_bytes=0;
   EFI_DEVICE_PATH_PROTOCOL *base=NULL;
   const CHAR16 *selected_name=NULL;
+  GU_WINDOWS_CANDIDATE candidates[GU_MAX_WINDOWS_CANDIDATES];
   EFI_STATUS s=b->LocateHandleBuffer(ByProtocol,&FsGuid,NULL,&count,&h);
   if(s==EFI_SUCCESS&&(!h||!count||count>128))s=EFI_UNSUPPORTED;
-  EFI_FILE_PROTOCOL *matched_root=NULL;
   for(UINTN i=0;s==EFI_SUCCESS&&i<count;i++) {
     if(h[i]==OwnVolume) continue;
     EFI_DEVICE_PATH_PROTOCOL *p=NULL;UINTN bytes=0;BOOLEAN usb=FALSE,windows=FALSE;
     if(b->HandleProtocol(h[i],&PathGuid,(VOID **)&p)==EFI_SUCCESS&&Inspect(p,&bytes,&usb,&windows)&&!usb) {
       EFI_SIMPLE_FILE_SYSTEM_PROTOCOL *tfs=NULL;EFI_FILE_PROTOCOL *troot=NULL;
       if(b->HandleProtocol(h[i],&FsGuid,(VOID **)&tfs)==EFI_SUCCESS&&tfs&&tfs->OpenVolume(tfs,&troot)==EFI_SUCCESS&&troot) {
-        const CHAR16 *found_name=NULL;
+        const CHAR16 *found_name=NULL;UINTN found_rank=0;
         for(UINTN c_idx=0;c_idx<sizeof(WindowsCandidates)/sizeof(WindowsCandidates[0]);c_idx++) {
           EFI_FILE_PROTOCOL *tf=NULL;
           if(troot->Open(troot,&tf,(CHAR16 *)WindowsCandidates[c_idx],EFI_FILE_MODE_READ,0)==EFI_SUCCESS&&tf) {
             tf->Close(tf);
             found_name=WindowsCandidates[c_idx];
+            found_rank=c_idx<GU_WINDOWS_NATIVE_CANDIDATES?0:1;
             break;
           }
         }
         if(found_name) {
-          if(!matches) {
-            volume=h[i]; base=p; path_bytes=bytes; matched_root=troot; troot=NULL;
-            selected_name=found_name;
+          if(stored<GU_MAX_WINDOWS_CANDIDATES) {
+            candidates[stored].volume=h[i];candidates[stored].path=p;candidates[stored].path_bytes=bytes;
+            candidates[stored].rank=found_rank;candidates[stored].name=found_name;stored++;
           }
           matches++;
           GuLog("GuBootLoadWindows: candidate %zu volume=%p found '%ls' (match #%zu)\n", i, (void *)h[i], found_name, matches);
         }
-        if(troot) troot->Close(troot);
+        troot->Close(troot);
       }
     }
   }
   if(h)b->FreePool(h);
-  if(s!=EFI_SUCCESS||matches<1||!volume||!matched_root||!selected_name) {
-    if(matched_root) matched_root->Close(matched_root);
+  /* A real bootmgfw.efi always beats the generic removable-media loader. */
+  UINTN best_rank=1;
+  for(UINTN i=0;i<stored;i++)if(!candidates[i].rank)best_rank=0;
+  EFI_FILE_PROTOCOL *root=NULL;
+  if(s==EFI_SUCCESS&&stored) {
+    const GU_WINDOWS_CANDIDATE *pick=&candidates[PreferredWindowsCandidate(candidates,stored,best_rank)];
+    EFI_SIMPLE_FILE_SYSTEM_PROTOCOL *selected_fs=NULL;
+    volume=pick->volume;base=pick->path;path_bytes=pick->path_bytes;selected_name=pick->name;
+    if(b->HandleProtocol(volume,&FsGuid,(VOID **)&selected_fs)!=EFI_SUCCESS||!selected_fs||
+       selected_fs->OpenVolume(selected_fs,&root)!=EFI_SUCCESS)root=NULL;
+  }
+  if(s!=EFI_SUCCESS||!root||!selected_name) {
     GuLog("GuBootLoadWindows failed: matches=%zu volume=%p s=%#llx\n", (size_t)matches, (void *)volume, (unsigned long long)s);
     return EFI_NOT_FOUND;
   }
   if(matches > 1) {
-    GuLog("GuBootLoadWindows: multiple targets found (%zu). Selected primary volume=%p path='%ls'\n", matches, (void *)volume, selected_name);
+    GuLog("GuBootLoadWindows: multiple targets found (%zu). Selected volume=%p path='%ls'\n", matches, (void *)volume, selected_name);
   }
-  EFI_FILE_PROTOCOL *root=matched_root;
   VOID *bytes=NULL;UINTN actual_size=0;
   s=ReadWindowsBinary(root,selected_name,&actual_size,&bytes);
   EFI_STATUS closed=root->Close(root);if(s==EFI_SUCCESS)s=closed;
@@ -408,7 +481,7 @@ EFI_STATUS GuBootLoadWindows(VOID) {
       im->DeviceHandle=volume;
     }
   }
-  GuLog("Windows image staged: status=%#llx matches=%zu SHA256 pinned path='%ls'\n",(unsigned long long)s,(size_t)matches,selected_name);
+  GuLog("Windows image staged: status=%#llx matches=%zu path='%ls'\n",(unsigned long long)s,(size_t)matches,selected_name);
   return s;
 }
 
@@ -434,7 +507,7 @@ EFI_STATUS GuBootChoose(CHAR16 *choice) {
       L" UNIVERSAL GPU UNLOCK v1.7.5 (Multi-Gen Edition)\r\n"
       L"=======================================================\r\n"
       L"  [U] Full GPU Unlock (proven rock-solid, RAM-only)\r\n"
-      L"  [I] Install DXE Driver to UEFI NVRAM (Auto-boot on startup)\r\n"
+      L"  [I] Install DXE Driver to UEFI NVRAM (Auto-boot, USB stays in)\r\n"
       L"  [R] Remove DXE Driver from UEFI NVRAM\r\n"
       L"  [S] Stock Windows (Skip unlock, normal boot)\r\n\r\n"
       L"Select mode [U/I/R/S] (default: Stock Windows in 30s): "
@@ -446,7 +519,7 @@ EFI_STATUS GuBootChoose(CHAR16 *choice) {
       L"=======================================================\r\n"
       L"  [U] Standard Unlock (proven rock-solid, RAM-only)\r\n"
       L"  [P] Experimental S3 Persistence Unlock (Boot-Script)\r\n"
-      L"  [I] Install DXE Driver to UEFI NVRAM (Auto-boot / S3)\r\n"
+      L"  [I] Install DXE Driver to UEFI NVRAM (Auto-boot / S3, USB stays in)\r\n"
       L"  [R] Remove DXE Driver from UEFI NVRAM\r\n"
       L"  [S] Stock Windows (Skip unlock, normal boot)\r\n\r\n"
       L"Select mode [U/P/I/R/S] (default: Stock Windows in 30s): "

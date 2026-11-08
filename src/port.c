@@ -10,10 +10,10 @@ BOOLEAN GuGetEntrySelectors(UINT32 *Ss0, UINT32 *Ss1) {
   *Ss0=EntrySs0;*Ss1=EntrySs1;return TRUE;
 }
 BOOLEAN GuEntrySelectorsMatch(UINT32 Ss0, UINT32 Ss1) {
-  return EntryLatched && Gu.prom_verified && !Gu.fault && Ss0==EntrySs0 && Ss1==EntrySs1;
+  return EntryLatched && Gu.prom_checked && !Gu.fault && Ss0==EntrySs0 && Ss1==EntrySs1;
 }
 BOOLEAN GuLatchEntrySelectors(UINT32 Ss0, UINT32 Ss1) {
-  if(Gu.fault || !Gu.prom_verified || Gu.started || Ss0==0xffffffffU ||
+  if(Gu.fault || !Gu.prom_checked || Gu.started || Ss0==0xffffffffU ||
      (Ss0&0xffff0000U)==0xbadf0000U || Ss0==0x88888888U || Ss1>0xfU)return FALSE;
   if(EntryLatched)return GuEntrySelectorsMatch(Ss0,Ss1);
   EntrySs0=Ss0;EntrySs1=Ss1;EntryLatched=TRUE;return TRUE;
@@ -30,7 +30,7 @@ BOOLEAN GuSelectorPhase(UINT32 Phase) {
        (SelectorPhase==GU_SELECTOR_PHASE_SS1_WRITE && Phase==GU_SELECTOR_PHASE_TARGET && Ss1WriteConsumed))) {
     Gu.fault=TRUE;return FALSE;
   }
-  if(!Gu.profile_verified || !Gu.armed || !Gu.owned || Gu.fault || !Gu.prom_verified ||
+  if(!Gu.profile_verified || !Gu.armed || !Gu.owned || Gu.fault || !Gu.prom_checked ||
      !GuGetEntrySelectors(&entry0,&entry1))return FALSE;
   ss0=GuRead32(0x82381c);ss1=GuRead32(0x823820);
   if(Gu.fault || ss0!=0x88888888U ||
@@ -288,7 +288,7 @@ EFI_STATUS GuFlr(VOID) {
   if(Ctl&0x8000)return EFI_NOT_READY;
 #ifdef GU_ENTRY_LATCHED
   UINT32 Ss0=GuRead32(0x82381c),Ss1=GuRead32(0x823820),Entry0,Entry1;
-  if(!Gu.prom_verified || Gu.fault || !GuGetEntrySelectors(&Entry0,&Entry1) ||
+  if(!Gu.prom_checked || Gu.fault || !GuGetEntrySelectors(&Entry0,&Entry1) ||
      Ss0!=0x88888888U ||
 #ifdef GU_ENTRY_LATCHED_SS1_PRESERVE
      Ss1!=Entry1

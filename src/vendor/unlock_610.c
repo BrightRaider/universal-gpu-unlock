@@ -1207,7 +1207,7 @@ static int unlock_transaction_fwsec(struct unlock_transaction_work *work)
 	memcpy_fromio(rom, work->bar + 0x300000, mapped);
 	dev_info(&work->pdev->dev, "FWSEC: PROM bytes=%zu signature=%#x\n",
 		 mapped, (unsigned int)(rom[0] | (rom[1] << 8)));
-	if (Gu.fault || !GuAd104PromMatches(rom,mapped)) { ret=-EBADMSG; goto out; }
+	if (Gu.fault || !GuAd104PromPlausible(rom,mapped)) { ret=-EBADMSG; goto out; }
 	ret = gpu_unlock_vbios_fwsec(rom, mapped, &fw);
 	if (ret) {
 		dev_err(&work->pdev->dev, "FWSEC-FRTS not found in board ROM (%d)\n", ret);
@@ -1781,7 +1781,7 @@ int gpu_unlock_610_unlock(struct pci_dev *pdev, const struct gpu_unlock_610_shar
     if (Gu.transaction_attempted) return -EALREADY;
     if (!pdev || pdev->vendor!=0x10de || !gpu_is_supported_device(pdev->device) ||
         !shared || shared->gsp!=&GuAssets[2].firmware || !GuAd104AssetsValid() ||
-        !Gu.prom_verified || !Gu.profile_verified || !Gu.owned || !Gu.armed ||
+        !Gu.prom_checked || !Gu.profile_verified || !Gu.owned || !Gu.armed ||
         !Gu.display_ok || !Gu.display_check || !Gu.display_check() || Gu.fault ||
         Gu.started || Gu.allocations || Gu.retained || !GuAd104ColdEntry()) return -ENODEV;
     Gu.transaction_attempted=TRUE;

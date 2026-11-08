@@ -531,6 +531,10 @@ function Deploy-ToUsb([string]$Letter) {
 
     if (Test-Path -LiteralPath $Script:DxeEfi) {
         Copy-Item -LiteralPath $Script:DxeEfi -Destination (Join-Path $targetBootDir "AdaUnlockDxe.efi") -Force
+        # The boot menu's [I] option registers this exact path.
+        $targetDriversDir = Join-Path $driveRoot "EFI\Drivers"
+        New-Item -ItemType Directory -Path $targetDriversDir -Force | Out-Null
+        Copy-Item -LiteralPath $Script:DxeEfi -Destination (Join-Path $targetDriversDir "AdaUnlockDxe.efi") -Force
     }
 
     # 2. Copy AD102-ASSETS and GA102-ASSETS

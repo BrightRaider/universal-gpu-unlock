@@ -53,6 +53,11 @@ EFI_STATUS EFIAPI UefiMain(EFI_HANDLE image,EFI_SYSTEM_TABLE *t) {
           devices[g].is_ampere ? "Ampere" : (devices[g].is_turing ? "Turing" : "Ada Lovelace"));
   }
 
+  if (device_count > 1) {
+    GuLog("WARNING: only GPU [1/%u] is processed; the other GPU(s) stay stock\n", (unsigned)device_count);
+    GuBootSay(L"\r\n[WARNING] More than one supported GPU found. Only the first one is unlocked; the others stay stock.\r\n");
+  }
+
   stage="assets";s=GuBootLoadAssets();if(s!=EFI_SUCCESS||Gu.fault)goto failed;
 
   stage="read-only-cold-profile";s=GuAd104Prepare();if(s!=EFI_SUCCESS||Gu.fault)goto failed;
@@ -69,11 +74,11 @@ EFI_STATUS EFIAPI UefiMain(EFI_HANDLE image,EFI_SYSTEM_TABLE *t) {
 
     if (s == EFI_SUCCESS) {
 
-      GuLog("DXE Driver successfully installed to Driver0001 / DriverOrder\n");
+      GuLog("DXE Driver successfully installed to Driver#### / DriverOrder\n");
 
-      GuBootSay(L"\r\n\r\n[OK] AdaUnlock DXE Driver installed to UEFI NVRAM (Driver0001)!\r\n"
+      GuBootSay(L"\r\n\r\n[OK] AdaUnlock DXE Driver installed to UEFI NVRAM.\r\n"
 
-                L"Driver will execute automatically during early boot on every startup.\r\n"
+                L"Driver runs during early boot on every startup while this USB drive is connected.\r\n"
 
                 L"Rebooting system in 3 seconds...\r\n");
 
@@ -81,7 +86,9 @@ EFI_STATUS EFIAPI UefiMain(EFI_HANDLE image,EFI_SYSTEM_TABLE *t) {
 
       GuLog("ERROR: Failed to install DXE Driver: %#llx\n", (unsigned long long)s);
 
-      GuBootSay(L"\r\n\r\n[ERROR] Failed to install DXE Driver to NVRAM!\r\n"
+      GuBootSay(L"\r\n\r\n[ERROR] Failed to install DXE Driver to NVRAM! Nothing was registered.\r\n"
+
+                L"Check that EFI\\Drivers\\AdaUnlockDxe.efi exists on this USB drive.\r\n"
 
                 L"Rebooting in 5 seconds...\r\n");
 
@@ -109,11 +116,13 @@ EFI_STATUS EFIAPI UefiMain(EFI_HANDLE image,EFI_SYSTEM_TABLE *t) {
 
     s = GuRemoveDriverOption(t);
 
-    GuLog("DXE Driver removed from Driver0001 / DriverOrder (status=%#llx)\n", (unsigned long long)s);
+    GuLog("DXE Driver removal from Driver#### / DriverOrder: status=%#llx\n", (unsigned long long)s);
 
-    GuBootSay(L"\r\n\r\n[OK] AdaUnlock DXE Driver removed from UEFI NVRAM.\r\n"
+    GuBootSay(s == EFI_SUCCESS ? L"\r\n\r\n[OK] AdaUnlock DXE Driver removed from UEFI NVRAM.\r\n" :
+              s == EFI_NOT_FOUND ? L"\r\n\r\n[INFO] No AdaUnlock DXE Driver entry found. Nothing was changed.\r\n" :
+              L"\r\n\r\n[ERROR] Could not remove the AdaUnlock DXE Driver. See the USB log.\r\n");
 
-              L"Rebooting system in 3 seconds...\r\n");
+    GuBootSay(L"Rebooting system in 3 seconds...\r\n");
 
     (VOID)GuBootClose();
 
@@ -148,10 +157,10 @@ EFI_STATUS EFIAPI UefiMain(EFI_HANDLE image,EFI_SYSTEM_TABLE *t) {
     L" UNIVERSAL GPU UNLOCK v1.7.8 - Status Monitor\r\n"
     L"=======================================================\r\n"
     L" [1/4] GPU and PCIe Topology Discovery ..... [ OK ]\r\n"
-    L" [2/4] Firmware and Signature Attestation .. [ OK ]\r\n"
-    L" [3/4] Multi-GOP Display Handover ......... [ OK ]\r\n"
-    L" [4/4] Hardware SEC2 and MSR Unlock ........ [ IN PROGRESS ]\r\n\r\n"
-    L" --> Priming all discovered GPU silicon...\r\n"
+    L" [2/4] Firmware Hashes and VBIOS Parse ..... [ OK ]\r\n"
+    L" [3/4] Display Handover .................... [ PENDING ]\r\n"
+    L" [4/4] Hardware SEC2 and MSR Unlock ........ [ PENDING ]\r\n\r\n"
+    L" --> Starting GPU unlock...\r\n"
   );
 
   GuBootSilence();
@@ -199,11 +208,12 @@ EFI_STATUS EFIAPI UefiMain(EFI_HANDLE image,EFI_SYSTEM_TABLE *t) {
 
   GuBootUnsilence();
   GuBootSay(
+    L" [3/4] Display Handover .................... [ OK ]\r\n"
     L" [4/4] Hardware SEC2 and MSR Unlock ........ [ OK ]\r\n"
     L" Handing over control to Windows Boot Manager...\r\n\r\n"
   );
 
-  GuLog("TRANSACTION OK: All %u GPU(s) unlocked, hardware readbacks passed!\n", (unsigned)device_count);
+  GuLog("TRANSACTION OK: GPU [1/%u] unlocked, hardware readbacks passed!\n", (unsigned)device_count);
 
   stage="final-Windows-verification";if(!GuMsiReadyForWindows()){s=EFI_NOT_READY;goto failed;}
 
@@ -214,6 +224,8 @@ EFI_STATUS EFIAPI UefiMain(EFI_HANDLE image,EFI_SYSTEM_TABLE *t) {
   GuBootHalt();return s==EFI_SUCCESS?EFI_ABORTED:s;
 
 failed:
+
+  GuBootUnsilence();
 
   if(s==EFI_SUCCESS)s=EFI_DEVICE_ERROR;
 

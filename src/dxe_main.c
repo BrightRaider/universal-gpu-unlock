@@ -32,6 +32,8 @@ EFI_STATUS EFIAPI AdaUnlockDriverEntryPoint(EFI_HANDLE image, EFI_SYSTEM_TABLE *
           (unsigned)(g + 1), (unsigned)device_count, (unsigned)devices[g].device_id,
           devices[g].is_ampere ? "Ampere" : (devices[g].is_turing ? "Turing" : "Ada Lovelace"));
   }
+  if (device_count > 1)
+    GuLog("DXE-DRIVER: WARNING: only GPU [1/%u] is processed; the other GPU(s) stay stock\n", (unsigned)device_count);
 
   stage = "dxe-assets";
   s = GuBootLoadAssets();
@@ -113,12 +115,25 @@ EFI_STATUS EFIAPI AdaUnlockDriverEntryPoint(EFI_HANDLE image, EFI_SYSTEM_TABLE *
   }
 
 finish:
+  if (s == EFI_SUCCESS && Gu.fault) s = EFI_DEVICE_ERROR;
   if (s != EFI_SUCCESS) {
-    GuLog("DXE-DRIVER: STOP at stage=%s status=%#llx fault=%u\n",
-          stage, (unsigned long long)s, Gu.fault);
+    GuLog("DXE-DRIVER: STOP at stage=%s status=%#llx mutated=%u retained=%u fault=%u\n",
+          stage, (unsigned long long)s, GuMsiMutated(), Gu.retained, Gu.fault);
     if (Gu.started || Gu.master_attributes_pending) (VOID)GuClearMaster();
+    if (GuMsiMutated() || Gu.started || Gu.retained) {
+      /* The GPU may still own DMA buffers: the OS must never inherit that memory.
+       * Only a full power-off ends it. Removing the USB drive skips this driver. */
+      (VOID)GuBootClose();
+      GuBootSay(L"\r\n[ERROR] GPU unlock failed. Shutting down in 10 seconds.\r\n"
+                L"Remove the USB drive to boot without the unlock.\r\n");
+      if (t->BootServices->Stall) t->BootServices->Stall(10000000);
+      if (t->RuntimeServices && t->RuntimeServices->ResetSystem)
+        t->RuntimeServices->ResetSystem(EfiResetShutdown, EFI_ABORTED, 0, NULL);
+      GuBootHalt();
+      return EFI_ABORTED;
+    }
   } else {
-    GuLog("DXE-DRIVER: Succeeded for all %u GPU(s)! Returning EFI_SUCCESS to DXE Dispatcher.\n",
+    GuLog("DXE-DRIVER: Succeeded for GPU [1/%u]. Returning EFI_SUCCESS to DXE Dispatcher.\n",
           (unsigned)device_count);
   }
   (VOID)GuBootClose();
