@@ -6,9 +6,9 @@ For packaged binaries and downloads, visit [GitHub Releases](https://github.com/
 
 ---
 
-## [v1.7.9] - 2026-11-08
+## [Unreleased]
 ### Fixed
-- **Resolved `final-Windows-verification` Status `0x8000000000000006` Halt (Resolves [#11](https://github.com/BrightRaider/universal-gpu-unlock/issues/11)):** Fixed `ChipMatchesTarget` in `src/msi_release.c` to mask the architecture nibble `((chip >> 24) & 0x0fU) == 0x07`, cleanly matching Ampere GA106 and LHR cards reporting `PMC=0xb76000a1` (as well as GA102 `0x17xxxxxx`, Turing `0x16xxxxxx`, and Ada `0x19xxxxxx`). Isolated Ada-exclusive SM speed select readout and open PLM assertions so that Ampere and Turing cards proceed directly to `GuBootWindows()` and boot straight to the Windows desktop.
+- **GA106 / LHR Post-FLR Verification Fix (Addresses Issue [#11](https://github.com/BrightRaider/universal-gpu-unlock/issues/11)):** Fixed `ChipMatchesTarget` in `src/msi_release.c` to mask the architecture nibble `((chip >> 24) & 0x0fU) == 0x07`, cleanly matching Ampere GA106 and LHR cards reporting `PMC=0xb76000a1` (as well as GA102 `0x17xxxxxx`, Turing `0x16xxxxxx`, and Ada `0x19xxxxxx`). Isolated Ada-exclusive SM speed select readout and open PLM assertions so that Ampere and Turing cards proceed directly to `GuBootWindows()`.
 - **DXE failure path:** After the GPU was touched, the driver now shuts the PC down instead of continuing the boot with possibly live DMA.
 - **Turing:** Refused before any change, since no TU102 assets ship. The asset hash bypass is gone.
 - **Boot screen:** Errors stay visible after the unlock started, and status lines no longer report steps as OK before they ran.
@@ -19,6 +19,9 @@ For packaged binaries and downloads, visit [GitHub Releases](https://github.com/
 - **GOP selection:** Only a GOP on the target GPU is detached, so an iGPU console stays untouched.
 - **VBIOS check:** Renamed to reflect that it is a plausibility check (`GuAd104PromPlausible`, `Gu.prom_checked`), and it now refuses a non-NVIDIA PCIR vendor. A differing PCIR device ID is only logged.
 - **Pre-compiled & Authenticode-Signed Binaries:** Freshly compiled MSVC binaries (`bin/BOOTX64.EFI` and `bin/AdaUnlockDxe.efi`) signed with `Custom UEFI SecureBoot Key`.
+
+### Known Issues & Testing
+- **Ampere verification in progress ([#11](https://github.com/BrightRaider/universal-gpu-unlock/issues/11)):** Candidate fix for the `final-Windows-verification` halt (`0x8000000000000006`) has been provided to the reporter for hardware testing. Issue #11 remains open until confirmation of clean boot to the Windows desktop.
 
 ---
 
