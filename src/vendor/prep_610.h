@@ -25,29 +25,23 @@ typedef uint64_t u64;
 /* Tested AD102 PCI ID using the pinned AD102-family Booter assets. */
 #define GU_AD102_RTX_4090 0x2684u
 
+#include "gpu_device_ids.h"
+
+#define GU_PREP_MATCH(id) (dev == ((u16)(id))) ||
+
 static inline bool gpu_is_ada_device(u16 dev) {
-	return (dev == 0x2684u || dev == 0x2685u ||  /* RTX 4090, 4090D (AD102) */
-	        dev == 0x2702u || dev == 0x2704u || dev == 0x2703u || dev == 0x2705u); /* RTX 4080, 4080 SUPER, 4070 Ti SUPER (AD103) */
+	return (GU_ADA_DEVICE_IDS(GU_PREP_MATCH) false);
 }
 
 static inline bool gpu_is_ampere_device(u16 dev) {
-	return (dev == 0x2204u || dev == 0x2208u ||  /* RTX 3090, 3090 Ti */
-	        dev == 0x2206u || dev == 0x220au ||  /* RTX 3080 Ti, 3080 10GB */
-	        dev == 0x2216u || dev == 0x2207u ||  /* RTX 3080 12GB, CMP 90HX */
-	        dev == 0x2482u || dev == 0x2484u ||  /* RTX 3070 Ti, RTX 3070 (GA104) */
-	        dev == 0x2487u || dev == 0x2488u || dev == 0x2489u || /* RTX 3060 Ti (GA104) */
-	        dev == 0x2503u || dev == 0x2504u || dev == 0x2507u || dev == 0x2508u || /* RTX 3060 (GA106) */
-	        dev == 0x2520u || dev == 0x2560u);
+	return (GU_AMPERE_DEVICE_IDS(GU_PREP_MATCH) false);
 }
 
 static inline bool gpu_is_turing_device(u16 dev) {
-	return (dev == 0x1e04u || dev == 0x1e07u || dev == 0x1e02u ||
-	        dev == 0x1e09u || dev == 0x1e30u || dev == 0x1e35u ||
-	        dev == 0x1e81u || dev == 0x1e82u || dev == 0x1e87u ||
-	        dev == 0x1e84u || dev == 0x1eb0u || dev == 0x1eb1u ||
-	        dev == 0x1f02u || dev == 0x1f07u || dev == 0x1f06u ||
-	        dev == 0x1f47u || dev == 0x1f03u || dev == 0x1f08u || dev == 0x1f12u || dev == 0x1f36u);
+	return (GU_TURING_DEVICE_IDS(GU_PREP_MATCH) false);
 }
+
+#undef GU_PREP_MATCH
 
 static inline bool gpu_is_supported_device(u16 dev) {
 	return gpu_is_ada_device(dev) || gpu_is_ampere_device(dev) || gpu_is_turing_device(dev);

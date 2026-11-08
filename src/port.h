@@ -9,34 +9,23 @@
 #define GU_BAR0_BASE 0xfb000000ULL
 #define GU_PCI_BUS 45U
 
+#include "gpu_device_ids.h"
+
+#define GU_DEV_MATCH(id) (dev == (id)) ||
+
 static inline BOOLEAN GuIsAdaDeviceId(UINT16 dev) {
-  return (dev == 0x2684U || dev == 0x2685U ||  /* RTX 4090, 4090D (AD102) */
-          dev == 0x2702U || dev == 0x2704U || dev == 0x2703U || dev == 0x2705U); /* RTX 4080, 4080 SUPER, 4070 Ti SUPER (AD103) */
+  return (GU_ADA_DEVICE_IDS(GU_DEV_MATCH) FALSE);
 }
 
 static inline BOOLEAN GuIsAmpereDeviceId(UINT16 dev) {
-  return (dev == 0x2204U ||  /* RTX 3090 */
-          dev == 0x2208U ||  /* RTX 3090 Ti */
-          dev == 0x2206U ||  /* RTX 3080 Ti */
-          dev == 0x220aU ||  /* RTX 3080 (VRAM verified per exact card) */
-          dev == 0x2216U ||  /* RTX 3080 12GB */
-          dev == 0x2207U ||  /* CMP 90HX */
-          dev == 0x2482U ||  /* RTX 3070 Ti (GA104) */
-          dev == 0x2484U ||  /* RTX 3070 (GA104) */
-          dev == 0x2487U || dev == 0x2488U || dev == 0x2489U || /* RTX 3060 Ti (GA104) */
-          dev == 0x2503U || dev == 0x2504U || dev == 0x2507U || dev == 0x2508U || /* RTX 3060 (GA106) */
-          dev == 0x2520U || dev == 0x2560U);
+  return (GU_AMPERE_DEVICE_IDS(GU_DEV_MATCH) FALSE);
 }
 
 static inline BOOLEAN GuIsTuringDeviceId(UINT16 dev) {
-  return (dev == 0x1e04U || dev == 0x1e07U || dev == 0x1e02U ||  /* RTX 2080 Ti, TITAN RTX (TU102) */
-          dev == 0x1e09U ||                                      /* CMP 50HX */
-          dev == 0x1e30U || dev == 0x1e35U ||                    /* Quadro RTX 6000, 8000 */
-          dev == 0x1e81U || dev == 0x1e82U || dev == 0x1e87U ||  /* RTX 2080 SUPER, RTX 2080 (TU104) */
-          dev == 0x1e84U || dev == 0x1eb0U || dev == 0x1eb1U ||  /* RTX 2070 SUPER, Quadro RTX 5000/4000 */
-          dev == 0x1f02U || dev == 0x1f07U || dev == 0x1f06U ||  /* RTX 2070, 2060 SUPER (TU106) */
-          dev == 0x1f47U || dev == 0x1f03U || dev == 0x1f08U || dev == 0x1f12U || dev == 0x1f36U);
+  return (GU_TURING_DEVICE_IDS(GU_DEV_MATCH) FALSE);
 }
+
+#undef GU_DEV_MATCH
 
 static inline BOOLEAN GuIsSupportedDeviceId(UINT16 dev) {
   return GuIsAdaDeviceId(dev) || GuIsAmpereDeviceId(dev) || GuIsTuringDeviceId(dev);
