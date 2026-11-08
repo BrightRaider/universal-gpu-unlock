@@ -6,10 +6,6 @@
     with the universal Ada Lovelace & Ampere rate-limiter unlock.
 #>
 
-param(
-    [switch]$NonInteractive
-)
-
 # 1. Elevate Administrator Privileges
 $isAdmin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
 if (-not $isAdmin) {

@@ -140,10 +140,8 @@ function Deploy-UniversalToUsb {
             Copy-Item -LiteralPath $quickCheck -Destination (Join-Path $toolsDst "quick_check.py") -Force
         }
         $uccCmd = Join-Path $RepoRoot "Universal-Control-Center.cmd"
-        $uccVbs = Join-Path $RepoRoot "Universal-Control-Center.vbs"
         $uccPs1 = Join-Path $toolsDir "Universal-Control-Center.ps1"
         if (Test-Path -LiteralPath $uccCmd) { Copy-Item -LiteralPath $uccCmd -Destination (Join-Path $driveRoot "Universal-Control-Center.cmd") -Force }
-        if (Test-Path -LiteralPath $uccVbs) { Copy-Item -LiteralPath $uccVbs -Destination (Join-Path $driveRoot "Universal-Control-Center.vbs") -Force }
         if (Test-Path -LiteralPath $uccPs1) { Copy-Item -LiteralPath $uccPs1 -Destination (Join-Path $toolsDst "Universal-Control-Center.ps1") -Force }
         Emit-Log "  [OK] Verification tools and Control Center copied to $driveRoot" "Green"
     }
