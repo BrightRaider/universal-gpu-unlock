@@ -3,6 +3,7 @@
 /* USB log/assets only. Windows ESP is opened read-only. Boot variables are only read. */
 
 #include "boot_io.h"
+#include "version.h"
 
 #include "boot_profile.h"
 
@@ -412,7 +413,7 @@ EFI_STATUS GuBootChoose(CHAR16 *choice) {
 
   GuBootSay(
     L"\r\n=======================================================\r\n"
-    L" UNIVERSAL GPU UNLOCK v1.7.5 (Multi-Gen Edition)\r\n"
+    L" UNIVERSAL GPU UNLOCK " GU_VERSION_TAG_WIDE L" (Multi-Gen Edition)\r\n"
     L"=======================================================\r\n"
   );
   if (hide_s3) {

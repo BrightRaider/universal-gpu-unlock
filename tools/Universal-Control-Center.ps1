@@ -48,6 +48,13 @@ param(
 $ErrorActionPreference = 'Stop'
 $scriptDir = if ($PSScriptRoot) { $PSScriptRoot } elseif ($MyInvocation.MyCommand.Path) { Split-Path -Parent $MyInvocation.MyCommand.Path } else { (Get-Location).Path }
 $Script:RepoRoot = [System.IO.Path]::GetFullPath((Join-Path $scriptDir '..'))
+$versionH = Join-Path $Script:RepoRoot "src\version.h"
+$Script:AppVersion = "v1.7.9"
+if (Test-Path -LiteralPath $versionH) {
+    if ((Get-Content -LiteralPath $versionH -Raw) -match '#define\s+GU_VERSION_TAG\s+"([^"]+)"') {
+        $Script:AppVersion = $matches[1]
+    }
+}
 $Script:AssetsPath = Join-Path $Script:RepoRoot 'assets'
 $Script:ReleaseEfi = Join-Path $Script:RepoRoot 'bin\BOOTX64.EFI'
 $Script:DxeEfi = Join-Path $Script:RepoRoot 'bin\AdaUnlockDxe.efi'
@@ -565,7 +572,7 @@ function Deploy-ToUsb([string]$Letter) {
 
     # 4. Write USB README
     $readmeContent = @"
-# UNIVERSAL GPU UNLOCK v1.7.5 / v1.7.6 - Bootable USB Drive
+# UNIVERSAL GPU UNLOCK $Script:AppVersion - Bootable USB Drive
 Hardware Rate-Limiter Override for Ada Lovelace, Ampere & Turing GPUs
 Architect: BrightRaider | Desktop GUI: Ahsan Umair
 

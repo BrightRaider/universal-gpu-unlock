@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: GPL-2.0-only */
 
 #include "port.h"
+#include "version.h"
 
 #include "checks.h"
 #include "gpu_discovery.h"
@@ -143,7 +144,7 @@ EFI_STATUS EFIAPI UefiMain(EFI_HANDLE image,EFI_SYSTEM_TABLE *t) {
 
   GuBootSay(
     L"\r\n=======================================================\r\n"
-    L" UNIVERSAL GPU UNLOCK v1.7.9 - Status Monitor\r\n"
+    L" UNIVERSAL GPU UNLOCK " GU_VERSION_TAG_WIDE L" - Status Monitor\r\n"
     L"=======================================================\r\n"
     L" [1/4] GPU and PCIe Topology Discovery ..... [ OK ]\r\n"
     L" [2/4] Firmware Hashes and VBIOS Parse ..... [ OK ]\r\n"

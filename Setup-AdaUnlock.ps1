@@ -18,9 +18,18 @@ if (-not $isAdmin) {
     exit
 }
 
+# 0. Load Central Version
+$versionH = Join-Path $PSScriptRoot "src\version.h"
+$AppVersion = "v1.7.9"
+if (Test-Path -LiteralPath $versionH) {
+    if ((Get-Content -LiteralPath $versionH -Raw) -match '#define\s+GU_VERSION_TAG\s+"([^"]+)"') {
+        $AppVersion = $matches[1]
+    }
+}
+
 Clear-Host
 Write-Host "======================================================================" -ForegroundColor Magenta
-Write-Host "   RTX 40, 30 & 20 SERIES UNIVERSAL UNLOCK - 1-CLICK SETUP (v1.7.0)      " -ForegroundColor Yellow
+Write-Host "   RTX 40, 30 & 20 SERIES UNIVERSAL UNLOCK - 1-CLICK SETUP ($AppVersion)      " -ForegroundColor Yellow
 Write-Host "   Supported: Ada (4090..4070TiS) | Ampere (3090..3080) | Turing (2080Ti..2060)" -ForegroundColor Cyan
 Write-Host "======================================================================" -ForegroundColor Magenta
 Write-Host ""
