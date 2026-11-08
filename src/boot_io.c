@@ -5,8 +5,6 @@
 #include "boot_io.h"
 #include "version.h"
 
-#include "boot_profile.h"
-
 #include "compat/compat.h"
 
 #include "format.h"
@@ -37,9 +35,6 @@ static EFI_GUID PathGuid=EFI_DEVICE_PATH_PROTOCOL_GUID,InfoGuid=EFI_FILE_INFO_ID
 
 static EFI_GUID GlobalGuid={0x8be4df61,0x93ca,0x11d2,{0xaa,0x0d,0,0xe0,0x98,0x03,0x2b,0x8c}};
 
-static const EFI_GUID WindowsPartition=GU_WINDOWS_PARTITION_INITIALIZER;
-
-static const CHAR16 WindowsName[]=L"\\EFI\\Microsoft\\Boot\\bootmgfw.efi";
 
 static const CHAR16 * const WindowsCandidates[] = {
   L"\\EFI\\Microsoft\\Boot\\bootmgfw.efi",
@@ -113,8 +108,6 @@ VOID GuLog(const char *format,...) {
   if(s==EFI_SUCCESS&&bytes==n)Log->Flush(Log);
 
 }
-
-VOID GuLogText(const char *text){GuLog("%s",text);}
 
 BOOLEAN GuBootLogOpen(VOID){return Log!=NULL;}
 

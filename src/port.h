@@ -154,7 +154,6 @@ EFI_STATUS GuConfigWrite(EFI_PCI_IO_PROTOCOL_WIDTH Width, UINT32 Offset, VOID *V
 VOID GuStarted(VOID);
 VOID GuQuiesced(VOID);
 VOID GuLog(const char *Format, ...);
-VOID GuLogText(const char *Text);
 VOID GuCopyFromIo(VOID *Destination, const VOID *Source, size_t Bytes);
 VOID *GuAlloc(size_t Bytes);
 VOID GuFree(VOID *Memory);
