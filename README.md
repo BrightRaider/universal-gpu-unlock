@@ -26,7 +26,7 @@
 
 ## ⚡ 60-Second Quick Start
 
-1. **Download:** Get the latest official release: **[Universal_GPU_Unlock_v1.7.5.zip](https://github.com/BrightRaider/universal-gpu-unlock/releases/latest)**.
+1. **Download:** Get the latest official release: **[Universal_GPU_Unlock_v1.7.9.zip](https://github.com/BrightRaider/universal-gpu-unlock/releases/latest)**.
 2. **Provision:** Extract the ZIP, insert a USB flash drive, and run **`Setup.bat`** (formats & sets up all boot files automatically).
 3. **Boot & Unlock:** Restart your PC, boot from the USB drive (`F8`/`F11`/`F12`), and press **`[U]`** for Standard Unlock.
    - The bootloader verifies your GPU, displays a live 4-stage status monitor, unlocks the card in RAM, and boots straight into Windows.
@@ -44,10 +44,29 @@
 | **RTX 20 Series** | **Turing** | RTX 2080 Ti, TITAN RTX, RTX 2080 / SUPER, RTX 2070 / SUPER, RTX 2060 / SUPER, CMP 50HX, Quadro RTX | `0x1E04`, `0x1E07`, `0x1E02`, `0x1E81`, `0x1E82`, `0x1E87`, `0x1E84`, `0x1F02`, `0x1F07`, `0x1F06`, `0x1F47`, `0x1F03`, `0x1F08`, `0x1F12`, `0x1E09`, `0x1EB0`, `0x1EB1`, `0x1E30`, `0x1E35` |
 
 - **Any Vendor:** Compatible with Founders Edition, ASUS, MSI, Gigabyte, ZOTAC, PNY, Palit, Gainward, etc.
-- **Any Platform:** Intel (Z690, Z790, Z890, B760) and AMD (AM4/AM5, X570, B550, B650, X670E, X870E).
+- **Any Platform:** Intel (Z690, Z790, Z890, B760, Z390) and AMD (AM4/AM5, X570, B550, B650, X670E, X870E).
 - **Multi-Drive:** Prefers `bootmgfw.efi` and follows your firmware's boot order when several Windows volumes exist.
 - **Multi-GPU:** Only the first supported GPU is unlocked, and it must be the one driving the boot display. Other GPUs stay stock.
-- **Known issue on RTX 30 (Ampere):** A run can stop at `stage=final-Windows-verification` and leave a black screen. Power off fully and boot without the USB drive. See [issue #11](https://github.com/BrightRaider/universal-gpu-unlock/issues/11).
+- **Ampere Silicon Verified:** GA106 (RTX 3060), GA104, and GA102 verified on physical hardware (resolving [#11](https://github.com/BrightRaider/universal-gpu-unlock/issues/11)).
+
+<details>
+<summary><b>🔍 Community-Verified Hardware & Live Benchmarks (Click to expand)</b></summary>
+<br>
+
+The following GPU models, system motherboards, and compute readbacks have been independently verified on physical hardware by community users:
+
+| Verified GPU | Architecture & Silicon | Motherboard & Platform | Real-World Throughput | Verification Issue |
+| :--- | :--- | :--- | :--- | :--- |
+| **Palit GeForce RTX 3060 12GB** | Ampere (GA106 LHR) | MSI MPG Z390 GAMING PLUS | **46.08 TFLOPS** (~45% ComfyUI speedup) | [#11](https://github.com/BrightRaider/universal-gpu-unlock/issues/11) |
+| **ZOTAC GeForce RTX 4080 Trinity OC** | Ada Lovelace (AD103) | GIGABYTE X870 AORUS ELITE WIFI7 (AMD 9800X3D) | **174.29 TFLOPS** (Full Unrestricted GEMM) | [#9](https://github.com/BrightRaider/universal-gpu-unlock/issues/9) |
+| **NVIDIA GeForce RTX 4090** | Ada Lovelace (AD102) | Intel Z790 Platform (Multi-Drive ESP) | **255.4 TFLOPS** (Peak Compute) | [#8](https://github.com/BrightRaider/universal-gpu-unlock/issues/8) |
+| **NVIDIA GeForce RTX 4090** | Ada Lovelace (AD102) | Intel Z690 Platform (Hybrid iGPU & Multi-Display) | **214.0+ TFLOPS** (Sustained FP16 GEMM) | [#5](https://github.com/BrightRaider/universal-gpu-unlock/issues/5) |
+| **ASUS WS C621E SAGE Workstation** | Multi-Socket Server | ASPEED AST2500 BMC / IPMI Console | Multi-Console Isolation Verified | [#2](https://github.com/BrightRaider/universal-gpu-unlock/issues/2) |
+
+> [!TIP]
+> All benchmarks above were measured directly using **`Check-GPU-Unlock.bat`** under Windows. If your GPU and motherboard combination is verified and working, feel free to share your benchmark in Discussions or in an issue!
+
+</details>
 
 ---
 
