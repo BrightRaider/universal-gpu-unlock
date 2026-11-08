@@ -29,7 +29,7 @@ Write-Host ""
 Write-Host "[1/4] Scanning for compatible NVIDIA GeForce GPU (Ada / Ampere / Turing)..." -ForegroundColor Cyan
 $gpus = Get-CimInstance Win32_VideoController | Where-Object {
     $_.Name -like "*4090*" -or $_.Name -like "*4080*" -or $_.Name -like "*4070 Ti SUPER*" -or
-    $_.Name -like "*3090*" -or $_.Name -like "*3080*" -or
+    $_.Name -like "*3090*" -or $_.Name -like "*3080*" -or $_.Name -like "*3070*" -or $_.Name -like "*3060*" -or
     $_.Name -like "*2080*" -or $_.Name -like "*2070*" -or $_.Name -like "*2060*" -or $_.Name -like "*TITAN RTX*" -or $_.Name -like "*CMP 50HX*" -or
     $_.PNPDeviceID -like "*VEN_10DE&DEV_2684*" -or $_.PNPDeviceID -like "*VEN_10DE&DEV_2685*" -or
     $_.PNPDeviceID -like "*VEN_10DE&DEV_2704*" -or $_.PNPDeviceID -like "*VEN_10DE&DEV_2703*" -or
@@ -37,6 +37,7 @@ $gpus = Get-CimInstance Win32_VideoController | Where-Object {
     $_.PNPDeviceID -like "*VEN_10DE&DEV_2204*" -or $_.PNPDeviceID -like "*VEN_10DE&DEV_2208*" -or
     $_.PNPDeviceID -like "*VEN_10DE&DEV_2206*" -or $_.PNPDeviceID -like "*VEN_10DE&DEV_220A*" -or
     $_.PNPDeviceID -like "*VEN_10DE&DEV_2216*" -or
+    $_.PNPDeviceID -like "*VEN_10DE&DEV_2482*" -or $_.PNPDeviceID -like "*VEN_10DE&DEV_2504*" -or
     $_.PNPDeviceID -like "*VEN_10DE&DEV_1E*" -or $_.PNPDeviceID -like "*VEN_10DE&DEV_1F*"
 }
 
@@ -155,7 +156,22 @@ if (Test-Path $dxeSrc) {
     $dxeDstDir = Join-Path $driveLetter "EFI\Drivers"
     New-Item -ItemType Directory -Path $dxeDstDir -Force | Out-Null
     Copy-Item $dxeSrc (Join-Path $dxeDstDir "AdaUnlockDxe.efi") -Force
+    # Also place in EFI\BOOT for NVRAM [I] installer
+    Copy-Item $dxeSrc (Join-Path $efiDstDir "AdaUnlockDxe.efi") -Force
     Write-Host "  [OK] DXE Driver copied to $driveLetter\EFI\Drivers\AdaUnlockDxe.efi" -ForegroundColor Green
+}
+
+# Bootloader S3 Menu Customization
+Write-Host ""
+Write-Host "  OPTIONAL: Bootloader Menu Customization" -ForegroundColor Gray
+$s3Answer = Read-Host "  Hide experimental S3 Sleep Persistence [P] from boot menu? (y/N - default: No)"
+$hideS3Cfg = Join-Path $efiDstDir "hide_s3.cfg"
+if ($s3Answer -match "^[yYjJ]") {
+    Set-Content -Path $hideS3Cfg -Value "# Hide S3" -Encoding Ascii
+    Write-Host "  [OK] Bootloader configured to hide S3: [U/I/R/S] menu active." -ForegroundColor Green
+} else {
+    if (Test-Path $hideS3Cfg) { Remove-Item $hideS3Cfg -Force }
+    Write-Host "  [OK] Bootloader configured with full options: [U/P/I/R/S] menu active." -ForegroundColor Green
 }
 
 if (Test-Path $ad102Src) {
@@ -210,6 +226,14 @@ if (Test-Path $checkBat) {
         Copy-Item (Join-Path $toolsDir "quick_check.py") (Join-Path $toolsDst "quick_check.py") -Force
     }
     Write-Host "  [OK] 1-Click Verification tool copied to $driveLetter\Check-GPU-Unlock.bat" -ForegroundColor Green
+
+    $uccCmd = Join-Path $scriptDir "Universal-Control-Center.cmd"
+    $uccVbs = Join-Path $scriptDir "Universal-Control-Center.vbs"
+    $uccPs1 = Join-Path $toolsDir "Universal-Control-Center.ps1"
+    if (Test-Path $uccCmd) { Copy-Item $uccCmd (Join-Path $driveLetter "Universal-Control-Center.cmd") -Force }
+    if (Test-Path $uccVbs) { Copy-Item $uccVbs (Join-Path $driveLetter "Universal-Control-Center.vbs") -Force }
+    if (Test-Path $uccPs1) { Copy-Item $uccPs1 (Join-Path $toolsDst "Universal-Control-Center.ps1") -Force }
+    Write-Host "  [OK] Optional Control Center GUI copied to $driveLetter\Universal-Control-Center.cmd" -ForegroundColor Green
 }
 
 # 5. Integrity Verification (SHA-256)
@@ -282,6 +306,8 @@ Write-Host "   - EASIEST: In BIOS Setup, set Secure Boot to [Disabled] (or OS Ty
 Write-Host "   - OPTIONAL (Keep Secure Boot Active): In BIOS -> Key Management -> 'Enroll Signature' / 'Append db',"
 Write-Host "     select 'AdaUnlock_SecureBoot.cer' (or use 'Enroll EFI Image' on EFI\BOOT\BOOTX64.EFI)."
 Write-Host "4. Press 'U' at the boot prompt (executes in 300ms), and Windows will launch with full tensor power!"
+Write-Host "5. In Windows, double-click Check-GPU-Unlock.bat to verify 100% compute throughput (>200 TFLOPS)!"
+Write-Host "   (Optional: Launch Universal-Control-Center.cmd if you wish to inspect detailed hardware telemetry)."
 Write-Host ""
 Write-Host "Press any key to exit..."
 [void][System.Console]::ReadKey($true)

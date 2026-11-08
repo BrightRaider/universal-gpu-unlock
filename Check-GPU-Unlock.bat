@@ -39,19 +39,20 @@ echo ====================================================================
 echo   [ERROR] Python was not found on this system.
 echo   Please install Python (https://www.python.org) and PyTorch.
 echo ====================================================================
-pause
+if not "%~1"=="--no-pause" pause
 exit /b 1
 
 :RunCheck
 "%PYTHON_EXE%" -x "%~f0"
-if %ERRORLEVEL% equ 0 (
-    color 0A
+set "BENCH_ERR=%ERRORLEVEL%"
+if "%BENCH_ERR%"=="0" (
+    color 0A >nul 2>&1
 ) else (
-    color 0C
+    color 0C >nul 2>&1
 )
 echo.
-pause
-exit /b %ERRORLEVEL%
+if not "%~1"=="--no-pause" pause
+exit /b %BENCH_ERR%
 '''
 import sys
 import time
@@ -86,6 +87,10 @@ CARD_PROFILES = {
     "3090": {"min_unlocked": 115.0, "threshold": 95.0, "stock_typical": 72.0},
     "3080 ti": {"min_unlocked": 110.0, "threshold": 92.0, "stock_typical": 70.0},
     "3080": {"min_unlocked": 95.0, "threshold": 80.0, "stock_typical": 62.0},
+    "3070 ti": {"min_unlocked": 75.0, "threshold": 62.0, "stock_typical": 48.0},
+    "3070": {"min_unlocked": 65.0, "threshold": 54.0, "stock_typical": 40.0},
+    "3060 ti": {"min_unlocked": 55.0, "threshold": 46.0, "stock_typical": 34.0},
+    "3060": {"min_unlocked": 40.0, "threshold": 32.0, "stock_typical": 24.0},
     "titan rtx": {"min_unlocked": 115.0, "threshold": 95.0, "stock_typical": 65.0},
     "2080 ti": {"min_unlocked": 105.0, "threshold": 85.0, "stock_typical": 54.0},
     "2080 super": {"min_unlocked": 80.0, "threshold": 65.0, "stock_typical": 42.0},

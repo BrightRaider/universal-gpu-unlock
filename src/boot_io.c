@@ -418,27 +418,40 @@ EFI_STATUS GuBootChoose(CHAR16 *choice) {
 
   *choice=L'S';
 
-  GuBootSay(
+  BOOLEAN hide_s3 = FALSE;
+  if(Root && Root->Open) {
+    EFI_FILE_PROTOCOL *cfg = NULL;
+    EFI_STATUS cs = Root->Open(Root, &cfg, L"EFI\\BOOT\\hide_s3.cfg", EFI_FILE_MODE_READ, 0);
+    if(cs == EFI_SUCCESS && cfg) {
+      hide_s3 = TRUE;
+      if(cfg->Close) cfg->Close(cfg);
+    }
+  }
 
-    L"\r\n=======================================================\r\n"
-
-    L" UNIVERSAL GPU UNLOCK v1.7.5 (Multi-Gen Edition)\r\n"
-
-    L"=======================================================\r\n"
-
-    L"  [U] Standard Unlock (proven rock-solid, RAM-only)\r\n"
-
-    L"  [P] Experimental S3 Persistence Unlock (Boot-Script)\r\n"
-
-    L"  [I] Install DXE Driver to UEFI NVRAM (Auto-boot / S3)\r\n"
-
-    L"  [R] Remove DXE Driver from UEFI NVRAM\r\n"
-
-    L"  [S] Stock Windows (Skip unlock, normal boot)\r\n\r\n"
-
-    L"Select mode [U/P/I/R/S] (default: Stock Windows in 30s): "
-
-  );
+  if(hide_s3) {
+    GuBootSay(
+      L"\r\n=======================================================\r\n"
+      L" UNIVERSAL GPU UNLOCK v1.7.5 (Multi-Gen Edition)\r\n"
+      L"=======================================================\r\n"
+      L"  [U] Full GPU Unlock (proven rock-solid, RAM-only)\r\n"
+      L"  [I] Install DXE Driver to UEFI NVRAM (Auto-boot on startup)\r\n"
+      L"  [R] Remove DXE Driver from UEFI NVRAM\r\n"
+      L"  [S] Stock Windows (Skip unlock, normal boot)\r\n\r\n"
+      L"Select mode [U/I/R/S] (default: Stock Windows in 30s): "
+    );
+  } else {
+    GuBootSay(
+      L"\r\n=======================================================\r\n"
+      L" UNIVERSAL GPU UNLOCK v1.7.5 (Multi-Gen Edition)\r\n"
+      L"=======================================================\r\n"
+      L"  [U] Standard Unlock (proven rock-solid, RAM-only)\r\n"
+      L"  [P] Experimental S3 Persistence Unlock (Boot-Script)\r\n"
+      L"  [I] Install DXE Driver to UEFI NVRAM (Auto-boot / S3)\r\n"
+      L"  [R] Remove DXE Driver from UEFI NVRAM\r\n"
+      L"  [S] Stock Windows (Skip unlock, normal boot)\r\n\r\n"
+      L"Select mode [U/P/I/R/S] (default: Stock Windows in 30s): "
+    );
+  }
 
   for(UINTN i=0;i<300;i++) {
 

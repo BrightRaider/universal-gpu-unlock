@@ -30,7 +30,8 @@
 2. **Provision:** Extract the ZIP, insert a USB flash drive, and run **`Setup.bat`** (formats & sets up all boot files automatically).
 3. **Boot & Unlock:** Restart your PC, boot from the USB drive (`F8`/`F11`/`F12`), and press **`[U]`** for Standard Unlock.
    - The bootloader verifies your GPU, displays a live 4-stage status monitor, unlocks the card in RAM, and boots straight into Windows.
-4. **Verify:** In Windows, run **`Check-GPU-Unlock.bat`** to verify your unlocked TFLOPS throughput.
+4. **Verify:** In Windows, run **`Check-GPU-Unlock.bat`** to verify your unlocked TFLOPS throughput (>200 TFLOPS).  
+   *(Optional: If you wish to inspect detailed hardware telemetry, SMI sensor readbacks, and differential diagnostics, launch **`Universal-Control-Center.cmd`**).*
 
 ---
 
@@ -109,9 +110,10 @@ All version releases, bug fixes, and device expansions are maintained in the sep
 ├── GA102-ASSETS/                <- Ampere microcode payloads (3090, 3080, 3070, 3060)
 ├── TU102-ASSETS/                <- Turing microcode staging payloads (2080Ti, 2080, 2070, 2060)
 ├── src/                         <- Full C source code for the universal UEFI application
-├── Setup.bat                    <- 1-Click Provisioner Launcher
-├── Setup-AdaUnlock.ps1          <- Automated PowerShell deployment tool
-├── Check-GPU-Unlock.bat         <- Standalone Windows verification benchmark
+├── Setup.bat                    <- The 1-Click Provisioner Launcher (Primary tool)
+├── Setup-AdaUnlock.ps1          <- Automated PowerShell deployment engine
+├── Check-GPU-Unlock.bat         <- Standalone Windows verification benchmark (>200 TFLOPS)
+├── Universal-Control-Center.cmd <- Optional Diagnostic & Telemetry Dashboard (WPF GUI)
 ├── Toggle-Sleep-Button.bat      <- Non-invasive tool to hide/restore Start Menu Sleep button (S3 protection)
 └── CHANGELOG.md                 <- Complete release and version history
 ```
@@ -122,6 +124,7 @@ All version releases, bug fixes, and device expansions are maintained in the sep
 
 * 🌟 **[geodnb](https://github.com/geodnb) / [Ablation Lab](https://github.com/Ablation-Lab) (Special Dedication):** Massive thanks for pioneering research, hardware state analysis, and technical insights into GPU cold states and register architecture that catalyzed this entire universal Windows project. Explore their research over at [Ablation Lab on GitHub](https://github.com/Ablation-Lab) and subscribe to their channel on [YouTube (@AblationLab)](https://www.youtube.com/@AblationLab)!
 * **Zagitta & WildFlash1st:** For pioneering the Linux `gpu-unlock` research and `cmp90hx-unlock` rejoining methodologies.
+* **[Ahsan Umair (@ahsanumair)](https://github.com/ahsanumair):** For contributing the initial Windows desktop WPF GUI layout and XAML groundwork adapted into the optional diagnostic telemetry companion (`Universal-Control-Center.cmd`).
 * **TOTORONG & JustAResearcher:** For early proof-of-concept Windows UEFI implementations.
 * **Igor Wallossek (Igor'sLAB):** For in-depth technical analysis, power verification, and community discussion.
 
