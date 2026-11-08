@@ -1,4 +1,4 @@
-/* Modified 2026-10-19/20 for Windows GPU UNLOCK; changes documented in CHANGES.md. */ #include "port.h"
+#include "port.h"
 VOID *memset(VOID *, int, size_t);
 VOID *memcpy(VOID *, const VOID *, size_t);
 GU_PLATFORM Gu;

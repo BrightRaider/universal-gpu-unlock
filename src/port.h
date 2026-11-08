@@ -1,4 +1,4 @@
-/* Modified 2026-10-19/20 for Windows GPU UNLOCK; changes documented in CHANGES.md. */ #pragma once
+#pragma once
 #include <Uefi.h>
 #include <Protocol/PciIo.h>
 #include <Protocol/DevicePath.h>

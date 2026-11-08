@@ -4,7 +4,7 @@
 #include "checks.h"
 #include "gpu_discovery.h"
 #include "profile.h"
-#include "msi_release.h"
+#include "unlock_release.h"
 #include "boot_io.h"
 #include "compat/compat.h"
 #include "vendor/unlock_610.h"
@@ -40,7 +40,7 @@ EFI_STATUS EFIAPI AdaUnlockDriverEntryPoint(EFI_HANDLE image, EFI_SYSTEM_TABLE *
   if (s != EFI_SUCCESS || Gu.fault) goto finish;
 
   stage = "dxe-cold-profile";
-  s = GuAd104Prepare();
+  s = GuPrepare();
   if (s != EFI_SUCCESS || Gu.fault) goto finish;
 
   GuLog("DXE-DRIVER: Priming Primary GPU [1/%u]: DevID 0x%04x\n",
@@ -59,9 +59,9 @@ finish:
   if (s == EFI_SUCCESS && Gu.fault) s = EFI_DEVICE_ERROR;
   if (s != EFI_SUCCESS) {
     GuLog("DXE-DRIVER: STOP at stage=%s status=%#llx mutated=%u retained=%u fault=%u\n",
-          stage, (unsigned long long)s, GuMsiMutated(), Gu.retained, Gu.fault);
+          stage, (unsigned long long)s, GuUnlockMutated(), Gu.retained, Gu.fault);
     if (Gu.started || Gu.master_attributes_pending) (VOID)GuClearMaster();
-    if (GuMsiMutated() || Gu.started || Gu.retained) {
+    if (GuUnlockMutated() || Gu.started || Gu.retained) {
       /* The GPU may still own DMA buffers: the OS must never inherit that memory.
        * Only a full power-off ends it. Removing the USB drive skips this driver. */
       (VOID)GuBootClose();

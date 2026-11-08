@@ -1,10 +1,10 @@
 /* SPDX-License-Identifier: GPL-2.0-only */
-/* MSI Z790 GODLIKE/AD102 ownership adapter (was MSI Z490/AD104). Snapshot/delta strategy adapted from
+/* Universal GPU ownership and release adapter. Snapshot/delta strategy adapted from
  * impacifist/Windows-GPU-UNLOCK 9352abd internal-boot/boot/prepare-console.c.
  * Driver identities/code were captured in CAP0001 (Z790, 2026-10-25). No driver code/data patch.
  * No firmware variables, controller reconnects or reset fallback are used.
  */
-#include "msi_release.h"
+#include "unlock_release.h"
 #include "port.h"
 #include "boot_io.h"
 #include "profile.h"
@@ -201,7 +201,7 @@ static EFI_STATUS UsbBaseline(VOID) {
     if(!Plan.usb_host){Plan.usb_host=e->handle;Plan.usb_agent=e->agent;}
   }
   if(!Plan.usb_host||!Plan.usb_agent){
-    GuLog("MSI USB baseline: no host found; continuing without USB tracking\n");
+    GuLog("USB baseline: no host found; continuing without USB tracking\n");
     return EFI_SUCCESS;
   }
   UINTN dynamic=0;
@@ -217,7 +217,7 @@ static EFI_STATUS UsbBaseline(VOID) {
       UsbConsoleChild(e,&Original));
     if(child||device){OriginalUsb[i]=TRUE;dynamic++;}
   }
-  GuLog("MSI USB baseline: host=%#llx bus_agent=%#llx dynamic_edges=%zu; host ownership pinned\n",
+  GuLog("USB baseline: host=%#llx bus_agent=%#llx dynamic_edges=%zu; host ownership pinned\n",
     (unsigned long long)(UINTN)Plan.usb_host,(unsigned long long)(UINTN)Plan.usb_agent,(size_t)dynamic);
   return EFI_SUCCESS;
 }
@@ -254,7 +254,7 @@ static BOOLEAN Expected(UINTN stage,BOOLEAN claimed) {
 /* v0.5.1 diagnostics: GuLog faults once the USB log is closed, so log only while it is open. */
 #define NOTE(...) do{if(GuBootLogOpen())GuLog(__VA_ARGS__);}while(0)
 static VOID NoteEdge(const char *kind,const EDGE *e) {
-  NOTE("MSI graph %s: handle=%#llx agent=%#llx controller=%#llx protocol=%#x attributes=%#x count=%u\n",kind,
+  NOTE("Device graph %s: handle=%#llx agent=%#llx controller=%#llx protocol=%#x attributes=%#x count=%u\n",kind,
     (unsigned long long)(UINTN)e->handle,(unsigned long long)(UINTN)e->agent,(unsigned long long)(UINTN)e->controller,
     e->protocol.Data1,e->attributes,e->count);
 }
@@ -277,13 +277,13 @@ static VOID ReportAdditions(VOID) {
   UINTN added=0,removed=0;
   for(UINTN i=0;i<Original.count;i++)if(UsbRemoved(i))removed++;
   if(removed!=Plan.reported_removals&&GuBootLogOpen()) {
-    NOTE("MSI graph: %zu original USB relationships absent; host/GPU ownership and console callbacks unchanged\n",(size_t)removed);
+    NOTE("Device graph: %zu original USB relationships absent; host/GPU ownership and console callbacks unchanged\n",(size_t)removed);
     Plan.reported_removals=removed;
   }
   for(UINTN j=0;j<Current.count;j++)
     if(!OwnEdge(&Current.edges[j])&&!KnownEdge(&Current.edges[j],3))added++;
   if(added&&added!=Plan.reported_additions&&GuBootLogOpen()) {
-    NOTE("MSI graph: accepted %zu new edges (unrelated or verified USB pointer); GPU ownership unchanged\n",(size_t)added);
+    NOTE("Device graph: accepted %zu new edges (unrelated or verified USB pointer); GPU ownership unchanged\n",(size_t)added);
     for(UINTN j=0,shown=0;j<Current.count&&shown<8;j++)
       if(!OwnEdge(&Current.edges[j])&&!KnownEdge(&Current.edges[j],3)){NoteEdge("new-unrelated",&Current.edges[j]);shown++;}
     Plan.reported_additions=added;
@@ -446,7 +446,7 @@ static EFI_STATUS Consumers(VOID) {
   }
   return EFI_SUCCESS;
 }
-EFI_STATUS GuMsiPreflight(EFI_SYSTEM_TABLE *t,EFI_HANDLE self,EFI_HANDLE pci) {
+EFI_STATUS GuUnlockPreflight(EFI_SYSTEM_TABLE *t,EFI_HANDLE self,EFI_HANDLE pci) {
   if(Plan.mutated||Plan.ready)return EFI_ALREADY_STARTED;
   memset(&Plan,0,sizeof(Plan));Plan.table=t;Plan.self=self;Plan.pci=pci;
   if(!t||!t->BootServices||!self||!pci||Gu.handle!=pci||Gu.image!=self||Gu.bs!=t->BootServices||
@@ -459,7 +459,7 @@ EFI_STATUS GuMsiPreflight(EFI_SYSTEM_TABLE *t,EFI_HANDLE self,EFI_HANDLE pci) {
   if(!Plan.console||Plan.console!=Plan.input||Plan.console!=Plan.error||!Plan.text||!Plan.err||!Plan.keys||
      !Plan.keys->ReadKeyStroke||!Plan.keys->Reset||!Plan.keys->WaitForKey)return EFI_UNSUPPORTED;
   Plan.key_reset=(UINTN)Plan.keys->Reset;Plan.key_read=(UINTN)Plan.keys->ReadKeyStroke;Plan.key_wait=Plan.keys->WaitForKey;
-  if(!pci||!GuAd104ColdEntry())return EFI_NOT_READY;
+  if(!pci||!GuColdEntry())return EFI_NOT_READY;
   EFI_STATUS s=Gops(TRUE);
   if(s!=EFI_SUCCESS) GuLog("Preflight failed at Gops(): %#llx\n", (unsigned long long)s);
   if(s==EFI_SUCCESS) { s=Alive(); if(s!=EFI_SUCCESS) GuLog("Preflight failed at Alive(): %#llx\n", (unsigned long long)s); }
@@ -477,8 +477,8 @@ EFI_STATUS GuMsiPreflight(EFI_SYSTEM_TABLE *t,EFI_HANDLE self,EFI_HANDLE pci) {
   if(s==EFI_SUCCESS) { s=Consumers(); if(s!=EFI_SUCCESS) GuLog("Preflight failed at Consumers(): %#llx\n", (unsigned long long)s); }
   if(s==EFI_SUCCESS) { s=PointerBaseline(); if(s!=EFI_SUCCESS) GuLog("Preflight failed at PointerBaseline(): %#llx\n", (unsigned long long)s); }
   if(s==EFI_SUCCESS) { s=UsbBaseline(); if(s!=EFI_SUCCESS) GuLog("Preflight failed at UsbBaseline(): %#llx\n", (unsigned long long)s); }
-  GuLog("MSI preflight: status=%#llx graph=%zu code_profiles=3\n",(unsigned long long)s,(size_t)Original.count);
-  if(s==EFI_SUCCESS)GuLog("MSI endpoints: pci=%#llx gop=%#llx console=%#llx pointer_agent=%#llx\n",
+  GuLog("Preflight: status=%#llx graph=%zu code_profiles=3\n",(unsigned long long)s,(size_t)Original.count);
+  if(s==EFI_SUCCESS)GuLog("Endpoints: pci=%#llx gop=%#llx console=%#llx pointer_agent=%#llx\n",
     (unsigned long long)(UINTN)Plan.pci,(unsigned long long)(UINTN)Plan.gop,
     (unsigned long long)(UINTN)Plan.console,(unsigned long long)(UINTN)Plan.pointer_agent);
   if(s==EFI_SUCCESS)Plan.ready=TRUE;return s;
@@ -493,7 +493,7 @@ static EFI_STATUS ClaimRestore(VOID) {
   EFI_BOOT_SERVICES *b=Plan.table->BootServices;EFI_PCI_IO_PROTOCOL *io=NULL;
   UINT32 c[64];UINT64 mask=0,attrs=0,supported=0;
   EFI_STATUS s=ReadConfig(c);if(s==EFI_SUCCESS&&!DecodeMask(c,&mask))s=EFI_NOT_READY;
-  GuLog("MSI decode restore intent: status=%#llx IO_MEM_mask=%#llx\n",(unsigned long long)s,(unsigned long long)mask);
+  GuLog("Decode restore intent: status=%#llx IO_MEM_mask=%#llx\n",(unsigned long long)s,(unsigned long long)mask);
   EFI_TPL old=b->RaiseTPL(TPL_NOTIFY);
   if(s==EFI_SUCCESS)s=ReadConfig(c);
   if(s==EFI_SUCCESS&&!DecodeMask(c,&mask)) {
@@ -564,26 +564,26 @@ static EFI_STATUS ClaimRestore(VOID) {
     s=Bar();
     if(s!=EFI_SUCCESS) GuLog("ClaimRestore failed at Bar(): %#llx\n", (unsigned long long)s);
   }
-  if(s==EFI_SUCCESS&&!GuAd104ColdEntry()) {
-    GuLog("ClaimRestore failed at GuAd104ColdEntry\n");
+  if(s==EFI_SUCCESS&&!GuColdEntry()) {
+    GuLog("ClaimRestore failed at GuColdEntry\n");
     s=EFI_NOT_READY;
   }
-  GuLog("MSI exclusive claim/decode result: status=%#llx\n",(unsigned long long)s);return s;
+  GuLog("Exclusive claim/decode result: status=%#llx\n",(unsigned long long)s);return s;
 }
-EFI_STATUS GuMsiRelease(VOID) {
+EFI_STATUS GuUnlockRelease(VOID) {
   if(!Plan.ready||Plan.mutated||Gu.started||Gu.owned)return EFI_NOT_READY;
   EFI_BOOT_SERVICES *b=Plan.table->BootServices;
   for(UINTN stage=1;stage<=3;stage++) {
-    GuLog("MSI driver detach intent: stage=%zu\n",(size_t)stage);
+    GuLog("Driver detach intent: stage=%zu\n",(size_t)stage);
     EFI_STATUS s=Alive();UINT32 c[64];
     if(s==EFI_SUCCESS)s=ReadConfig(c);
     if(s==EFI_SUCCESS&&!Equal(c,Plan.config,sizeof(c)))s=EFI_NOT_READY;
-    if(s==EFI_SUCCESS&&!GuAd104ColdEntry())s=EFI_NOT_READY;
+    if(s==EFI_SUCCESS&&!GuColdEntry())s=EFI_NOT_READY;
     if(s==EFI_SUCCESS)s=Gops(FALSE);
     EFI_TPL old=b->RaiseTPL(TPL_NOTIFY);
     if(s==EFI_SUCCESS)s=Snapshot(&Current);
     if(s==EFI_SUCCESS&&!Expected(stage-1,FALSE)) {
-      NOTE("GuMsiRelease: pre-detach Expected(%zu) failed\n", (size_t)(stage-1));
+      NOTE("GuUnlockRelease: pre-detach Expected(%zu) failed\n", (size_t)(stage-1));
       GraphDiff(stage-1, FALSE);
       s=EFI_NOT_READY;
     }
@@ -594,12 +594,12 @@ EFI_STATUS GuMsiRelease(VOID) {
     Plan.mutated=TRUE;
     s=b->DisconnectController(stage==3?Plan.pci:Plan.gop,
       stage==1?Plan.out_agent:stage==2?Plan.gfx_agent:Plan.nv_agent,NULL);
-    GuLog("MSI driver detach return: stage=%zu status=%#llx\n",(size_t)stage,(unsigned long long)s);
+    GuLog("Driver detach return: stage=%zu status=%#llx\n",(size_t)stage,(unsigned long long)s);
     if(s!=EFI_SUCCESS||Gu.fault)return s==EFI_SUCCESS?EFI_DEVICE_ERROR:s;
     Plan.stage=stage;
     s=Snapshot(&Current);
     if(s==EFI_SUCCESS&&!Expected(stage,FALSE)) {
-      NOTE("GuMsiRelease: post-detach Expected(%zu) failed\n", (size_t)stage);
+      NOTE("GuUnlockRelease: post-detach Expected(%zu) failed\n", (size_t)stage);
       GraphDiff(stage, FALSE);
       s=EFI_NOT_READY;
     }
@@ -608,10 +608,10 @@ EFI_STATUS GuMsiRelease(VOID) {
     if(s!=EFI_SUCCESS)return s;
   }
   EFI_STATUS s=ClaimRestore();
-  if(s==EFI_SUCCESS&&!GuMsiReleased())s=EFI_NOT_READY;
+  if(s==EFI_SUCCESS&&!GuUnlockReleased())s=EFI_NOT_READY;
   return s;
 }
-BOOLEAN GuMsiReleased(VOID) {
+BOOLEAN GuUnlockReleased(VOID) {
   UINT32 c[64];UINT64 attrs=0;const char *failed=NULL;
   UINT64 chk_attrs=0, exp_attrs=Plan.attributes & (EFI_PCI_IO_ATTRIBUTE_IO|EFI_PCI_IO_ATTRIBUTE_MEMORY|EFI_PCI_IO_ATTRIBUTE_BUS_MASTER);
   if(!Plan.ready||Plan.stage!=3||!Plan.claimed||!Gu.owned||Gu.fault)failed="state";
@@ -625,21 +625,21 @@ BOOLEAN GuMsiReleased(VOID) {
   else if(attrs & ~(EFI_PCI_IO_ATTRIBUTE_IO|EFI_PCI_IO_ATTRIBUTE_MEMORY))failed="attributes-extra";
   else if(Snapshot(&Current)!=EFI_SUCCESS)failed="graph-snapshot";
   else if(!Expected(3,TRUE)){failed="graph";GraphDiff(3, TRUE);}
-  if(failed)NOTE("MSI release check failed: %s attributes=%#llx expected=%#llx graph=%zu original=%zu fault=%u flrs=%u\n",
+  if(failed)NOTE("Release check failed: %s attributes=%#llx expected=%#llx graph=%zu original=%zu fault=%u flrs=%u\n",
     failed,(unsigned long long)attrs,(unsigned long long)Plan.attributes,(size_t)Current.count,(size_t)Original.count,Gu.fault,Gu.flrs);
   if(!failed)ReportAdditions();
   return !failed;
 }
-EFI_STATUS GuMsiFinish(VOID) {
-  if(!GuSafeToReturn()||!Gu.quiesced||Gu.flrs!=1||!GuMsiReleased()){NOTE("MSI finish refused before close\n");return EFI_NOT_READY;}
+EFI_STATUS GuUnlockFinish(VOID) {
+  if(!GuSafeToReturn()||!Gu.quiesced||Gu.flrs!=1||!GuUnlockReleased()){NOTE("Unlock finish refused before close\n");return EFI_NOT_READY;}
   EFI_STATUS s=Plan.table->BootServices->CloseProtocol(Plan.pci,&PciGuid,Plan.self,NULL);
-  if(s!=EFI_SUCCESS){NOTE("MSI finish close status=%#llx\n",(unsigned long long)s);return s;}
+  if(s!=EFI_SUCCESS){NOTE("Unlock finish close status=%#llx\n",(unsigned long long)s);return s;}
   Plan.claimed=FALSE;Gu.owned=FALSE;
   s=Snapshot(&Current);if(s==EFI_SUCCESS&&!Expected(3,FALSE)){s=EFI_NOT_READY;GraphDiff(3, FALSE);}
-  if(s!=EFI_SUCCESS)NOTE("MSI finish after close status=%#llx graph=%zu\n",(unsigned long long)s,(size_t)Current.count);
+  if(s!=EFI_SUCCESS)NOTE("Unlock finish after close status=%#llx graph=%zu\n",(unsigned long long)s,(size_t)Current.count);
   return s;
 }
-BOOLEAN GuMsiMutated(VOID){return Plan.mutated;}
+BOOLEAN GuUnlockMutated(VOID){return Plan.mutated;}
 /* PMC_BOOT_0 bits 31:24 name the architecture: Turing 0x16, Ampere 0x17/0xb7, Ada 0x19. */
 static BOOLEAN ChipMatchesTarget(UINT32 chip) {
   if (chip == 0xffffffffU || (chip & 0xffff0000U) == 0xbadf0000U) return FALSE;
@@ -648,16 +648,16 @@ static BOOLEAN ChipMatchesTarget(UINT32 chip) {
   if (Gu.is_ampere) return arch == 0x07U;
   return arch == 0x09U;
 }
-BOOLEAN GuMsiReadyForWindows(VOID) {
+BOOLEAN GuUnlockReadyForWindows(VOID) {
   if (!Plan.ready || Plan.stage != 3 || Plan.claimed || Gu.owned || Gu.fault || !Gu.quiesced || Gu.flrs != 1 || !GuSafeToReturn()) {
-    GuLog("GuMsiReadyForWindows: state check failed (ready=%u stage=%zu claimed=%u owned=%u fault=%u quiesced=%u flrs=%u safe=%u)\n",
+    GuLog("GuUnlockReadyForWindows: state check failed (ready=%u stage=%zu claimed=%u owned=%u fault=%u quiesced=%u flrs=%u safe=%u)\n",
           Plan.ready, (size_t)Plan.stage, Plan.claimed, Gu.owned, Gu.fault, Gu.quiesced, Gu.flrs, GuSafeToReturn());
     return FALSE;
   }
   UINT32 c[64];
   if (Alive() != EFI_SUCCESS || Gops(FALSE) != EFI_SUCCESS || ReadConfig(c) != EFI_SUCCESS || !ConfigStable(c) ||
       Snapshot(&Current) != EFI_SUCCESS || !Expected(3, FALSE)) {
-    GuLog("GuMsiReadyForWindows: environment/edge verification failed\n");
+    GuLog("GuUnlockReadyForWindows: environment/edge verification failed\n");
     return FALSE;
   }
   /* Fresh status after USB Close and before StartImage; no log callbacks. */
@@ -665,19 +665,19 @@ BOOLEAN GuMsiReadyForWindows(VOID) {
   UINT32 ss0 = GuRead32(0x82381c), ss1 = GuRead32(0x823820), readout = GuRead32(0x823818), plm = GuRead32(0x823804);
   BOOLEAN chip_ok = ChipMatchesTarget(chip);
 
-  GuLog("GuMsiReadyForWindows: chip=%#x chip_ok=%u cpu=%#x hi=%#x ss0=%#x ss1=%#x readout=%#x plm=%#x\n",
+  GuLog("GuUnlockReadyForWindows: chip=%#x chip_ok=%u cpu=%#x hi=%#x ss0=%#x ss1=%#x readout=%#x plm=%#x\n",
         chip, chip_ok, cpu, hi, ss0, ss1, readout, plm);
 
   if (Gu.fault || !chip_ok || !(cpu & 0x10) || cpu == 0xffffffff ||
       (cpu & 0xffff0000) == 0xbadf0000 || (hi >> 4) != 0 ||
       ss0 != 0x88888888 || ss1 != 8) {
-    GuLog("GuMsiReadyForWindows: hardware register check failed\n");
+    GuLog("GuUnlockReadyForWindows: hardware register check failed\n");
     return FALSE;
   }
   if (!Gu.is_ampere && !Gu.is_turing) {
     /* Ada-specific SM speed-select readout and open PLM check */
     if ((readout & 0x07ffffff) || readout == 0xffffffff || plm != 0xffffffff) {
-      GuLog("GuMsiReadyForWindows: Ada-specific readout/plm check failed\n");
+      GuLog("GuUnlockReadyForWindows: Ada-specific readout/plm check failed\n");
       return FALSE;
     }
   }
@@ -687,18 +687,18 @@ BOOLEAN GuMsiReadyForWindows(VOID) {
 EFI_STATUS GuExecuteUnlock(EFI_SYSTEM_TABLE *t, EFI_HANDLE image, const char **stage) {
   EFI_STATUS s;
   *stage = "preflight";
-  s = GuMsiPreflight(t, image, Gu.handle);
+  s = GuUnlockPreflight(t, image, Gu.handle);
   if (s != EFI_SUCCESS || Gu.fault) return s != EFI_SUCCESS ? s : EFI_DEVICE_ERROR;
 
   *stage = "release";
-  s = GuMsiRelease();
+  s = GuUnlockRelease();
   if (s != EFI_SUCCESS || Gu.fault) return s != EFI_SUCCESS ? s : EFI_DEVICE_ERROR;
 
-  if (!GuMsiReleased() || !GuAd104ColdEntry()) {
+  if (!GuUnlockReleased() || !GuColdEntry()) {
     *stage = "cold-entry";
     return EFI_NOT_READY;
   }
-  Gu.display_check = GuMsiReleased;
+  Gu.display_check = GuUnlockReleased;
   Gu.display_ok = TRUE;
   Gu.armed = TRUE;
 
@@ -729,7 +729,7 @@ EFI_STATUS GuExecuteUnlock(EFI_SYSTEM_TABLE *t, EFI_HANDLE image, const char **s
   }
 
   *stage = "release-claim";
-  s = GuMsiFinish();
+  s = GuUnlockFinish();
   if (s != EFI_SUCCESS || Gu.fault) return s != EFI_SUCCESS ? s : EFI_DEVICE_ERROR;
 
   return EFI_SUCCESS;

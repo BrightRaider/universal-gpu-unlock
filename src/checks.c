@@ -1,4 +1,4 @@
-/* Modified 2026-10-19/20 for Windows GPU UNLOCK; changes documented in CHANGES.md. */ #include "checks.h"
+#include "checks.h"
 #include <IndustryStandard/Pci.h>
 
 #define GU_CONFIG_BYTES 256U

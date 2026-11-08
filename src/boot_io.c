@@ -251,7 +251,7 @@ EFI_STATUS GuBootLoadAssets(VOID) {
     GuAssets[i].name = arch->entries[i].name;
     GuAssets[i].firmware = (struct firmware){arch->entries[i].bytes, p};
   }
-  return GuAd104AssetsValid() ? EFI_SUCCESS : EFI_CRC_ERROR;
+  return GuAssetsValid() ? EFI_SUCCESS : EFI_CRC_ERROR;
 }
 
 static EFI_STATUS ReadWindowsBinary(EFI_FILE_PROTOCOL *root, const CHAR16 *name, UINTN *file_size, VOID **data) {

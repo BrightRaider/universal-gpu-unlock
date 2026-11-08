@@ -1,5 +1,5 @@
 /* SPDX-License-Identifier: GPL-2.0-only */
-/* Exact captured MSI RTX 4090 Suprim X (AD102, CAP0001 2026-10-25). A matched profile is not hardware qualification. */
+/* Universal GPU profile definitions (AD102/GA102). A matched profile is not hardware qualification. */
 #include "profile.h"
 #include "checks.h"
 #include "sha256.h"
@@ -34,7 +34,7 @@ const GU_ARCH_ASSETS *GuGetArchAssets(VOID) {
   return Gu.is_ampere ? &GuAssetsAmpere : &GuAssetsAda;
 }
 
-BOOLEAN GuAd104AssetsValid(VOID) {
+BOOLEAN GuAssetsValid(VOID) {
   if (Gu.is_turing) return FALSE; /* No pinned TU102 assets exist yet: fail closed. */
   const GU_ARCH_ASSETS *arch = GuGetArchAssets();
   for (UINTN i = 0; i < GU_ASSET_COUNT; i++) {
@@ -49,7 +49,7 @@ BOOLEAN GuAd104AssetsValid(VOID) {
  * itself authenticates the signed FWSEC image; this only catches a bad readout.
  * A PCIR device ID that differs from the live card is logged, not refused, since
  * some boards legitimately report another ID in the image. */
-BOOLEAN GuAd104PromPlausible(const VOID *Data,UINTN Bytes) {
+BOOLEAN GuPromPlausible(const VOID *Data,UINTN Bytes) {
   const UINT8 *rom=Data;
   if(!rom||Bytes!=1048576)return FALSE;
   UINTN pcir=rom[0x18]+((UINTN)rom[0x19]<<8);
@@ -71,7 +71,7 @@ BOOLEAN GuAd104PromPlausible(const VOID *Data,UINTN Bytes) {
   GuLog("PROM actual SHA256: %s\n", s);
   return TRUE;
 }
-BOOLEAN GuAd104FwsecMatches(const struct gpu_unlock_fwsec *f) {
+BOOLEAN GuFwsecMatches(const struct gpu_unlock_fwsec *f) {
   if (!f) return FALSE;
   return f->ucode_id != 0 && f->sig_count >= 1 && f->sig_bytes == (UINT32)f->sig_count * 384;
 }
@@ -127,54 +127,61 @@ static BOOLEAN Registers(UINT32 *Ss0,UINT32 *Ss1) {
   GuLog("Registers: cold state verified (PMC=0x%x, SS0=0x%x, SS1=%u)\n", pmc, *Ss0, *Ss1);
   return !Gu.fault;
 }
-BOOLEAN GuAd104ColdEntry(VOID) {
+BOOLEAN GuColdEntry(VOID) {
   UINT32 ss0,ss1;
   return !Gu.started && !Gu.fault && !Gu.retained && Config() &&
     Registers(&ss0,&ss1) && GuEntrySelectorsMatch(ss0,ss1);
 }
-EFI_STATUS GuAd104Prepare(VOID) {
+EFI_STATUS GuPrepare(VOID) {
   UINT32 ss0,ss1,after0,after1;VOID *prom=NULL;struct gpu_unlock_fwsec fw;
-  GuLog("GuAd104Prepare: start\n");
+  GuLog("GuPrepare: start\n");
   if(Gu.started || Gu.fault || Gu.retained || Gu.allocations || Gu.profile_verified || Gu.prom_checked) {
-    GuLog("GuAd104Prepare: state invalid (started=%u fault=%u retained=%u alloc=%p prof=%u prom=%u)\n",
+    GuLog("GuPrepare: state invalid (started=%u fault=%u retained=%u alloc=%p prof=%u prom=%u)\n",
           Gu.started, Gu.fault, Gu.retained, (void *)Gu.allocations, Gu.profile_verified, Gu.prom_checked);
     return EFI_NOT_READY;
   }
   if(!Config()) {
-    GuLog("GuAd104Prepare: Config() returned FALSE\n");
+    GuLog("GuPrepare: Config() returned FALSE\n");
     return EFI_NOT_READY;
   }
   if(!Registers(&ss0,&ss1)) {
-    GuLog("GuAd104Prepare: Registers() returned FALSE\n");
+    GuLog("GuPrepare: Registers() returned FALSE\n");
     return EFI_NOT_READY;
   }
-  if(!GuAd104AssetsValid()) {
-    GuLog("GuAd104Prepare: Assets invalid\n");
+  if(!GuAssetsValid()) {
+    GuLog("GuPrepare: Assets invalid\n");
     return EFI_CRC_ERROR;
   }
   prom=GuAlloc(1048576);
   if(!prom) {
-    GuLog("GuAd104Prepare: PROM alloc failed\n");
+    GuLog("GuPrepare: PROM alloc failed\n");
     return EFI_OUT_OF_RESOURCES;
   }
   GuCopyFromIo(prom,(VOID *)(UINTN)(Gu.bar_base+0x300000),1048576);
-  BOOLEAN prom_ok = GuAd104PromPlausible(prom,1048576);
+  BOOLEAN prom_ok = GuPromPlausible(prom,1048576);
   int fwsec_res = gpu_unlock_vbios_fwsec(prom,1048576,&fw);
-  BOOLEAN fwsec_match = (fwsec_res == 0) && GuAd104FwsecMatches(&fw);
+  BOOLEAN fwsec_match = (fwsec_res == 0) && GuFwsecMatches(&fw);
   BOOLEAN cfg2 = Config();
   BOOLEAN reg2 = Registers(&after0,&after1);
   BOOLEAN valid = !Gu.fault && prom_ok && fwsec_match && cfg2 && reg2 && ss0==after0 && ss1==after1;
-  GuLog("GuAd104Prepare: prom_ok=%u fwsec_res=%d fwsec_match=%u cfg2=%u reg2=%u ss0_stable=%u\n",
+  GuLog("GuPrepare: prom_ok=%u fwsec_res=%d fwsec_match=%u cfg2=%u reg2=%u ss0_stable=%u\n",
         prom_ok, fwsec_res, fwsec_match, cfg2, reg2, (ss0==after0 && ss1==after1));
   GuFree(prom);
   if(!valid) return EFI_COMPROMISED_DATA;
   Gu.prom_checked=TRUE;
   if(!GuLatchEntrySelectors(ss0,ss1)) {
     Gu.prom_checked=FALSE;
-    GuLog("GuAd104Prepare: GuLatchEntrySelectors failed\n");
+    GuLog("GuPrepare: GuLatchEntrySelectors failed\n");
     return EFI_NOT_READY;
   }
   Gu.profile_verified=TRUE;
-  GuLog("GuAd104Prepare: SUCCESS\n");
+  GuLog("GuPrepare: SUCCESS\n");
   return EFI_SUCCESS;
 }
+
+/* Legacy compatibility wrappers for vendor/ code */
+BOOLEAN GuAd104AssetsValid(VOID) { return GuAssetsValid(); }
+BOOLEAN GuAd104PromPlausible(const VOID *rom, UINTN sz) { return GuPromPlausible(rom, sz); }
+BOOLEAN GuAd104FwsecMatches(const struct gpu_unlock_fwsec *fw) { return GuFwsecMatches(fw); }
+EFI_STATUS GuAd104Prepare(VOID) { return GuPrepare(); }
+BOOLEAN GuAd104ColdEntry(VOID) { return GuColdEntry(); }

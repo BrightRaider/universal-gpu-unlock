@@ -8,7 +8,7 @@
 
 #include "profile.h"
 
-#include "msi_release.h"
+#include "unlock_release.h"
 
 #include "boot_io.h"
 
@@ -60,7 +60,7 @@ EFI_STATUS EFIAPI UefiMain(EFI_HANDLE image,EFI_SYSTEM_TABLE *t) {
 
   stage="assets";s=GuBootLoadAssets();if(s!=EFI_SUCCESS||Gu.fault)goto failed;
 
-  stage="read-only-cold-profile";s=GuAd104Prepare();if(s!=EFI_SUCCESS||Gu.fault)goto failed;
+  stage="read-only-cold-profile";s=GuPrepare();if(s!=EFI_SUCCESS||Gu.fault)goto failed;
 
   stage="stage-windows-image";s=GuBootLoadWindows();if(s!=EFI_SUCCESS||Gu.fault)goto failed;
 
@@ -164,7 +164,7 @@ EFI_STATUS EFIAPI UefiMain(EFI_HANDLE image,EFI_SYSTEM_TABLE *t) {
 
   GuLog("TRANSACTION OK: GPU [1/%u] unlocked, hardware readbacks passed!\n", (unsigned)device_count);
 
-  stage="final-Windows-verification";if(!GuMsiReadyForWindows()){s=EFI_NOT_READY;goto failed;}
+  stage="final-Windows-verification";if(!GuUnlockReadyForWindows()){s=EFI_NOT_READY;goto failed;}
 
   stage="close-USB-log";s=GuBootClose();if(s!=EFI_SUCCESS||Gu.fault)goto failed;
 
@@ -178,9 +178,9 @@ failed:
 
   if(s==EFI_SUCCESS)s=EFI_DEVICE_ERROR;
 
-  GuLog("STOP: stage=%s status=%#llx mutated=%u retained=%u fault=%u\n",stage,(unsigned long long)s,GuMsiMutated(),Gu.retained,Gu.fault);
+  GuLog("STOP: stage=%s status=%#llx mutated=%u retained=%u fault=%u\n",stage,(unsigned long long)s,GuUnlockMutated(),Gu.retained,Gu.fault);
 
-  if(GuMsiMutated()||Gu.started||Gu.retained) {
+  if(GuUnlockMutated()||Gu.started||Gu.retained) {
 
     if(Gu.started||Gu.master_attributes_pending)(VOID)GuClearMaster();
 
