@@ -340,6 +340,39 @@ static bool is_ad102(const struct unlock_transaction_work *work)
 	return gpu_is_ada_device(work->pdev->device);
 }
 
+static int poll_falcon_engine_halt(struct unlock_transaction_work *work, const struct falcon_eng *eng,
+				   unsigned int budget_us, bool timeout_is_failure)
+{
+	ktime_t deadline = ktime_add_us(ktime_get(), budget_us);
+	u32 cpuctl = 0, riscv = 0;
+
+	for (;;) {
+		bool cpu_halt = !read_bar(work, eng->base + 0x100, &cpuctl) && !inaccessible(cpuctl) && ((cpuctl & (1u << 4)) != 0);
+		bool riscv_halt = !read_bar(work, eng->falcon2 + 0x388, &riscv) && !inaccessible(riscv) && ((riscv & (1u << 4)) != 0);
+		if (cpu_halt || riscv_halt)
+			return 0;
+		if (ktime_compare(ktime_get(), deadline) >= 0) {
+			if (!timeout_is_failure) {
+				dev_info(&work->pdev->dev, "falcon halt timeout tolerated: base=%#x cpuctl=%#x falcon2=%#x riscv=%#x budget_us=%u\n",
+					eng->base, cpuctl, eng->falcon2, riscv, budget_us);
+				return -ETIMEDOUT;
+			}
+			dev_err(&work->pdev->dev, "falcon halt timeout: base=%#x cpuctl=%#x falcon2=%#x riscv=%#x budget_us=%u\n",
+				eng->base, cpuctl, eng->falcon2, riscv, budget_us);
+			return GU_RESULT(-ETIMEDOUT);
+		}
+		usleep_range(50, 100);
+	}
+}
+
+static bool is_falcon_engine_halted(struct unlock_transaction_work *work, const struct falcon_eng *eng)
+{
+	u32 cpuctl = 0, riscv = 0;
+	bool cpu_halt = !read_bar(work, eng->base + 0x100, &cpuctl) && !inaccessible(cpuctl) && ((cpuctl & (1u << 4)) != 0);
+	bool riscv_halt = !read_bar(work, eng->falcon2 + 0x388, &riscv) && !inaccessible(riscv) && ((riscv & (1u << 4)) != 0);
+	return cpu_halt || riscv_halt;
+}
+
 static const struct {
 	const char *name;
 	u32 offset, expected;
@@ -669,7 +702,7 @@ static int falcon_hs(struct unlock_transaction_work *work, const struct falcon_e
 			usleep_range(50, 100);
 		}
 	}
-	ret = poll_us(work, eng->base + 0x100, 1u << 4, 1u << 4, GU_BOOT_TIMEOUT_US, true);
+	ret = poll_falcon_engine_halt(work, eng, GU_BOOT_TIMEOUT_US, true);
 	if (ret)
 		return GU_RESULT(ret);
 	return 0;
@@ -1350,7 +1383,7 @@ static int unlock_transaction_boot(struct unlock_transaction_work *work)
 			upper_32_bits(work->meta_dma), true);
 	if (!is_ad102(work)) {
 		if (ret) return GU_RESULT(ret);
-		halt_ret = poll_us(work, SEC2_BASE + 0x100, 0x10, 0x10, GU_BOOT_TIMEOUT_US, true);
+		halt_ret = poll_falcon_engine_halt(work, &gu_sec2, GU_BOOT_TIMEOUT_US, true);
 		if (halt_ret) {
 			log_falcon_state(work, "sec2", &gu_sec2);
 			return GU_RESULT(halt_ret);
@@ -1361,11 +1394,11 @@ static int unlock_transaction_boot(struct unlock_transaction_work *work)
 	}
 	/* The marker precedes the cleanup tail. Wait for its exit before changing
 	 * firmware-visible metadata or applying selectors; a live SEC2 retains DMA. */
-	halt_ret = ret ? ret : poll_us(work, SEC2_BASE + 0x100, 0x10, 0x10, GU_BOOT_TIMEOUT_US, true);
+	halt_ret = ret ? ret : poll_falcon_engine_halt(work, &gu_sec2, GU_BOOT_TIMEOUT_US, true);
 	state_ret = read_bar(work, SEC2_BASE + 0x40, &marker);
 	state_ret |= read_bar(work, SEC2_BASE + 0x100, &cpuctl);
 	state_ret |= read_bar(work, SEC2_BASE + 0x94, &debug);
-	work->sec2_halt_verified = !state_ret && !inaccessible(cpuctl) && !!(cpuctl & 0x10);
+	work->sec2_halt_verified = !state_ret && is_falcon_engine_halted(work, &gu_sec2);
 	work->permission_sampled = true;
 	sample_ret = ad102_sample_permissions(work, "after-payload", work->permission_after, false);
 	for (i = 0; i < ARRAY_SIZE(ad102_permissions); i++)

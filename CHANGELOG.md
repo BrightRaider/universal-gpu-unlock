@@ -6,6 +6,14 @@ For packaged binaries and downloads, visit [GitHub Releases](https://github.com/
 
 ---
 
+## [v1.7.8] - 2026-11-08
+### Hotfix: Dual Falcon/RISC-V Engine Halt Attestation on Ampere & Turing (Resolves #11)
+- **Eliminated SEC2 RISC-V Timeout on Ampere (`0x8000000000000007` Halt):** Resolved a critical coprocessor attestation timeout reported by @Fr4Ckt3r on Ampere GA106 (Palit RTX 3060 12GB). On NVIDIA Ampere silicon (GA10x), the SEC2 secure coprocessor utilizes a RISC-V engine whose HALT status bit resides in `SEC2_FALCON2 + 0x388` (`NV_PRISCV_RISCV_CPUCTL`), whereas previous versions strictly polled the legacy Falcon register at `SEC2_BASE + 0x100`. While the booter payload executed and succeeded (`debuginfo=0xda550000`, `riscv=0x10`), the legacy register remained zero, causing an unnecessary 20-second timeout.
+- **Dual-Engine Halt Poller (`poll_falcon_engine_halt`):** Seamlessly polls both legacy Falcon CPUCTL and RISC-V CPUCTL registers across Ada, Ampere, and Turing architectures, confirming execution completion within microseconds.
+- **Pre-compiled & Authenticode-Signed Binaries:** Freshly compiled MSVC binaries (`bin/BOOTX64.EFI` and `bin/AdaUnlockDxe.efi`) signed with `Custom UEFI SecureBoot Key`.
+
+---
+
 ## [v1.7.7] - 2026-11-08
 ### Hotfix: Pre-Flight Attestation State Retention & GUI Fix (Resolves #11)
 - **Eliminated `MSI-preflight` Status `0x8000000000000002` Halt:** Resolved a regression introduced in v1.7.6 where redundant device re-binding (`GuBindDevice`) in the execution loop zeroed the platform structure, inadvertently clearing `Gu.profile_verified` and `Gu.prom_verified`. This triggered an immediate `EFI_INVALID_PARAMETER` refusal in `GuMsiPreflight()` and returned to the firmware boot menu without executing the unlock transaction.

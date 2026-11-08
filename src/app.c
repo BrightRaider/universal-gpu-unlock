@@ -145,7 +145,7 @@ EFI_STATUS EFIAPI UefiMain(EFI_HANDLE image,EFI_SYSTEM_TABLE *t) {
 
   GuBootSay(
     L"\r\n=======================================================\r\n"
-    L" UNIVERSAL GPU UNLOCK v1.7.7 - Status Monitor\r\n"
+    L" UNIVERSAL GPU UNLOCK v1.7.8 - Status Monitor\r\n"
     L"=======================================================\r\n"
     L" [1/4] GPU and PCIe Topology Discovery ..... [ OK ]\r\n"
     L" [2/4] Firmware and Signature Attestation .. [ OK ]\r\n"
