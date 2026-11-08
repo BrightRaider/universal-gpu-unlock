@@ -88,44 +88,56 @@ static void ResetPair(void) {
 
 int main(void) {
   EFI_STATUS status;
-  ResetPair();
-  status = GuDiscoverSingleGpu((EFI_HANDLE)1, &system_table);
-  CHECK(status == EFI_UNSUPPORTED && init_calls == 0 && free_calls == 1 && log_calls >= 3);
+  GU_DISCOVERED_DEVICE devs[GU_MAX_DISCOVERED_DEVICES];
+  UINTN dev_count = 0;
 
+  /* 1. Multi-GPU discovery finds both GPUs */
+  ResetPair();
+  status = GuDiscoverAllGpus((EFI_HANDLE)1, &system_table, devs, GU_MAX_DISCOVERED_DEVICES, &dev_count);
+  CHECK(status == EFI_SUCCESS && dev_count == 2 && free_calls == 1);
+  CHECK(devs[0].device_id == 0x2684 && !devs[0].is_ampere && !devs[0].is_turing);
+  CHECK(devs[1].device_id == 0x220a && devs[1].is_ampere && !devs[1].is_turing);
+
+  /* 2. Reversed order discovery */
   ResetPair();
   Populate(0, GuPinnedGa102); Populate(1, GuPinnedAd102);
-  status = GuDiscoverSingleGpu((EFI_HANDLE)1, &system_table);
-  CHECK(status == EFI_UNSUPPORTED && init_calls == 0 && free_calls == 1);
+  status = GuDiscoverAllGpus((EFI_HANDLE)1, &system_table, devs, GU_MAX_DISCOVERED_DEVICES, &dev_count);
+  CHECK(status == EFI_SUCCESS && dev_count == 2 && free_calls == 1);
+  CHECK(devs[0].device_id == 0x220a && devs[0].is_ampere);
+  CHECK(devs[1].device_id == 0x2684 && !devs[1].is_ampere);
 
-  ResetPair(); gpu[1].dwords[0x2c / 4] ^= 1;
-  CHECK(GuDiscoverSingleGpu((EFI_HANDLE)1, &system_table) == EFI_UNSUPPORTED && !init_calls);
-  ResetPair(); gpu[1].bus = gpu[0].bus;
-  CHECK(GuDiscoverSingleGpu((EFI_HANDLE)1, &system_table) == EFI_UNSUPPORTED && !init_calls);
-  ResetPair(); gpu[0].read_fail = 1;
-  CHECK(GuDiscoverSingleGpu((EFI_HANDLE)1, &system_table) == EFI_UNSUPPORTED && !init_calls);
-  ResetPair(); gpu[0].location_fail = 1;
-  CHECK(GuDiscoverSingleGpu((EFI_HANDLE)1, &system_table) == EFI_UNSUPPORTED && !init_calls);
-  ResetPair(); fail_pool_free = 1;
-  CHECK(GuDiscoverSingleGpu((EFI_HANDLE)1, &system_table) == EFI_UNSUPPORTED && !init_calls);
+  /* 3. Failures in PCI reading or topology */
+  ResetPair(); count = 1; gpu[0].read_fail = 1;
+  CHECK(GuDiscoverAllGpus((EFI_HANDLE)1, &system_table, devs, GU_MAX_DISCOVERED_DEVICES, &dev_count) == EFI_UNSUPPORTED && dev_count == 0);
+  ResetPair(); count = 1; gpu[0].location_fail = 1;
+  CHECK(GuDiscoverAllGpus((EFI_HANDLE)1, &system_table, devs, GU_MAX_DISCOVERED_DEVICES, &dev_count) == EFI_UNSUPPORTED && dev_count == 0);
+  ResetPair(); count = 1; fail_pool_free = 1;
+  CHECK(GuDiscoverAllGpus((EFI_HANDLE)1, &system_table, devs, GU_MAX_DISCOVERED_DEVICES, &dev_count) == EFI_UNSUPPORTED && dev_count == 0);
 
-  ResetPair(); count = 3;
-  Populate(2, GuPinnedAd102); gpu[2].bus = 6;
-  CHECK(GuDiscoverSingleGpu((EFI_HANDLE)1, &system_table) == EFI_UNSUPPORTED && !init_calls);
-
+  /* 4. Single GPU successful discovery and binding */
   ResetPair(); count = 1;
-  CHECK(GuDiscoverSingleGpu((EFI_HANDLE)1, &system_table) == EFI_SUCCESS && init_calls == 1);
-  CHECK(Gu.handle == handles[0] && Gu.device_id == 0x2684 && !Gu.is_ampere);
+  status = GuDiscoverAllGpus((EFI_HANDLE)1, &system_table, devs, GU_MAX_DISCOVERED_DEVICES, &dev_count);
+  CHECK(status == EFI_SUCCESS && dev_count == 1);
+  CHECK(devs[0].handle == handles[0] && devs[0].device_id == 0x2684 && !devs[0].is_ampere);
+  GuBindDevice(system_table.BootServices, (EFI_HANDLE)1, &devs[0]);
+  CHECK(init_calls == 1 && Gu.handle == handles[0] && Gu.device_id == 0x2684 && !Gu.is_ampere);
 
+  /* 5. Mutated read / invalid PCI config */
   ResetPair(); count = 1; gpu[0].mutate_at_full_read = 1;
-  CHECK(GuDiscoverSingleGpu((EFI_HANDLE)1, &system_table) == EFI_UNSUPPORTED && !init_calls);
+  CHECK(GuDiscoverAllGpus((EFI_HANDLE)1, &system_table, devs, GU_MAX_DISCOVERED_DEVICES, &dev_count) == EFI_UNSUPPORTED);
   ResetPair(); count = 1; redirect_on_refresh = 1;
-  CHECK(GuDiscoverSingleGpu((EFI_HANDLE)1, &system_table) == EFI_UNSUPPORTED && !init_calls);
+  CHECK(GuDiscoverAllGpus((EFI_HANDLE)1, &system_table, devs, GU_MAX_DISCOVERED_DEVICES, &dev_count) == EFI_UNSUPPORTED);
 
+  /* 6. Unsupported Device ID */
   ResetPair(); count = 1; gpu[0].dwords[0] = 0x123410deU;
-  CHECK(GuDiscoverSingleGpu((EFI_HANDLE)1, &system_table) == EFI_UNSUPPORTED && !init_calls);
+  CHECK(GuDiscoverAllGpus((EFI_HANDLE)1, &system_table, devs, GU_MAX_DISCOVERED_DEVICES, &dev_count) == EFI_UNSUPPORTED);
 
+  /* 7. Mixed system: 1 NVIDIA GPU + 1 AMD GPU */
   ResetPair(); count = 2; gpu[1].dwords[0] = 0x164e1002U;
-  CHECK(GuDiscoverSingleGpu((EFI_HANDLE)1, &system_table) == EFI_SUCCESS && init_calls == 1);
+  status = GuDiscoverAllGpus((EFI_HANDLE)1, &system_table, devs, GU_MAX_DISCOVERED_DEVICES, &dev_count);
+  CHECK(status == EFI_SUCCESS && dev_count == 1);
+  CHECK(devs[0].handle == handles[0]);
+  GuBindDevice(system_table.BootServices, (EFI_HANDLE)1, &devs[0]);
   CHECK(Gu.handle == handles[0]);
 
   printf("PASS UEFI discovery adapter: %u checks; mocked protocols only\n", checks);

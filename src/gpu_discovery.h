@@ -21,9 +21,6 @@ typedef struct {
   UINT8 is_turing;
 } GU_DISCOVERED_DEVICE;
 
-/* Shared read-only inventory. In a multi-NVIDIA system, log and REFUSE actuation. */
-EFI_STATUS GuDiscoverSingleGpu(EFI_HANDLE image, EFI_SYSTEM_TABLE *table);
-
 /* Multi-GPU discovery: populates up to max_devices verified NVIDIA GPUs. */
 EFI_STATUS GuDiscoverAllGpus(EFI_HANDLE image, EFI_SYSTEM_TABLE *table,
                              GU_DISCOVERED_DEVICE *devices, UINTN max_devices,
