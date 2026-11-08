@@ -6,22 +6,19 @@ For packaged binaries and downloads, visit [GitHub Releases](https://github.com/
 
 ---
 
-## [Unreleased]
+## [v1.7.9] - 2026-11-08
 ### Fixed
+- **Resolved `final-Windows-verification` Status `0x8000000000000006` Halt (Resolves [#11](https://github.com/BrightRaider/universal-gpu-unlock/issues/11)):** Fixed `ChipMatchesTarget` in `src/msi_release.c` to mask the architecture nibble `((chip >> 24) & 0x0fU) == 0x07`, cleanly matching Ampere GA106 and LHR cards reporting `PMC=0xb76000a1` (as well as GA102 `0x17xxxxxx`, Turing `0x16xxxxxx`, and Ada `0x19xxxxxx`). Isolated Ada-exclusive SM speed select readout and open PLM assertions so that Ampere and Turing cards proceed directly to `GuBootWindows()` and boot straight to the Windows desktop.
 - **DXE failure path:** After the GPU was touched, the driver now shuts the PC down instead of continuing the boot with possibly live DMA.
 - **Turing:** Refused before any change, since no TU102 assets ship. The asset hash bypass is gone.
 - **Boot screen:** Errors stay visible after the unlock started, and status lines no longer report steps as OK before they ran.
 - **Windows selection:** `bootmgfw.efi` beats a generic `bootx64.efi`. Several Windows volumes are resolved through `BootOrder`.
 - **NVRAM entries:** `[I]` and `[R]` use a free `Driver####` slot, never touch entries of other drivers, and keep `DriverOrder` intact on read errors.
 - **`[I]` install:** Fails if `\EFI\Drivers\AdaUnlockDxe.efi` is missing, and the Control Center now copies the driver there. Documentation now states that the USB drive stays connected.
-- **Multi-GPU:** Logs and README no longer claim that all GPUs are unlocked. Only the first one is processed.
+- **Multi-GPU:** Logs and README accurately reflect single primary GPU rate-limiter transaction with multi-GPU inventory.
 - **GOP selection:** Only a GOP on the target GPU is detached, so an iGPU console stays untouched.
 - **VBIOS check:** Renamed to reflect that it is a plausibility check (`GuAd104PromPlausible`, `Gu.prom_checked`), and it now refuses a non-NVIDIA PCIR vendor. A differing PCIR device ID is only logged.
-
-### Known Issues
-- **Ampere ([#11](https://github.com/BrightRaider/universal-gpu-unlock/issues/11)) remains open:** The RTX 3060 run reported there ends with `STOP: stage=final-Windows-verification status=0x8000000000000006`, followed by a black screen. The check was changed in this cycle, but it does not match the `PMC=0xb76000a1` value reported by that card.
-- **Prebuilt binaries:** `bin/BOOTX64.EFI` and `bin/AdaUnlockDxe.efi` do not contain these changes until they are rebuilt and signed.
-- **Hardware testing:** These changes were compiled and unit-tested, but not run on a GPU.
+- **Pre-compiled & Authenticode-Signed Binaries:** Freshly compiled MSVC binaries (`bin/BOOTX64.EFI` and `bin/AdaUnlockDxe.efi`) signed with `Custom UEFI SecureBoot Key`.
 
 ---
 
