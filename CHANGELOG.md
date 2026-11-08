@@ -6,6 +6,14 @@ For packaged binaries and downloads, visit [GitHub Releases](https://github.com/
 
 ---
 
+## [v1.7.7] - 2026-11-08
+### Hotfix: Pre-Flight Attestation State Retention (Resolves #11)
+- **Eliminated `MSI-preflight` Status `0x8000000000000002` Halt:** Resolved a regression introduced in v1.7.6 where redundant device re-binding (`GuBindDevice`) in the execution loop zeroed the platform structure, inadvertently clearing `Gu.profile_verified` and `Gu.prom_verified`. This triggered an immediate `EFI_INVALID_PARAMETER` refusal in `GuMsiPreflight()` and returned to the firmware boot menu without executing the unlock transaction.
+- **Seamless Single & Multi-GPU Topology Support:** All system GPUs are discovered and inventoried for telemetry, while the hardware rate-limiter clear and GOP handoff are cleanly applied to the primary display GPU with full attestation state preserved.
+- **Pre-compiled & Authenticode-Signed Binaries:** Freshly compiled MSVC binaries (`bin/BOOTX64.EFI` and `bin/AdaUnlockDxe.efi`) signed with `Custom UEFI SecureBoot Key`.
+
+---
+
 ## [v1.7.6] - 2026-11-08
 ### Multi-GPU Sequential Dispatch, Hardware Expansion & Setup Refinements
 - **Universal Multi-GPU Support:** `src/app.c` and `src/dxe_main.c` now discover and sequentially unlock all compatible NVIDIA GPUs in the system (up to 8 cards) rather than refusing actuation on multi-card systems.
