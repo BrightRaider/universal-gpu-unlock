@@ -5,16 +5,8 @@ param(
 $ErrorActionPreference = 'Stop'
 # A separate, strict read-only PE/COFF EFI application. Never build the
 # vendor unlock core, app.c, dxe_main.c, MSI release, DMA or persistence code.
-if (-not $VcVars) {
-    $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
-    if (Test-Path -LiteralPath $vswhere) {
-        $install = & $vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
-        if ($install) { $VcVars = Join-Path $install 'VC\Auxiliary\Build\vcvars64.bat' }
-    }
-}
-if (-not $VcVars -or -not (Test-Path -LiteralPath $VcVars)) {
-    throw 'MSVC x64 build environment not found; specify -VcVars.'
-}
+. (Join-Path $PSScriptRoot 'Find-VcVars.ps1')
+$VcVars = Find-VcVars $VcVars
 Push-Location -LiteralPath $PSScriptRoot
 try {
     $output = Join-Path $PSScriptRoot 'build_diagnostic'
