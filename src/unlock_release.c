@@ -719,7 +719,7 @@ BOOLEAN GuUnlockReadyForWindows(VOID) {
 
   if (Gu.fault || !chip_ok || !(cpu & 0x10) || cpu == 0xffffffff ||
       (cpu & 0xffff0000) == 0xbadf0000 || (hi >> 4) != 0 ||
-      ss0 != 0x88888888 || ss1 != 8) {
+      (!Gu.is_turing && (ss0 != 0x88888888 || ss1 != 8))) {
     GuLog("GuUnlockReadyForWindows: hardware register check failed\n");
     return FALSE;
   }

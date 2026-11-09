@@ -17,8 +17,10 @@ BOOLEAN GuEntrySelectorsMatch(UINT32 Ss0, UINT32 Ss1) {
          Ss1 == EntrySs1;
 }
 BOOLEAN GuLatchEntrySelectors(UINT32 Ss0, UINT32 Ss1) {
-  if (Gu.fault || !Gu.prom_checked || Gu.started || Ss0 == 0xffffffffU ||
-      (Ss0 & 0xffff0000U) == 0xbadf0000U || Ss0 == 0x88888888U || Ss1 > 0xfU)
+  if (Gu.fault || !Gu.prom_checked || Gu.started)
+    return FALSE;
+  if (!Gu.is_turing && (Ss0 == 0xffffffffU ||
+      (Ss0 & 0xffff0000U) == 0xbadf0000U || Ss0 == 0x88888888U || Ss1 > 0xfU))
     return FALSE;
   if (EntryLatched)
     return GuEntrySelectorsMatch(Ss0, Ss1);
