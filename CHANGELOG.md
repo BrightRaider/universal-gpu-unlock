@@ -6,6 +6,20 @@ For packaged binaries and downloads, visit [GitHub Releases](https://github.com/
 
 ---
 
+## [v1.8.3] - 2026-11-09
+### Turing FWSEC vDesc v2 Geometry Parser & DMEM Bounds Hardening (Addresses #15)
+- **Turing FWSEC vDesc v2 Structural Geometry Parser:**
+  - Resolved `descriptor error=-22` (`-EINVAL`) at `vbios_610.c:179` observed on MSI RTX 2080 Ti (TU102-300A, DevID `0x1e07`) in `RUN0003.TXT`.
+  - Turing VBIOS descriptors utilize a 60-byte Version 2 layout with distinct field offsets from Version 3:
+    - IMEM VA at offset 12 (`0x0`), Interface at offset 16 (`0xe0`), IMEM PA at offset 20 (`0x0`), IMEM size at offset 24 (`0x9a00`).
+    - DMEM PA at offset 28 (`0x0`), Payload/Data offset at offset 40 (`0x9a00`), DMEM size at offset 48 (`0x3f0`), PKC signature offset at offset 52 (`0x9a00`).
+    - SEC2 engine mask (`0x400`) and FWSEC ucode ID (9) mapped specifically for Turing architecture.
+- **Architecturally Scoped Bounds Validation:**
+  - Scoped 384-byte PKC public key boundary validation `range(fw.dmem_size, fw.pkc_off, 384)` strictly to Version 3 descriptors (Ampere/Ada), preventing false validation failures on Turing's 16-byte signature boundary.
+  - Ensures clean end-to-end ROM validation (`prom_ok=1`, `fwsec_res=0`, `fwsec_match=1`) across both Ampere/Ada (v3) and Turing (v2).
+
+---
+
 ## [v1.8.2] - 2026-11-09
 ### Turing FWSEC vDesc v2 Parser & Cold-State Discovery (Addresses #15)
 - **Turing FWSEC vDesc Version 2 Support:**

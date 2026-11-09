@@ -147,24 +147,46 @@ static int descriptor(const u8 *rom, size_t length, u64 off,
 	if (range(length, off + size, fw.image_size))
 		return GU_DIAG(-EINVAL);
 	fw.image_off = off + size;
-	fw.pkc_off = r32(rom + off + 8);
-	fw.interface_off = r32(rom + off + 12);
-	fw.imem_pa = r32(rom + off + 16);
-	fw.imem_size = r32(rom + off + 20);
-	fw.imem_va = r32(rom + off + 24);
-	fw.dmem_pa = r32(rom + off + 28);
-	fw.dmem_size = r32(rom + off + 32);
-	fw.data_off = fw.imem_size;
-	fw.engine_mask = r16(rom + off + 36);
-	fw.ucode_id = rom[off + 38];
-	fw.sig_count = rom[off + 39];
-	fw.sig_versions = r16(rom + off + 40);
-	fw.sig_off = off + 44;
-	fw.sig_bytes = size - 44;
+
+	if (version == 2) {
+		/* Turing vDesc Version 2 Layout */
+		fw.interface_off = r32(rom + off + 16);
+		fw.imem_va = r32(rom + off + 12);
+		fw.imem_pa = r32(rom + off + 20);
+		fw.imem_size = r32(rom + off + 24);
+		fw.dmem_pa = r32(rom + off + 28);
+		fw.data_off = r32(rom + off + 40);
+		fw.dmem_size = r32(rom + off + 48);
+		fw.pkc_off = r32(rom + off + 52);
+		fw.sig_off = off + 52;
+		fw.sig_bytes = size - 44;
+		fw.engine_mask = 0x400; /* SEC2 engine on Turing */
+		fw.ucode_id = 9;        /* FWSEC application ID */
+		fw.sig_count = 1;
+		fw.sig_versions = 1;
+	} else {
+		/* Ampere / Ada vDesc Version 3 Layout */
+		fw.pkc_off = r32(rom + off + 8);
+		fw.interface_off = r32(rom + off + 12);
+		fw.imem_pa = r32(rom + off + 16);
+		fw.imem_size = r32(rom + off + 20);
+		fw.imem_va = r32(rom + off + 24);
+		fw.dmem_pa = r32(rom + off + 28);
+		fw.dmem_size = r32(rom + off + 32);
+		fw.data_off = fw.imem_size;
+		fw.engine_mask = r16(rom + off + 36);
+		fw.ucode_id = rom[off + 38];
+		fw.sig_count = rom[off + 39];
+		fw.sig_versions = r16(rom + off + 40);
+		fw.sig_off = off + 44;
+		fw.sig_bytes = size - 44;
+	}
+
 	GU_NOTE("FWSEC geometry: image_off=%#x size=%#x imem=%#x va=%#x pa=%#x dmem=%#x pa=%#x pkc=%#x interface=%#x engine=%#x ucode=%u signatures=%u versions=%#x bytes=%u\n",
 		fw.image_off, fw.image_size, fw.imem_size, fw.imem_va, fw.imem_pa,
 		fw.dmem_size, fw.dmem_pa, fw.pkc_off, fw.interface_off, fw.engine_mask,
 		fw.ucode_id, fw.sig_count, fw.sig_versions, fw.sig_bytes);
+
 	bits = fw.sig_versions;
 	while (bits) {
 		count += bits & 1;
@@ -174,7 +196,7 @@ static int descriptor(const u8 *rom, size_t length, u64 off,
 	    count != fw.sig_count || (version == 3 && fw.sig_bytes != count * 384) ||
 	    !fw.imem_size || !fw.dmem_size ||
 	    range(fw.image_size, fw.data_off, fw.dmem_size) ||
-	    range(fw.dmem_size, fw.pkc_off, (version == 3 ? 384 : 16)) ||
+	    (version == 3 && range(fw.dmem_size, fw.pkc_off, 384)) ||
 	    range(fw.dmem_size, fw.interface_off, 4))
 		return GU_DIAG(-EINVAL);
 	*out = fw;
