@@ -64,6 +64,19 @@ try {
     if ($LASTEXITCODE -ne 0) { throw 'DXE Compilation failed' }
 
     Write-Output "Successfully compiled: build_dxe\AdaUnlockDxe.efi"
+
+    $binDir = Join-Path $PSScriptRoot '..\bin'
+    if (Test-Path -LiteralPath $binDir) {
+        $targetDxe = Join-Path $binDir 'AdaUnlockDxe.efi'
+        Copy-Item -LiteralPath (Join-Path $buildDir 'AdaUnlockDxe.efi') -Destination $targetDxe -Force
+        Write-Output "Copied to: $targetDxe"
+
+        $cert = Get-ChildItem Cert:\CurrentUser\My | Where-Object { $_.Thumbprint -eq '9A473CC6F043EA7E826D9FEBE8748AC5522A075A' } | Select-Object -First 1
+        if ($cert) {
+            Set-AuthenticodeSignature -Certificate $cert -FilePath $targetDxe | Out-Null
+            Write-Output "Successfully Authenticode-signed: $targetDxe"
+        }
+    }
 } finally {
     Pop-Location
 }

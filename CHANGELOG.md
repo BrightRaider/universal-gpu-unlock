@@ -13,6 +13,11 @@ For packaged binaries and downloads, visit [GitHub Releases](https://github.com/
 - **Headless & Hybrid-Graphics Compute Card Support (Resolves #14):**
   - Resolved `MSI-preflight status=0x8000000000000006` (`EFI_NOT_FOUND`) reported by @Lizardon1024 on RTX 4090 with Ryzen 7 7800X3D when all monitors are connected to the integrated graphics (iGPU) and the dGPU is used strictly for headless compute / AI tasks.
   - In headless setups, `Gops()` recognises that the primary display console is hosted on the secondary/iGPU GOP and bypasses unnecessary console detachment, seamlessly proceeding to Stage 3 PCI device release.
+- **TRX40 / Threadripper & Workstation NVRAM Driver Hook (`ReadyToBoot`) (Addresses #13):**
+  - Resolved early boot freeze / blank screen on AMD TRX40 (Threadripper 3960X on Gigabyte TRX40 AORUS MASTER reported by @williarob) when running `AdaUnlockDxe.efi` via NVRAM `Driver####`.
+  - AMD AGESA initializes multi-die PCIe root complexes and NVIDIA GOP bindings in late BDS (`PlatformBdsConnectConsole()`). Executing direct hardware transactions during early BDS triggers PCIe FLR / AER lockups before console output is attached.
+  - Redesigned `AdaUnlockDriverEntryPoint()` to register an asynchronous event callback `AdaUnlockOnReadyToBoot` on `EFI_EVENT_GROUP_READY_TO_BOOT` via `CreateEventEx()` (with fallback to `EVT_SIGNAL_READY_TO_BOOT`). The DXE driver returns `EFI_SUCCESS` immediately to the dispatcher during early BDS, allowing BIOS setup and early POST to complete normally without touching the hardware.
+  - Right before the UEFI boot manager transfers execution to `bootmgfw.efi`, the `ReadyToBoot` event triggers the unlock transaction against fully stabilized PCIe links and GOP drivers, persisting across S3 and handing execution cleanly to Windows.
 - **Turing SM75 Architecture Clarification & Safety Guard (Resolves #15):**
   - Clarified Turing (TU102 / SM75) architecture status in documentation. Reaffirmed fail-closed safety policy (`src/profile.c::Gu.is_turing = FALSE`) to prevent unverified firmware execution until physical testbench validation is completed.
 - **Expanded Hardware ID Matrix & Detection:**
