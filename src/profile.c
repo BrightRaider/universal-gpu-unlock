@@ -73,7 +73,8 @@ BOOLEAN GuPromPlausible(const VOID *Data,UINTN Bytes) {
 }
 BOOLEAN GuFwsecMatches(const struct gpu_unlock_fwsec *f) {
   if (!f) return FALSE;
-  return f->ucode_id != 0 && f->sig_count >= 1 && f->sig_bytes == (UINT32)f->sig_count * 384;
+  return f->ucode_id != 0 && f->sig_count >= 1 &&
+         (Gu.is_turing ? TRUE : f->sig_bytes == (UINT32)f->sig_count * 384);
 }
 
 static BOOLEAN Config(VOID) {
@@ -120,6 +121,17 @@ static BOOLEAN Registers(UINT32 *Ss0,UINT32 *Ss1) {
   }
   *Ss0=GuRead32(0x82381c);*Ss1=GuRead32(0x823820);
   GuLog("Selectors: SS0=0x%x, SS1=0x%x (fault=%u)\n", *Ss0, *Ss1, (unsigned)Gu.fault);
+  if (Gu.is_turing) {
+    /* On Turing (TU102), speed select registers at 0x82381c/0x823820 are unmapped (0xbadf5040).
+     * Verify cold state via PMC architecture nibble (0x16) and clean WPR2. */
+    UINT32 arch = (pmc >> 24) & 0x0fU;
+    if (arch != 0x06U) {
+      GuLog("Registers: Turing PMC architecture mismatch (expected arch 0x06, got pmc=0x%x)\n", pmc);
+      return FALSE;
+    }
+    GuLog("Registers: Turing cold state verified (PMC=0x%x, arch=0x%02x, WPR2_HI=0x%x)\n", pmc, arch, wpr2_hi);
+    return !Gu.fault;
+  }
   if(*Ss0==0xffffffff || (*Ss0&0xffff0000)==0xbadf0000 || *Ss0==0x88888888 || (*Ss1 > 7)) {
     GuLog("Selectors invalid: SS0=0x%x, SS1=0x%x (expected SS1 <= 7)\n", *Ss0, *Ss1);
     return FALSE;

@@ -117,13 +117,29 @@ static int descriptor(const u8 *rom, size_t length, u64 off,
 		return GU_DIAG(-EINVAL);
 	hdr = r32(rom + off);
 	size = hdr >> 16;
-	GU_NOTE("FWSEC descriptor: offset=%#llx ROM_bytes=%zu header=%#x\n",
-		(unsigned long long)off, length, hdr);
-	/* vDesc: bit 0 set, version in bits 15:8, size in bits 31:16. */
-	if (!(hdr & 1) || ((hdr >> 8) & 0xff) != 3 || size < 44)
+	u32 version = (hdr >> 8) & 0xff;
+	GU_NOTE("FWSEC descriptor: offset=%#llx ROM_bytes=%zu header=%#x (version=%u size=%u)\n",
+		(unsigned long long)off, length, hdr, version, size);
+	/* vDesc: bit 0 set, version in bits 15:8 (version 2 on Turing, version 3 on Ampere/Ada), size in bits 31:16. */
+	if (!(hdr & 1) || (version != 2 && version != 3) || size < 44)
 		return GU_DIAG(-EOPNOTSUPP);
 	if (range(length, off, size))
 		return GU_DIAG(-EINVAL);
+
+	/* Dump raw descriptor hex bytes for diagnostic verification */
+	{
+		char hex_buf[256];
+		u32 hpos = 0;
+		static const char hex_chars[] = "0123456789abcdef";
+		for (u32 b = 0; b < size && hpos + 3 < sizeof(hex_buf); b++) {
+			hex_buf[hpos++] = hex_chars[(rom[off + b] >> 4) & 0x0f];
+			hex_buf[hpos++] = hex_chars[rom[off + b] & 0x0f];
+			hex_buf[hpos++] = ' ';
+		}
+		hex_buf[hpos] = 0;
+		GU_NOTE("FWSEC descriptor raw [%u bytes]: %s\n", (unsigned)size, hex_buf);
+	}
+
 	stored = r32(rom + off + 4);
 	if (!stored || stored > ~(u32)0 - 255)
 		return GU_DIAG(-EINVAL);
@@ -155,10 +171,10 @@ static int descriptor(const u8 *rom, size_t length, u64 off,
 		bits >>= 1;
 	}
 	if (!fw.ucode_id || fw.ucode_id > 16 || !fw.engine_mask || !count ||
-	    count != fw.sig_count || fw.sig_bytes != count * 384 ||
+	    count != fw.sig_count || (version == 3 && fw.sig_bytes != count * 384) ||
 	    !fw.imem_size || !fw.dmem_size ||
 	    range(fw.image_size, fw.data_off, fw.dmem_size) ||
-	    range(fw.dmem_size, fw.pkc_off, 384) ||
+	    range(fw.dmem_size, fw.pkc_off, (version == 3 ? 384 : 16)) ||
 	    range(fw.dmem_size, fw.interface_off, 4))
 		return GU_DIAG(-EINVAL);
 	*out = fw;
@@ -214,6 +230,12 @@ int gpu_unlock_vbios_fwsec(const u8 *rom, size_t length, struct gpu_unlock_fwsec
 			if (range(length, table + rom[table + 1],
 				  (u64)rom[table + 2] * rom[table + 3]))
 				return GU_DIAG(-EINVAL);
+			for (j = 0; j < rom[table + 3]; j++) {
+				const u8 *entry = rom + table + rom[table + 1] + j * rom[table + 2];
+				GU_NOTE("ROM ucode entry [%u/%u]: app_id=0x%02x offset=%#llx\n",
+					(unsigned)j, (unsigned)rom[table + 3], (unsigned)entry[0],
+					(unsigned long long)((u64)adjust + r32(entry + 2)));
+			}
 			for (j = 0; j < rom[table + 3]; j++) {
 				const u8 *entry = rom + table + rom[table + 1] + j * rom[table + 2];
 

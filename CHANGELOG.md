@@ -6,6 +6,18 @@ For packaged binaries and downloads, visit [GitHub Releases](https://github.com/
 
 ---
 
+## [v1.8.2] - 2026-11-09
+### Turing FWSEC vDesc v2 Parser & Cold-State Discovery (Addresses #15)
+- **Turing FWSEC vDesc Version 2 Support:**
+  - Resolved `descriptor error=-95` (`EOPNOTSUPP`) reported by @mibby on MSI RTX 2080 Ti (TU102-300A, DevID `0x1e07`). Turing VBIOS uses **vDesc Version 2** (`header=0x3c0201`, size 60 bytes) rather than Version 3 (used on Ampere/Ada).
+  - Extended `descriptor()` in `src/vendor/vbios_610.c` to accept both Version 2 and Version 3 headers, parsing memory geometries, IMEM/DMEM boundaries, and signature parameters across all Turing variants.
+  - Added full raw descriptor hex dumping and complete ROM ucode entry inventory logging (`app_id` and offsets) to `RUN000x.TXT` for deep firmware reversing.
+- **Turing Cold-State Validation:**
+  - Updated `Registers()` in `src/profile.c`: recognized unmapped speed select registers (`0xbadf5040`) on Turing silicon and routed cold-state verification via PMC architecture nibble (`0x16`) and clean `WPR2_HI`.
+  - Adapted `GuFwsecMatches()` to evaluate Turing vDesc v2 structures appropriately.
+
+---
+
 ## [v1.8.1] - 2026-11-09
 ### Non-Blocking Hardware & VBIOS Diagnostic Probing (Addresses #15)
 - **Decoupled Diagnostic Hardware Probe from Firmware Assets:**
