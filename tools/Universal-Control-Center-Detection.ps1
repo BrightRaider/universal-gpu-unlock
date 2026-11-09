@@ -89,10 +89,15 @@ function Get-GpuHardwareInfo {
                     '2208' { $arch = "RTX 3080 Ti (GA102)"; $family = "GA102"; $isAmpere = $true; $isSupported = $true }
                     '2484' { $arch = "RTX 3070 (GA104)"; $family = "GA104"; $isAmpere = $true; $isSupported = $true }
                     '2482' { $arch = "RTX 3070 Ti (GA104)"; $family = "GA104"; $isAmpere = $true; $isSupported = $true }
+                    '2486' { $arch = "RTX 3060 Ti (GA104)"; $family = "GA104"; $isAmpere = $true; $isSupported = $true }
                     '2487' { $arch = "RTX 3060 12GB (GA104)"; $family = "GA104"; $isAmpere = $true; $isSupported = $true }
+                    '2488' { $arch = "RTX 3060 Ti (GA104)"; $family = "GA104"; $isAmpere = $true; $isSupported = $true }
+                    '2489' { $arch = "RTX 3060 Ti (GA104)"; $family = "GA104"; $isAmpere = $true; $isSupported = $true }
                     '24c9' { $arch = "RTX 3060 Ti (GA104)"; $family = "GA104"; $isAmpere = $true; $isSupported = $true }
+                    '2501' { $arch = "RTX 3050 OEM (GA106)"; $family = "GA106"; $isAmpere = $true; $isSupported = $true }
                     '2503' { $arch = "RTX 3060 (GA106)"; $family = "GA106"; $isAmpere = $true; $isSupported = $true }
                     '2504' { $arch = "RTX 3060 12GB (GA106)"; $family = "GA106"; $isAmpere = $true; $isSupported = $true }
+                    '2582' { $arch = "RTX 3050 8GB (GA106)"; $family = "GA106"; $isAmpere = $true; $isSupported = $true }
                     # Turing (TU10X, sm_75)
                     '1e04' { $arch = "RTX 2080 Ti (TU102)"; $family = "TU102"; $isTuring = $true; $isSupported = $true }
                     '1e07' { $arch = "RTX 2080 Ti (TU102)"; $family = "TU102"; $isTuring = $true; $isSupported = $true }

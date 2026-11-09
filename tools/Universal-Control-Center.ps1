@@ -350,14 +350,32 @@ function Refresh-AuditData {
     $txtCpu.Text = "Processor: $($info['CPU'])"
     $txtOs.Text = "Operating System: $($info['OS'])"
 
-    $gpu = $info['GPUs'] | Where-Object { $_.IsSupported -or $_.IsAda -or $_.IsAmpere -or $_.IsTuring } | Select-Object -First 1
-    if (-not $gpu -and $info['GPUs'].Count -gt 0) { $gpu = $info['GPUs'][0] }
+    $supportedGpus = @($info['GPUs'] | Where-Object { $_.IsSupported -or $_.IsAda -or $_.IsAmpere -or $_.IsTuring })
+    $gpu = if ($supportedGpus.Count -gt 0) { $supportedGpus[0] } elseif ($info['GPUs'].Count -gt 0) { $info['GPUs'][0] } else { $null }
 
     $txtAssessmentTitle = $window.FindName("TxtAssessmentTitle")
     $txtAssessmentSub = $window.FindName("TxtAssessmentSub")
     $txtBadgeCompat = $window.FindName("TxtBadgeCompat")
 
-    if ($gpu -and ($gpu.IsSupported -or $gpu.IsAda -or $gpu.IsAmpere -or $gpu.IsTuring)) {
+    if ($supportedGpus.Count -gt 1) {
+        $names = ($supportedGpus | ForEach-Object { $_.Name }) -join " + "
+        $pcis = ($supportedGpus | ForEach-Object { "$($_.PCI.Vendor):$($_.PCI.Device)" }) -join " | "
+        $archs = ($supportedGpus | ForEach-Object { $_.Architecture }) -join " | "
+        $vrams = ($supportedGpus | ForEach-Object { "$($_.VramMb) MB" }) -join " + "
+
+        $txtGpuName.Text = "GPUs Detected ($($supportedGpus.Count)): $names"
+        $txtGpuPci.Text = "PCI VEN/DEV: $pcis"
+        $txtGpuArch.Text = "Architectures: $archs"
+        $txtGpuVram.Text = "Total VRAM: $vrams"
+        $txtGpuDriver.Text = "Driver Version: $($gpu.DriverVersion)"
+
+        if ($txtAssessmentTitle) { $txtAssessmentTitle.Text = "100% COMPATIBLE & READY (MULTI-GPU DETECTED: $($supportedGpus.Count) GPUS)" }
+        if ($txtAssessmentSub) { $txtAssessmentSub.Text = "Multi-GPU System: $names on $($info['Motherboard']) - All Architectures Supported!" }
+        $txtAssessment.Text = "Universal GPU Unlock: Multi-GPU system detected ($($supportedGpus.Count) accelerators). Pre-boot booter inventories all installed NVIDIA GPUs. Dynamic UEFI DriverBinding protocol cleanly decouples active display GOP instances, unlocking tensor throughput in volatile RAM without hardware conflict."
+        if ($txtBadgeCompat) { $txtBadgeCompat.Text = "✔ 100% COMPATIBLE: MULTI-GPU ($($supportedGpus.Count))" }
+        Write-GuiLog "Multi-GPU Topology: Found $($supportedGpus.Count) supported NVIDIA GPUs: $names"
+    }
+    elseif ($gpu -and ($gpu.IsSupported -or $gpu.IsAda -or $gpu.IsAmpere -or $gpu.IsTuring)) {
         $txtGpuName.Text = "GPU: $($gpu.Name)"
         $txtGpuPci.Text = "PCI VEN/DEV: $($gpu.PCI.Vendor):$($gpu.PCI.Device) (Subsystem: $($gpu.PCI.SubsystemVendor):$($gpu.PCI.SubsystemDevice))"
         $txtGpuArch.Text = "Architecture: $($gpu.Architecture)"

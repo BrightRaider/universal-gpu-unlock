@@ -6,7 +6,21 @@ For packaged binaries and downloads, visit [GitHub Releases](https://github.com/
 
 ---
 
-## [Unreleased]
+## [v1.8.0] - 2026-11-09
+### Major Multi-Gen Platform Compatibility & Architecture Hardening
+- **Ampere GA102 FWSEC / WPR2 Attestation Hotfix (Resolves #12):**
+  - Resolved premature halt attestation on GA102 (reported by @Tank-99 on RTX 3080 Ti). GSP FWSEC executes strictly as Falcon microcode, but `poll_falcon_engine_halt` prematurely checked the inactive GSP RISC-V status register (`0x111388`), triggering a 0-µs false-halt and reading WPR2 at raw power-on reset defaults (`wpr_hi=0`, `error=-5`). Isolated GSP polling strictly to the active Falcon execution register (`base + 0x100`) and introduced an initial hardware latch delay (`usleep_range(100, 200)`).
+- **Headless & Hybrid-Graphics Compute Card Support (Resolves #14):**
+  - Resolved `MSI-preflight status=0x8000000000000006` (`EFI_NOT_FOUND`) reported by @Lizardon1024 on RTX 4090 with Ryzen 7 7800X3D when all monitors are connected to the integrated graphics (iGPU) and the dGPU is used strictly for headless compute / AI tasks.
+  - In headless setups, `Gops()` recognises that the primary display console is hosted on the secondary/iGPU GOP and bypasses unnecessary console detachment, seamlessly proceeding to Stage 3 PCI device release.
+- **Turing SM75 Architecture Clarification & Safety Guard (Resolves #15):**
+  - Clarified Turing (TU102 / SM75) architecture status in documentation. Reaffirmed fail-closed safety policy (`src/profile.c::Gu.is_turing = FALSE`) to prevent unverified firmware execution until physical testbench validation is completed.
+- **Expanded Hardware ID Matrix & Detection:**
+  - Added new Ampere and Ada Lovelace Device IDs (RTX 3060 Ti GA104 `0x2486`, RTX 3050 GA106 `0x2582`, RTX 4070 / 4060 variants `0x2782`, `0x2783`, `0x2786`, `0x2860`, `0x2882`).
+  - Added multi-GPU topology inspection to Universal Control Center.
+- **Pre-compiled & Authenticode-Signed Binaries:**
+  - Freshly compiled MSVC binaries (`bin/BOOTX64.EFI` and `bin/AdaUnlockDxe.efi`) signed with `Custom UEFI SecureBoot Key`.
+
 ### Refactoring & Code Quality
 - **Unified Unlock & S3 Registration Flow:** Extracted identical unlock transaction sequences (`GuExecuteUnlock`) and S3 boot-script state registration (`GuRegisterS3`) across `src/app.c` and `src/dxe_main.c` into `src/unlock_release.c`.
 - **Architectural Asset Tables:** Consolidated 6 parallel firmware asset arrays in `src/boot_io.c` (`GuBootLoadAssets`) and pinned arrays in `src/profile.c` into a unified `GU_ARCH_ASSETS` table.

@@ -33,16 +33,21 @@ Write-Host ""
 # 2. Hardware Detection (GPU)
 Write-Host "[1/4] Scanning for compatible NVIDIA GeForce GPU (Ada / Ampere / Turing)..." -ForegroundColor Cyan
 $gpus = Get-CimInstance Win32_VideoController | Where-Object {
-    $_.Name -like "*4090*" -or $_.Name -like "*4080*" -or $_.Name -like "*4070 Ti SUPER*" -or
-    $_.Name -like "*3090*" -or $_.Name -like "*3080*" -or $_.Name -like "*3070*" -or $_.Name -like "*3060*" -or
+    $_.Name -like "*4090*" -or $_.Name -like "*4080*" -or $_.Name -like "*4070*" -or $_.Name -like "*4060*" -or
+    $_.Name -like "*3090*" -or $_.Name -like "*3080*" -or $_.Name -like "*3070*" -or $_.Name -like "*3060*" -or $_.Name -like "*3050*" -or
     $_.Name -like "*2080*" -or $_.Name -like "*2070*" -or $_.Name -like "*2060*" -or $_.Name -like "*TITAN RTX*" -or $_.Name -like "*CMP 50HX*" -or
     $_.PNPDeviceID -like "*VEN_10DE&DEV_2684*" -or $_.PNPDeviceID -like "*VEN_10DE&DEV_2685*" -or
     $_.PNPDeviceID -like "*VEN_10DE&DEV_2704*" -or $_.PNPDeviceID -like "*VEN_10DE&DEV_2703*" -or
-    $_.PNPDeviceID -like "*VEN_10DE&DEV_2705*" -or
+    $_.PNPDeviceID -like "*VEN_10DE&DEV_2705*" -or $_.PNPDeviceID -like "*VEN_10DE&DEV_2782*" -or
+    $_.PNPDeviceID -like "*VEN_10DE&DEV_2783*" -or $_.PNPDeviceID -like "*VEN_10DE&DEV_2786*" -or
+    $_.PNPDeviceID -like "*VEN_10DE&DEV_2860*" -or $_.PNPDeviceID -like "*VEN_10DE&DEV_2882*" -or
     $_.PNPDeviceID -like "*VEN_10DE&DEV_2204*" -or $_.PNPDeviceID -like "*VEN_10DE&DEV_2208*" -or
     $_.PNPDeviceID -like "*VEN_10DE&DEV_2206*" -or $_.PNPDeviceID -like "*VEN_10DE&DEV_220A*" -or
     $_.PNPDeviceID -like "*VEN_10DE&DEV_2216*" -or
-    $_.PNPDeviceID -like "*VEN_10DE&DEV_2482*" -or $_.PNPDeviceID -like "*VEN_10DE&DEV_2504*" -or
+    $_.PNPDeviceID -like "*VEN_10DE&DEV_2482*" -or $_.PNPDeviceID -like "*VEN_10DE&DEV_2484*" -or
+    $_.PNPDeviceID -like "*VEN_10DE&DEV_2486*" -or $_.PNPDeviceID -like "*VEN_10DE&DEV_2487*" -or
+    $_.PNPDeviceID -like "*VEN_10DE&DEV_2501*" -or $_.PNPDeviceID -like "*VEN_10DE&DEV_2503*" -or
+    $_.PNPDeviceID -like "*VEN_10DE&DEV_2504*" -or $_.PNPDeviceID -like "*VEN_10DE&DEV_2582*" -or
     $_.PNPDeviceID -like "*VEN_10DE&DEV_1E*" -or $_.PNPDeviceID -like "*VEN_10DE&DEV_1F*"
 }
 

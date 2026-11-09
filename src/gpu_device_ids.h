@@ -7,7 +7,12 @@
   X(0x2702U) \
   X(0x2704U) /* RTX 4080 */ \
   X(0x2703U) /* RTX 4080 SUPER */ \
-  X(0x2705U) /* RTX 4070 Ti SUPER */
+  X(0x2705U) /* RTX 4070 Ti SUPER */ \
+  X(0x2782U) /* RTX 4070 Ti (AD104) */ \
+  X(0x2783U) /* RTX 4070 SUPER (AD104) */ \
+  X(0x2786U) /* RTX 4070 (AD104) */ \
+  X(0x2860U) /* RTX 4060 Ti (AD106) */ \
+  X(0x2882U) /* RTX 4060 (AD107) */
 
 #define GU_AMPERE_DEVICE_IDS(X) \
   X(0x2204U) /* RTX 3090 */ \
@@ -18,8 +23,11 @@
   X(0x2207U) /* CMP 90HX */ \
   X(0x2482U) /* RTX 3070 Ti (GA104) */ \
   X(0x2484U) /* RTX 3070 (GA104) */ \
+  X(0x2486U) /* RTX 3060 Ti (GA104) */ \
   X(0x2487U) X(0x2488U) X(0x2489U) /* RTX 3060 Ti (GA104) */ \
+  X(0x2501U) /* RTX 3050 OEM (GA106) */ \
   X(0x2503U) X(0x2504U) X(0x2507U) X(0x2508U) /* RTX 3060 (GA106) */ \
+  X(0x2582U) /* RTX 3050 8GB (GA106) */ \
   X(0x2520U) X(0x2560U)
 
 #define GU_TURING_DEVICE_IDS(X) \

@@ -32,7 +32,7 @@ typedef struct {
   EFI_GRAPHICS_OUTPUT_PROTOCOL_MODE mode;
   EFI_GRAPHICS_OUTPUT_MODE_INFORMATION info;
   UINT32 config[64];UINT64 attributes;
-  UINTN stage,reported_additions,reported_removals;BOOLEAN ready,mutated,claimed;
+  UINTN stage,reported_additions,reported_removals;BOOLEAN ready,mutated,claimed,headless;
 } PLAN;
 static PLAN Plan;
 static GRAPH Original,Current;
@@ -102,10 +102,10 @@ static BOOLEAN SameEdge(const EDGE *a,const EDGE *b) {
     a->attributes==b->attributes&&a->count==b->count&&Guid(&a->protocol,&b->protocol);
 }
 static BOOLEAN Removed(const EDGE *e,UINTN stage) {
-  if(stage>=1&&(e->handle==Plan.gop||e->controller==Plan.gop)&&(e->agent==Plan.out_agent||Guid(&e->protocol,&TextGuid)))return TRUE;
-  if(stage>=2&&(e->handle==Plan.gop||e->controller==Plan.gop)&&(e->agent==Plan.gfx_agent||Guid(&e->protocol,&GopGuid)))return TRUE;
-  if(stage>=3&&(e->handle==Plan.pci||e->handle==Plan.gop||e->controller==Plan.pci||e->controller==Plan.gop)&&e->agent==Plan.nv_agent)return TRUE;
-  if(stage>=3&&e->handle==Plan.gop)return TRUE;
+  if(stage>=1&&Plan.gop&&(e->handle==Plan.gop||e->controller==Plan.gop)&&(e->agent==Plan.out_agent||Guid(&e->protocol,&TextGuid)))return TRUE;
+  if(stage>=2&&Plan.gop&&(e->handle==Plan.gop||e->controller==Plan.gop)&&(e->agent==Plan.gfx_agent||Guid(&e->protocol,&GopGuid)))return TRUE;
+  if(stage>=3&&(e->handle==Plan.pci||(Plan.gop&&e->handle==Plan.gop)||e->controller==Plan.pci||(Plan.gop&&e->controller==Plan.gop))&&e->agent==Plan.nv_agent)return TRUE;
+  if(stage>=3&&Plan.gop&&e->handle==Plan.gop)return TRUE;
   for(UINTN k=0;k<8;k++) {
     if(stage>=3&&Plan.idle[k]&&e->handle==Plan.idle[k])return TRUE;
   }
@@ -116,7 +116,7 @@ static BOOLEAN Removed(const EDGE *e,UINTN stage) {
  * A protocol GUID alone never authorizes access to the GPU or its owners. */
 static BOOLEAN ProtectedHandle(EFI_HANDLE h) {
   if(!h)return FALSE;
-  if(h==Plan.pci||h==Plan.gop||h==Plan.self||
+  if(h==Plan.pci||(Plan.gop&&h==Plan.gop)||h==Plan.self||
      h==Plan.console||h==Plan.input||h==Plan.error)return TRUE;
   for(UINTN k=0;k<8;k++){if(Plan.idle[k]&&h==Plan.idle[k])return TRUE;}
   return FALSE;
@@ -337,12 +337,17 @@ static EFI_STATUS Gops(BOOLEAN first) {
     if(Plan.stage>=3){continue;}
     physical++;
     if(first&&!Plan.gop&&GopOnTarget(h[i])) {Plan.gop=h[i];Plan.gop_interface=g;Plan.mode=*g->Mode;Plan.info=*g->Mode->Info;}
-    else if(h[i]==Plan.gop&&(!Equal(g->Mode,&Plan.mode,sizeof(Plan.mode))||!Equal(g->Mode->Info,&Plan.info,sizeof(Plan.info))))s=EFI_NOT_READY;
+    else if(Plan.gop&&h[i]==Plan.gop&&(!Equal(g->Mode,&Plan.mode,sizeof(Plan.mode))||!Equal(g->Mode->Info,&Plan.info,sizeof(Plan.info))))s=EFI_NOT_READY;
   }
   if(h&&b->FreePool(h)!=EFI_SUCCESS)s=EFI_DEVICE_ERROR;
   if(s==EFI_SUCCESS&&first&&!Plan.gop) {
-    GuLog("Gops: no active GOP belongs to the target GPU\n");
-    s=EFI_NOT_READY;
+    if(physical>=1) {
+      Plan.headless = TRUE;
+      GuLog("Gops: target GPU is headless/compute-only (active console on secondary/iGPU GOP)\n");
+    } else {
+      GuLog("Gops: no active GOP belongs to the target GPU\n");
+      s=EFI_NOT_READY;
+    }
   }
   if(s==EFI_SUCCESS&&physical<(Plan.stage>=3?0u:1u))s=EFI_NOT_READY;
   return s;
@@ -404,7 +409,7 @@ static EFI_STATUS Consumers(VOID) {
         Plan.nv_agent=e->agent;
         pci++;
       }
-      else if(Guid(&e->protocol,&PathGuid)&&e->attributes==8&&e->controller==Plan.gop){
+      else if(Guid(&e->protocol,&PathGuid)&&e->attributes==8&&Plan.gop&&e->controller==Plan.gop){
         child++;
       }
       else if(Guid(&e->protocol,&PathGuid)&&e->attributes==8&&IdleOutput(e->controller)){
@@ -417,7 +422,7 @@ static EFI_STATUS Consumers(VOID) {
         }
         child++;
       }
-    } else if(e->handle==Plan.gop) {
+    } else if(Plan.gop && e->handle==Plan.gop) {
       if(Guid(&e->protocol,&TextGuid)&&(e->attributes&EFI_OPEN_PROTOCOL_BY_DRIVER)&&e->controller==Plan.gop){
         Plan.out_agent=e->agent;
         text++;
@@ -430,6 +435,20 @@ static EFI_STATUS Consumers(VOID) {
         gfx++;
       }
     }
+  }
+  if(Plan.headless) {
+    /* For headless compute card: only the PCI driver binding (nv_agent) is on target.
+     * Graphics console and GOP splitter remain safely on the iGPU/primary console. */
+    if(pci<1||!Plan.nv_agent) {
+      GuLog("Consumers check (headless): no driver binding found on target PCI (unmanaged/ready)\n");
+    } else {
+      EFI_STATUS s=Driver(2);
+      if(s!=EFI_SUCCESS) {
+        GuLog("Consumers: Driver(2) failed: %#llx\n",(unsigned long long)s);
+        return s;
+      }
+    }
+    return EFI_SUCCESS;
   }
   if(pci<1||(child<1&&idle<1)||text<1||gfx<1||!Plan.nv_agent||!Plan.out_agent||!Plan.gfx_agent||
      Plan.nv_agent==Plan.out_agent||Plan.out_agent==Plan.gfx_agent||Plan.gfx_agent==Plan.nv_agent) {
@@ -477,7 +496,10 @@ EFI_STATUS GuUnlockPreflight(EFI_SYSTEM_TABLE *t,EFI_HANDLE self,EFI_HANDLE pci)
   if(s==EFI_SUCCESS) { s=Consumers(); if(s!=EFI_SUCCESS) GuLog("Preflight failed at Consumers(): %#llx\n", (unsigned long long)s); }
   if(s==EFI_SUCCESS) { s=PointerBaseline(); if(s!=EFI_SUCCESS) GuLog("Preflight failed at PointerBaseline(): %#llx\n", (unsigned long long)s); }
   if(s==EFI_SUCCESS) { s=UsbBaseline(); if(s!=EFI_SUCCESS) GuLog("Preflight failed at UsbBaseline(): %#llx\n", (unsigned long long)s); }
-  GuLog("Preflight: status=%#llx graph=%zu code_profiles=3\n",(unsigned long long)s,(size_t)Original.count);
+  GuLog("Preflight: status=%#llx graph=%zu code_profiles=%u%s\n",
+    (unsigned long long)s,(size_t)Original.count,
+    Plan.headless ? (Plan.nv_agent ? 1u : 0u) : 3u,
+    Plan.headless ? " (headless)" : "");
   if(s==EFI_SUCCESS)GuLog("Endpoints: pci=%#llx gop=%#llx console=%#llx pointer_agent=%#llx\n",
     (unsigned long long)(UINTN)Plan.pci,(unsigned long long)(UINTN)Plan.gop,
     (unsigned long long)(UINTN)Plan.console,(unsigned long long)(UINTN)Plan.pointer_agent);
@@ -573,7 +595,8 @@ static EFI_STATUS ClaimRestore(VOID) {
 EFI_STATUS GuUnlockRelease(VOID) {
   if(!Plan.ready||Plan.mutated||Gu.started||Gu.owned)return EFI_NOT_READY;
   EFI_BOOT_SERVICES *b=Plan.table->BootServices;
-  for(UINTN stage=1;stage<=3;stage++) {
+  UINTN start_stage = Plan.headless ? 3 : 1;
+  for(UINTN stage=start_stage;stage<=3;stage++) {
     GuLog("Driver detach intent: stage=%zu\n",(size_t)stage);
     EFI_STATUS s=Alive();UINT32 c[64];
     if(s==EFI_SUCCESS)s=ReadConfig(c);
@@ -587,13 +610,20 @@ EFI_STATUS GuUnlockRelease(VOID) {
       GraphDiff(stage-1, FALSE);
       s=EFI_NOT_READY;
     }
-    if(s==EFI_SUCCESS)s=Driver(stage-1);
+    if(s==EFI_SUCCESS && (stage==3 || !Plan.headless)) {
+      if(stage==3 && Plan.nv_agent) s=Driver(2);
+      else if(stage < 3) s=Driver(stage-1);
+    }
     b->RestoreTPL(old);
     if(s!=EFI_SUCCESS||Gu.fault)return s==EFI_SUCCESS?EFI_DEVICE_ERROR:s;
     /* Record before the callback: an error may follow a partial driver stop. */
     Plan.mutated=TRUE;
-    s=b->DisconnectController(stage==3?Plan.pci:Plan.gop,
-      stage==1?Plan.out_agent:stage==2?Plan.gfx_agent:Plan.nv_agent,NULL);
+    if(stage==3 && !Plan.nv_agent) {
+      s=EFI_SUCCESS;
+    } else {
+      s=b->DisconnectController(stage==3?Plan.pci:Plan.gop,
+        stage==1?Plan.out_agent:stage==2?Plan.gfx_agent:Plan.nv_agent,NULL);
+    }
     GuLog("Driver detach return: stage=%zu status=%#llx\n",(size_t)stage,(unsigned long long)s);
     if(s!=EFI_SUCCESS||Gu.fault)return s==EFI_SUCCESS?EFI_DEVICE_ERROR:s;
     Plan.stage=stage;

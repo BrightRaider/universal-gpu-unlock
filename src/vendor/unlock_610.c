@@ -345,10 +345,14 @@ static int poll_falcon_engine_halt(struct unlock_transaction_work *work, const s
 {
 	ktime_t deadline = ktime_add_us(ktime_get(), budget_us);
 	u32 cpuctl = 0, riscv = 0;
+	bool is_gsp = (eng->base == gu_gsp.base);
+
+	/* Allow engine to latch STARTCPU before sampling HALT status */
+	usleep_range(100, 200);
 
 	for (;;) {
 		bool cpu_halt = !read_bar(work, eng->base + 0x100, &cpuctl) && !inaccessible(cpuctl) && ((cpuctl & (1u << 4)) != 0);
-		bool riscv_halt = !read_bar(work, eng->falcon2 + 0x388, &riscv) && !inaccessible(riscv) && ((riscv & (1u << 4)) != 0);
+		bool riscv_halt = !is_gsp && !read_bar(work, eng->falcon2 + 0x388, &riscv) && !inaccessible(riscv) && ((riscv & (1u << 4)) != 0);
 		if (cpu_halt || riscv_halt)
 			return 0;
 		if (ktime_compare(ktime_get(), deadline) >= 0) {
@@ -368,8 +372,9 @@ static int poll_falcon_engine_halt(struct unlock_transaction_work *work, const s
 static bool is_falcon_engine_halted(struct unlock_transaction_work *work, const struct falcon_eng *eng)
 {
 	u32 cpuctl = 0, riscv = 0;
+	bool is_gsp = (eng->base == gu_gsp.base);
 	bool cpu_halt = !read_bar(work, eng->base + 0x100, &cpuctl) && !inaccessible(cpuctl) && ((cpuctl & (1u << 4)) != 0);
-	bool riscv_halt = !read_bar(work, eng->falcon2 + 0x388, &riscv) && !inaccessible(riscv) && ((riscv & (1u << 4)) != 0);
+	bool riscv_halt = !is_gsp && !read_bar(work, eng->falcon2 + 0x388, &riscv) && !inaccessible(riscv) && ((riscv & (1u << 4)) != 0);
 	return cpu_halt || riscv_halt;
 }
 

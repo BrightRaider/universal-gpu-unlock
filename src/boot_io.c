@@ -568,7 +568,7 @@ EFI_STATUS GuBootChoose(CHAR16 *choice) {
               L"stays in)\r\n");
   }
   GuBootSay(L"  [R] Remove DXE Driver from UEFI NVRAM\r\n"
-            L"  [S] Stock Windows (Skip unlock, normal boot)\r\n\r\n");
+            L"  [S] Stock Windows (Diagnostic hardware scan, logs to USB, normal boot)\r\n\r\n");
   GuBootSay(hide_s3
                 ? L"Select mode [U/I/R/S] (default: Stock Windows in 30s): "
                 : L"Select mode [U/P/I/R/S] (default: Stock Windows in 30s): ");
