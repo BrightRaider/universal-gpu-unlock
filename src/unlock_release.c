@@ -330,6 +330,25 @@ static EFI_STATUS Gops(BOOLEAN first) {
   EFI_STATUS s=b->LocateHandleBuffer(ByProtocol,&GopGuid,NULL,&count,&h);
   if(Plan.stage>=3&&s==EFI_NOT_FOUND)return EFI_SUCCESS;
   if(s==EFI_SUCCESS&&count&&!h)s=EFI_UNSUPPORTED;
+
+  /* When multiple GOPs are present on the target GPU (e.g. 1x DP + 1x HDMI),
+   * prefer the handle that hosts the active UEFI SimpleTextOut console so
+   * detachment does not leave an unmanaged display edge. */
+  if(s==EFI_SUCCESS&&first&&!Plan.gop) {
+    for(UINTN i=0;i<count;i++) {
+      EFI_GRAPHICS_OUTPUT_PROTOCOL *g=NULL;
+      VOID *txt=NULL;
+      if(Interface(h[i],&GopGuid,(VOID **)&g)!=EFI_SUCCESS||!g||!g->Mode||!g->Mode->Info||
+         !g->Mode->FrameBufferBase||!g->Mode->FrameBufferSize)continue;
+      if(GopOnTarget(h[i])&&Interface(h[i],&TextGuid,&txt)==EFI_SUCCESS) {
+        Plan.gop=h[i];Plan.gop_interface=g;Plan.mode=*g->Mode;Plan.info=*g->Mode->Info;
+        GuLog("Gops: selected primary console GOP with active TextOut: %#llx\n",
+              (unsigned long long)(UINTN)h[i]);
+        break;
+      }
+    }
+  }
+
   for(UINTN i=0;s==EFI_SUCCESS&&i<count;i++) {
     EFI_GRAPHICS_OUTPUT_PROTOCOL *g=NULL;s=Interface(h[i],&GopGuid,(VOID **)&g);if(s!=EFI_SUCCESS)break;
     if(h[i]==Plan.console&&g->Mode&&!g->Mode->FrameBufferBase&&!g->Mode->FrameBufferSize)continue;

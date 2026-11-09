@@ -39,6 +39,8 @@ EFI_STATUS EFIAPI UefiMain(EFI_HANDLE image, EFI_SYSTEM_TABLE *t) {
   if (s != EFI_SUCCESS)
     return s;
 
+  GuLog("=== Universal Multi-Gen GPU Unlock %s (BOOTX64.EFI) ===\n", GU_VERSION_TAG);
+
   const char *stage = "discover";
   CHAR16 choice = L'S';
 

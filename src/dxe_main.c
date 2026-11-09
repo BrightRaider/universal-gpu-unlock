@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: GPL-2.0-only */
 /* AdaUnlockDxe.c - Universal UEFI DXE Driver with S3 Boot Script Persistence */
 #include "port.h"
+#include "version.h"
 #include "checks.h"
 #include "gpu_discovery.h"
 #include "profile.h"
@@ -34,6 +35,8 @@ static VOID EFIAPI AdaUnlockOnReadyToBoot(EFI_EVENT event, VOID *context) {
 
   EFI_STATUS s = GuBootOpen(mDxeImage, mDxeTable);
   if (s != EFI_SUCCESS && s != EFI_ALREADY_STARTED) return;
+
+  GuLog("=== Universal Multi-Gen GPU Unlock %s (AdaUnlockDxe.efi) ===\n", GU_VERSION_TAG);
 
   const char *stage = "dxe-discover";
   GU_DISCOVERED_DEVICE devices[GU_MAX_DISCOVERED_DEVICES];

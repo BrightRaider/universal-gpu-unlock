@@ -6,6 +6,19 @@ For packaged binaries and downloads, visit [GitHub Releases](https://github.com/
 
 ---
 
+## [v1.8.6] - 2026-11-10
+### Version Header Logging & Multi-Display Console Auto-Selection (Addresses #16)
+- **Top-of-Log Version Banner:**
+  - Added explicit tool version header (`=== Universal Multi-Gen GPU Unlock v1.8.6 (BOOTX64.EFI) ===`) to line 1 of every `RUN000x.TXT` log.
+  - Added corresponding banner (`=== Universal Multi-Gen GPU Unlock v1.8.6 (AdaUnlockDxe.efi) ===`) to early DXE driver execution logs.
+  - Instantly reveals the exact release version and execution mode in bug reports and diagnostics without guessing.
+- **Multi-Display GOP Console Auto-Selection (Addresses #16):**
+  - Resolved `Preflight failed at Consumers(): 0x800000000000000f` (`text=0`, `EFI_ACCESS_DENIED`) on systems with multiple active display cables connected to the target GPU (e.g. 1x DisplayPort + 1x HDMI on ASUS PRIME Z690-A).
+  - Enhanced `Gops()` in `src/unlock_release.c`: when multiple GOP handles exist on the target GPU, pass 1 prioritizes the handle with an active `EFI_SIMPLE_TEXT_OUTPUT_PROTOCOL` (`TextGuid`) console bound.
+  - Eliminates handle ambiguity between primary and secondary/idle outputs, enabling clean detachment and unlock without needing to disconnect secondary monitors.
+
+---
+
 ## [v1.8.5] - 2026-11-09
 ### Unblock Turing Hardware Unlock Dispatch in Interactive Bootloader (Addresses #15)
 - **Resolved Turing Unlock Dispatch Intercept:**
