@@ -6,6 +6,15 @@ For packaged binaries and downloads, visit [GitHub Releases](https://github.com/
 
 ---
 
+## [v1.8.5] - 2026-11-09
+### Unblock Turing Hardware Unlock Dispatch in Interactive Bootloader (Addresses #15)
+- **Resolved Turing Unlock Dispatch Intercept:**
+  - Removed remaining diagnostic-mode gate `if (Gu.is_turing)` in `src/app.c` that intercepted operator selections `[U]` and `[P]`.
+  - In v1.8.4, although Turing TU102 firmware assets and booter geometry were staged, this legacy safety intercept logged `Operator requested unlock on Turing: assets pending hardware verification` and immediately fell back to stock Windows.
+  - Interactive boot menu selections `[U]` (Standard RAM-only Unlock) and `[P]` (Persistence Unlock) now cleanly proceed to `GuBootLoadAssets()`, loading and executing the verified `TU102-ASSETS` microcode stack on physical Turing cards.
+
+---
+
 ## [v1.8.4] - 2026-11-09
 ### Turing TU102 Full Rate-Limiter Unlock & Internal NVMe-ESP Persistence (Addresses #15)
 - **Turing TU102 Full Rate-Limiter Unlock:**
