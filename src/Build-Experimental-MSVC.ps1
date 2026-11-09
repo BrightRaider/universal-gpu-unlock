@@ -65,6 +65,19 @@ try {
     if ($LASTEXITCODE -ne 0) { throw 'Compilation failed' }
 
     Write-Output "Successfully compiled: build\AD102-EXPERIMENTAL.EFI"
+
+    $binDir = Join-Path $PSScriptRoot '..\bin'
+    if (Test-Path -LiteralPath $binDir) {
+        $targetBoot = Join-Path $binDir 'BOOTX64.EFI'
+        Copy-Item -LiteralPath (Join-Path $buildDir 'AD102-EXPERIMENTAL.EFI') -Destination $targetBoot -Force
+        Write-Output "Copied to: $targetBoot"
+
+        $cert = Get-ChildItem Cert:\CurrentUser\My | Where-Object { $_.Thumbprint -eq '9A473CC6F043EA7E826D9FEBE8748AC5522A075A' } | Select-Object -First 1
+        if ($cert) {
+            Set-AuthenticodeSignature -Certificate $cert -FilePath $targetBoot | Out-Null
+            Write-Output "Successfully Authenticode-signed: $targetBoot"
+        }
+    }
 } finally {
     Pop-Location
 }

@@ -71,15 +71,8 @@ EFI_STATUS EFIAPI UefiMain(EFI_HANDLE image, EFI_SYSTEM_TABLE *t) {
               L"first one is unlocked; the others stay stock.\r\n");
   }
 
-  stage = "assets";
-  s = GuBootLoadAssets();
-  if (s != EFI_SUCCESS || Gu.fault)
-    goto failed;
-
-  stage = "read-only-cold-profile";
-  s = GuPrepare();
-  if (s != EFI_SUCCESS || Gu.fault)
-    goto failed;
+  stage = "diagnostic-scan";
+  (VOID)GuDiagnosticScan();
 
   stage = "stage-windows-image";
   s = GuBootLoadWindows();
@@ -165,6 +158,33 @@ EFI_STATUS EFIAPI UefiMain(EFI_HANDLE image, EFI_SYSTEM_TABLE *t) {
 
     return GuBootWindows();
   }
+
+  if (Gu.is_turing) {
+    GuLog("Operator requested unlock on Turing: assets pending hardware verification\n");
+    GuBootSay(
+        L"\r\n=======================================================\r\n"
+        L" [INFO] RTX 20 Series (Turing) Support Status:\r\n"
+        L" Hardware diagnostics and VBIOS scan logged successfully.\r\n"
+        L" Turing firmware execution is held in diagnostic mode\r\n"
+        L" pending physical silicon validation (fail-closed policy).\r\n"
+        L" Booting stock Windows in 3 seconds...\r\n"
+        L"=======================================================\r\n");
+    if (t->BootServices->Stall)
+      t->BootServices->Stall(3000000);
+    if (Gu.fault || GuBootClose() != EFI_SUCCESS)
+      return EFI_DEVICE_ERROR;
+    return GuBootWindows();
+  }
+
+  stage = "assets";
+  s = GuBootLoadAssets();
+  if (s != EFI_SUCCESS || Gu.fault)
+    goto failed;
+
+  stage = "read-only-cold-profile";
+  s = GuPrepare();
+  if (s != EFI_SUCCESS || Gu.fault)
+    goto failed;
 
   GuBootSay(
       L"\r\n=======================================================\r\n"

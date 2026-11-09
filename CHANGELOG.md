@@ -6,6 +6,17 @@ For packaged binaries and downloads, visit [GitHub Releases](https://github.com/
 
 ---
 
+## [v1.8.1] - 2026-11-09
+### Non-Blocking Hardware & VBIOS Diagnostic Probing (Addresses #15)
+- **Decoupled Diagnostic Hardware Probe from Firmware Assets:**
+  - Resolved early boot halt `STOP: stage=assets status=0x8000000000000003` reported by @mibby on GeForce RTX 2080 Super (DevID `0x1e07`). In prior versions, `GuBootLoadAssets()` ran before Windows staging and before menu selection, immediately rebooting into BIOS if firmware assets were absent or held in validation mode.
+  - Implemented `GuDiagnosticScan()` in `src/profile.c`: unconditionally probes cold-state registers (PMC, WPR2_HI, SS0, SS1), reads the 1MB VBIOS aperture, validates PCIR headers, computes SHA-256, and parses the ROM expansion chain, BIT table, and FWSEC descriptor geometry without mutating GPU state.
+  - Windows boot staging (`GuBootLoadWindows()`) and interactive boot menu (`GuBootChoose()`) now always load unconditionally. Selecting `[S]` (Stock Windows) or allowing the 30-second failsafe timer to expire boots cleanly into Windows on any system, writing the full diagnostic dump to `RUN000x.TXT` on the USB drive.
+  - Unlock firmware asset loading and verification are now strictly deferred until `[U]` or `[P]` is explicitly chosen by the operator.
+  - Updated build scripts `src/Build-Experimental-MSVC.ps1` and `src/Build-Dxe-Driver.ps1` to automatically deploy and Authenticode-sign output binaries to `bin/`.
+
+---
+
 ## [v1.8.0] - 2026-11-09
 ### Major Multi-Gen Platform Compatibility & Architecture Hardening
 - **Ampere GA102 FWSEC / WPR2 Attestation Hotfix (Resolves #12):**

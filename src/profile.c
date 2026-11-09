@@ -185,3 +185,28 @@ BOOLEAN GuAd104PromPlausible(const VOID *rom, UINTN sz) { return GuPromPlausible
 BOOLEAN GuAd104FwsecMatches(const struct gpu_unlock_fwsec *fw) { return GuFwsecMatches(fw); }
 EFI_STATUS GuAd104Prepare(VOID) { return GuPrepare(); }
 BOOLEAN GuAd104ColdEntry(VOID) { return GuColdEntry(); }
+
+EFI_STATUS GuDiagnosticScan(VOID) {
+  UINT32 ss0 = 0, ss1 = 0;
+  VOID *prom = NULL;
+  struct gpu_unlock_fwsec fw;
+
+  GuLog("DiagnosticScan: start\n");
+  (VOID)Config();
+  (VOID)Registers(&ss0, &ss1);
+
+  prom = GuAlloc(1048576);
+  if (!prom) {
+    GuLog("DiagnosticScan: PROM alloc failed\n");
+    return EFI_OUT_OF_RESOURCES;
+  }
+  GuCopyFromIo(prom, (VOID *)(UINTN)(Gu.bar_base + 0x300000), 1048576);
+  BOOLEAN prom_ok = GuPromPlausible(prom, 1048576);
+  int fwsec_res = gpu_unlock_vbios_fwsec(prom, 1048576, &fw);
+  BOOLEAN fwsec_match = (fwsec_res == 0) && GuFwsecMatches(&fw);
+  GuLog("DiagnosticScan: prom_ok=%u fwsec_res=%d fwsec_match=%u\n",
+        prom_ok, fwsec_res, fwsec_match);
+  GuFree(prom);
+  return EFI_SUCCESS;
+}
+

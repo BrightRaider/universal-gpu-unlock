@@ -9,6 +9,7 @@ BOOLEAN GuFwsecMatches(const struct gpu_unlock_fwsec *);
  * state and creates the immutable selector latch. No driver release here. */
 EFI_STATUS GuPrepare(VOID);
 BOOLEAN GuColdEntry(VOID);
+EFI_STATUS GuDiagnosticScan(VOID);
 
 typedef struct {
   const CHAR16 *path;
