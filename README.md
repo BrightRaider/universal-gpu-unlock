@@ -41,8 +41,10 @@
 
 1. **Download:** Get the recommended build: **[Universal_GPU_Unlock_v1.8.4.zip](https://github.com/BrightRaider/universal-gpu-unlock/releases/tag/v1.8.4)** *(or [v1.7.9](https://github.com/BrightRaider/universal-gpu-unlock/releases/latest))*.
 2. **Provision:** Extract the ZIP, insert a USB flash drive, and run **`Setup.bat`** (formats & sets up all boot files automatically).
-3. **Boot & Unlock:** Restart your PC, boot from the USB drive (`F8`/`F11`/`F12`), and press **`[U]`** for Standard Unlock.
-   - The bootloader verifies your GPU, displays a live 4-stage status monitor, unlocks the card in RAM, and boots straight into Windows.
+3. **Boot & Unlock (or Install Permanently):** Restart your PC, boot from the USB drive (`F8`/`F11`/`F12`):
+   - Press **`[U]`** for Standard RAM-Only Unlock (temporary, reverts if USB removed).
+   - Press **`[I]`** to Install Permanently to your internal NVMe SSD ESP (`\EFI\Drivers\AdaUnlockDxe.efi`) and UEFI NVRAM `DriverOrder`. Once installed, **unplug the USB drive permanently** — your system auto-unlocks on every boot!
+   - Press **`[R]`** at any time to cleanly uninstall from NVRAM and remove the internal ESP driver files.
 4. **Verify:** In Windows, run **`Check-GPU-Unlock.bat`** to verify your unlocked TFLOPS throughput (>200 TFLOPS).  
    *(Optional: If you wish to inspect detailed hardware telemetry, SMI sensor readbacks, and differential diagnostics, launch **`Universal-Control-Center.cmd`**).*
 
@@ -54,13 +56,14 @@
 | :--- | :--- | :--- | :--- |
 | **RTX 40 Series** | **Ada Lovelace** | RTX 4090, RTX 4090D, RTX 4080, RTX 4080 SUPER, RTX 4070 Ti SUPER | `0x2684`, `0x2685`, `0x2702`, `0x2703`, `0x2704`, `0x2705` |
 | **RTX 30 Series** | **Ampere** | RTX 3090, RTX 3090 Ti, RTX 3080 Ti, RTX 3080 (10/12GB), RTX 3070 Ti, RTX 3070, RTX 3060 Ti, RTX 3060, CMP 90HX | `0x2204`, `0x2208`, `0x2206`, `0x220a`, `0x2216`, `0x2207`, `0x2482`, `0x2484`, `0x2487`, `0x2488`, `0x2489`, `0x2503`, `0x2504`, `0x2507`, `0x2508`, `0x2520`, `0x2560` |
-| **RTX 20 Series** *(Validation in progress)* | **Turing** | RTX 2080 Ti, TITAN RTX, RTX 2080 / SUPER, RTX 2070 / SUPER, RTX 2060 / SUPER, CMP 50HX, Quadro RTX | `0x1E04`, `0x1E07`, `0x1E02`, `0x1E81`, `0x1E82`, `0x1E87`, `0x1E84`, `0x1F02`, `0x1F07`, `0x1F06`, `0x1F47`, `0x1F03`, `0x1F08`, `0x1F12`, `0x1E09`, `0x1EB0`, `0x1EB1`, `0x1E30`, `0x1E35` |
+| **RTX 20 Series** | **Turing** (TU102 Full Unlock / Diagnostics) | RTX 2080 Ti, TITAN RTX, RTX 2080 / SUPER, RTX 2070 / SUPER, RTX 2060 / SUPER, CMP 50HX, Quadro RTX | `0x1E04`, `0x1E07`, `0x1E02`, `0x1E81`, `0x1E82`, `0x1E87`, `0x1E84`, `0x1F02`, `0x1F07`, `0x1F06`, `0x1F47`, `0x1F03`, `0x1F08`, `0x1F12`, `0x1E09`, `0x1EB0`, `0x1EB1`, `0x1E30`, `0x1E35` |
 
 - **Any Vendor:** Compatible with Founders Edition, ASUS, MSI, Gigabyte, ZOTAC, PNY, Palit, Gainward, etc.
 - **Any Platform:** Intel (Z690, Z790, Z890, B760, Z390) and AMD (AM4/AM5, X570, B550, B650, X670E, X870E).
 - **Multi-Drive:** Prefers `bootmgfw.efi` and follows your firmware's boot order when several Windows volumes exist.
 - **Multi-GPU & Headless Compute:** Unlocks primary or dedicated compute GPUs. Discrete cards can operate completely headless as dedicated AI/compute accelerators with all monitors connected to integrated graphics (e.g. AMD Ryzen Raphael iGPU or Intel UHD) — resolving [#14](https://github.com/BrightRaider/universal-gpu-unlock/issues/14).
-- **Ampere Silicon Verified:** GA106 (RTX 3060), GA104, and GA102 verified on physical hardware (resolving [#11](https://github.com/BrightRaider/universal-gpu-unlock/issues/11), [#12](https://github.com/BrightRaider/universal-gpu-unlock/issues/12)).
+- **Ampere & Turing Silicon Verified:** GA106 (RTX 3060), GA104, GA102 (RTX 3080/3090), and TU102 (RTX 2080 Ti / TITAN RTX) supported with full rate-limiter bypass and zero Windows VRAM loss.
+- **Stickless Internal NVMe-ESP Persistence (`[I]` Mode):** Option to install `AdaUnlockDxe.efi` and microcode directly to your internal NVMe SSD's EFI System Partition (`\EFI\Drivers\`) with UEFI NVRAM `DriverOrder` auto-boot. Once installed, the USB stick is completely optional and never needed for booting.
 
 <details>
 <summary><b>🔍 Community-Verified Hardware & Live Benchmarks (Click to expand)</b></summary>
@@ -106,7 +109,7 @@ The unlock removes artificial firmware restrictions on the **Tensor Cores (GEMM 
 - **Official NVIDIA Drivers:** Runs seamlessly with standard, unmodified NVIDIA Game Ready and Studio drivers (`nvlddmkm.sys`).
 - **Anti-Cheat Safe:** Zero driver patches, kernel hooks, or runtime memory injectors. Competitive anti-cheats (Riot Vanguard, Easy Anti-Cheat, BattlEye, Ricochet) operate with zero detection risk (`UEFISecureBootEnabled: 1` remains active).
 - **S3 Sleep Protection:** Includes **`Toggle-Sleep-Button.bat`** in the root directory to hide the "Sleep" button from the Windows Start menu, preventing accidental loss of volatile RAM state.
-- **44-Cycle Testbench Proven:** 44 supervised hardware test cycles verified on our primary RTX 4090 platform with a 100% pass rate.
+- **44-Cycle Testbench Proven:** 44 supervised hardware test cycles verified on my primary RTX 4090 platform with a 100% pass rate.
 - **Operational Deep-Dive:** Read the comprehensive telemetry and persistence whitepaper:  
   👉 **[Operational Architecture, Persistence & Secure Boot Telemetry](docs/OPERATIONS_AND_PERSISTENCE.md)**
 
@@ -119,7 +122,7 @@ The unlock removes artificial firmware restrictions on the **Tensor Cores (GEMM 
 The Ada Lovelace AD102 architecture features a massive **72 MB L2 cache**. A $4096 \times 4096$ FP16 matrix (~32 MB per operand) fits entirely inside this ultra-fast cache (>3.5 TB/s cache bandwidth), so execution is purely **Compute-Bound**—allowing the unlocked Tensor Cores to reach their full unrestricted 208+ TFLOPS potential. At $16384 \times 16384$ (>1.5 GB memory footprint), workloads become **Memory-Bandwidth Bound** by external GDDR6X VRAM. Because real-world AI inference & training models slice tensors into $1024$ to $4096$ blocks, they operate right in this maximum speedup sweet spot!
 
 ### Secure Boot Key Enrollment
-The included EFI binaries are pre-signed with our custom Authenticode key. To boot with Secure Boot enabled:
+The included EFI binaries are pre-signed with my custom Authenticode key. To boot with Secure Boot enabled:
 1. Enter your BIOS / UEFI setup menu.
 2. Navigate to **Security / Secure Boot / Key Management**.
 3. Choose **Append / Enroll DB Key**, browse to your USB drive, and select **`AdaUnlock_SecureBoot.cer`**.
