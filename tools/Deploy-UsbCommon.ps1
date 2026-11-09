@@ -108,13 +108,6 @@ function Deploy-UniversalToUsb {
             Copy-Item -LiteralPath $tu.FullName -Destination (Join-Path $targetTuDir $tu.Name) -Force
             $assetsCopied++
         }
-        $gspDst = Join-Path $targetTuDir "gsp_ga10x.bin"
-        if (-not (Test-Path -LiteralPath $gspDst)) {
-            $gspSrc = Join-Path $ad102Src "gsp_ga10x.bin"
-            if (Test-Path -LiteralPath $gspSrc) {
-                Copy-Item -LiteralPath $gspSrc -Destination $gspDst -Force
-            }
-        }
         Emit-Log "  [OK] Turing (TU102/TU104/TU106) assets copied to $driveRoot\TU102-ASSETS\" "Green"
     }
 
@@ -155,8 +148,8 @@ Architect: BrightRaider | Desktop GUI: Ahsan Umair
 ## Boot Menu Modes:
 - [U] Full GPU Unlock (Proven rock-solid, volatile RAM-only)
 - [P] Experimental S3 Persistence Unlock (Boot-Script registration)
-- [I] Install DXE Driver to UEFI NVRAM (Auto-boot on startup)
-- [R] Remove DXE Driver from UEFI NVRAM
+- [I] Install DXE Driver to Internal ESP & UEFI NVRAM (Stickless permanent auto-boot)
+- [R] Remove DXE Driver from Internal ESP & UEFI NVRAM
 - [S] Stock Windows (Skip unlock, normal boot)
 
 ## Quick Start:

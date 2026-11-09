@@ -30,12 +30,24 @@ static const GU_ARCH_ASSETS GuAssetsAmpere = {
   }
 };
 
+static const GU_ARCH_ASSETS GuAssetsTuring = {
+  "Turing",
+  NULL,
+  {
+    {L"\\TU102-ASSETS\\booter_load_tu102.bin", "gpu-unlock/610.43.03/booter_load_tu102.bin", "3ae2cccc2666e5de1fee0db68a41ba37086124425eaed4d90718e194d5d48276", 59976},
+    {L"\\TU102-ASSETS\\v67-tu102-610.43.03.bin", "gpu-unlock/610.43.03/v67-tu102-610.43.03.bin", "2a0aa1f86d0b6afff5214d641d87d46dc98ef06ed908ff05d0ddbad5ffb7e197", 64000},
+    {L"\\TU102-ASSETS\\gsp_tu10x.bin", "gpu-unlock/610.43.03/gsp_tu10x.bin", "73065619db9ec921d19fc4e519dd04d91a9199b525eaca9b257b89fb8c5ec52c", 29352832},
+    {L"\\TU102-ASSETS\\gsp_boot_tu102.bin", "gpu-unlock/610.43.03/gsp_boot_tu102.bin", "8765694cd38beaa4e2b8b1b83a31fb7aee6cb9d8b7c6bc7a86e6d931a3a056c2", 4096},
+    {L"\\TU102-ASSETS\\gsp_boot_desc_tu102.bin", "gpu-unlock/610.43.03/gsp_boot_desc_tu102.bin", "9e7cca2cfdc5ce601b0adba39967850046108df6c2d23fff95578ca3f0ccbe01", 76}
+  }
+};
+
 const GU_ARCH_ASSETS *GuGetArchAssets(VOID) {
+  if (Gu.is_turing) return &GuAssetsTuring;
   return Gu.is_ampere ? &GuAssetsAmpere : &GuAssetsAda;
 }
 
 BOOLEAN GuAssetsValid(VOID) {
-  if (Gu.is_turing) return FALSE; /* No pinned TU102 assets exist yet: fail closed. */
   const GU_ARCH_ASSETS *arch = GuGetArchAssets();
   for (UINTN i = 0; i < GU_ASSET_COUNT; i++) {
     if (!GuAssets[i].name || strcmp(GuAssets[i].name, arch->entries[i].name) ||

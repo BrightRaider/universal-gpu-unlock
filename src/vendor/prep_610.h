@@ -19,6 +19,7 @@ typedef uint64_t u64;
 #include "arch_610.h"
 
 #define GU_BOOTER_IMAGE_SIZE 60416u
+#define GU_BOOTER_IMAGE_SIZE_TU102 59136u
 #define GU_BOOTER_IMAGE_SIZE_AD102 56832u
 #define GU_BOOTER_SIG_TOTAL 768u
 

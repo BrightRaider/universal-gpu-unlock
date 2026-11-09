@@ -22,7 +22,7 @@
 
 static EFI_SYSTEM_TABLE *Table;
 
-static EFI_HANDLE Self, Windows, OwnVolume;
+static EFI_HANDLE Self, Windows, OwnVolume, TargetEspVolume;
 
 static EFI_FILE_PROTOCOL *Root, *Log;
 
@@ -124,6 +124,7 @@ VOID GuLog(const char *format, ...) {
 }
 
 BOOLEAN GuBootLogOpen(VOID) { return Log != NULL; }
+EFI_HANDLE GuBootGetTargetEspVolume(VOID) { return TargetEspVolume; }
 
 EFI_STATUS GuBootOpen(EFI_HANDLE image, EFI_SYSTEM_TABLE *t) {
 
@@ -153,7 +154,7 @@ EFI_STATUS GuBootOpen(EFI_HANDLE image, EFI_SYSTEM_TABLE *t) {
   UINTN length = 0;
   BOOLEAN usb = FALSE, windows = FALSE;
 
-  if (s != EFI_SUCCESS || !Inspect(path, &length, &usb, &windows) || !usb)
+  if (s != EFI_SUCCESS || !Inspect(path, &length, &usb, &windows) || (!usb && !windows))
     return EFI_ACCESS_DENIED;
 
   s = b->HandleProtocol(OwnVolume, &FsGuid, (VOID **)&fs);
@@ -171,8 +172,14 @@ EFI_STATUS GuBootOpen(EFI_HANDLE image, EFI_SYSTEM_TABLE *t) {
                      EFI_FILE_MODE_CREATE,
                  EFI_FILE_DIRECTORY);
 
-  if (s != EFI_SUCCESS || !dir)
-    return EFI_DEVICE_ERROR;
+  if (s != EFI_SUCCESS || !dir) {
+    if (usb)
+      return EFI_DEVICE_ERROR;
+    Log = NULL;
+    if (!b->SetWatchdogTimer)
+      return EFI_UNSUPPORTED;
+    return b->SetWatchdogTimer(0, 0, 0, NULL);
+  }
 
   for (UINTN slot = 1; slot <= 9999; slot++) {
 
@@ -205,8 +212,11 @@ EFI_STATUS GuBootOpen(EFI_HANDLE image, EFI_SYSTEM_TABLE *t) {
   }
 
   EFI_STATUS closed = dir->Close(dir);
-  if (s != EFI_SUCCESS || !Log)
-    return s == EFI_SUCCESS ? EFI_OUT_OF_RESOURCES : s;
+  if (s != EFI_SUCCESS || !Log) {
+    if (usb)
+      return s == EFI_SUCCESS ? EFI_OUT_OF_RESOURCES : s;
+    Log = NULL;
+  }
 
   if (closed != EFI_SUCCESS)
     return closed;
@@ -289,13 +299,6 @@ static EFI_STATUS ReadFile(EFI_FILE_PROTOCOL *root, const CHAR16 *name,
 EFI_STATUS GuBootLoadAssets(VOID) {
   if (!Root || Gu.started)
     return EFI_NOT_READY;
-  if (Gu.is_turing) {
-    GuLog("Asset load refused: no TU102 firmware assets are available for "
-          "Turing\n");
-    GuBootSay(L"\r\n[ERROR] RTX 20 (Turing) firmware assets are not included "
-              L"in this release. Nothing was changed.\r\n");
-    return EFI_UNSUPPORTED;
-  }
   const GU_ARCH_ASSETS *arch = GuGetArchAssets();
   for (UINTN i = 0; i < GU_ASSET_COUNT; i++) {
     VOID *p = NULL;
@@ -304,6 +307,28 @@ EFI_STATUS GuBootLoadAssets(VOID) {
     if (s != EFI_SUCCESS && i == 2 && arch->alt_gsp_path) {
       /* Shared gsp_ga10x.bin fallback between directories */
       s = ReadFile(Root, arch->alt_gsp_path, arch->entries[i].bytes, &p);
+    }
+    if (s != EFI_SUCCESS && Table && Table->BootServices) {
+      /* Multi-volume fallback: search across all available filesystem volumes */
+      EFI_HANDLE *vh = NULL;
+      UINTN vcount = 0;
+      if (Table->BootServices->LocateHandleBuffer(ByProtocol, &FsGuid, NULL, &vcount, &vh) == EFI_SUCCESS && vh) {
+        for (UINTN v = 0; v < vcount; v++) {
+          if (vh[v] == OwnVolume) continue;
+          EFI_SIMPLE_FILE_SYSTEM_PROTOCOL *vfs = NULL;
+          EFI_FILE_PROTOCOL *vroot = NULL;
+          if (Table->BootServices->HandleProtocol(vh[v], &FsGuid, (VOID **)&vfs) == EFI_SUCCESS && vfs &&
+              vfs->OpenVolume(vfs, &vroot) == EFI_SUCCESS && vroot) {
+            s = ReadFile(vroot, arch->entries[i].path, arch->entries[i].bytes, &p);
+            if (s != EFI_SUCCESS && i == 2 && arch->alt_gsp_path) {
+              s = ReadFile(vroot, arch->alt_gsp_path, arch->entries[i].bytes, &p);
+            }
+            vroot->Close(vroot);
+            if (s == EFI_SUCCESS) break;
+          }
+        }
+        Table->BootServices->FreePool(vh);
+      }
     }
     if (s != EFI_SUCCESS) {
       GuLog("Asset load failed: %s (%s)\n", arch->entries[i].name,
@@ -472,6 +497,7 @@ EFI_STATUS GuBootLoadWindows(VOID) {
         &candidates[PreferredWindowsCandidate(candidates, stored, best_rank)];
     EFI_SIMPLE_FILE_SYSTEM_PROTOCOL *selected_fs = NULL;
     volume = pick->volume;
+    TargetEspVolume = volume;
     base = pick->path;
     path_bytes = pick->path_bytes;
     selected_name = pick->name;

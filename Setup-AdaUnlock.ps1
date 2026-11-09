@@ -184,6 +184,14 @@ $gaHashes = @{
     "gsp_boot_desc_ga102.bin" = "cc5a3fc1f4c47f2fe107b1b68f0176d8a448e6dec84b575e5560ccef5262bf15"
 }
 
+$tuHashes = @{
+    "booter_load_tu102.bin" = "3ae2cccc2666e5de1fee0db68a41ba37086124425eaed4d90718e194d5d48276"
+    "v67-tu102-610.43.03.bin" = "2a0aa1f86d0b6afff5214d641d87d46dc98ef06ed908ff05d0ddbad5ffb7e197"
+    "gsp_tu10x.bin" = "73065619db9ec921d19fc4e519dd04d91a9199b525eaca9b257b89fb8c5ec52c"
+    "gsp_boot_tu102.bin" = "8765694cd38beaa4e2b8b1b83a31fb7aee6cb9d8b7c6bc7a86e6d931a3a056c2"
+    "gsp_boot_desc_tu102.bin" = "9e7cca2cfdc5ce601b0adba39967850046108df6c2d23fff95578ca3f0ccbe01"
+}
+
 $allValid = $true
 if (Test-Path (Join-Path $driveLetter "AD102-ASSETS")) {
     Write-Host "  Verifying AD102 Assets:" -ForegroundColor Gray
@@ -208,6 +216,22 @@ if (Test-Path (Join-Path $driveLetter "GA102-ASSETS")) {
         if (Test-Path $filePath) {
             $actualHash = (Get-FileHash -Path $filePath -Algorithm SHA256).Hash.ToLower()
             if ($actualHash -eq $gaHashes[$name]) {
+                Write-Host "    [OK] ${name}: verified bit-exact." -ForegroundColor Green
+            } else {
+                Write-Host "    [FAIL] ${name}: checksum mismatch ($actualHash)" -ForegroundColor Red
+                $allValid = $false
+            }
+        }
+    }
+}
+
+if (Test-Path (Join-Path $driveLetter "TU102-ASSETS")) {
+    Write-Host "  Verifying TU102 Assets:" -ForegroundColor Gray
+    foreach ($name in $tuHashes.Keys) {
+        $filePath = Join-Path $driveLetter "TU102-ASSETS\$name"
+        if (Test-Path $filePath) {
+            $actualHash = (Get-FileHash -Path $filePath -Algorithm SHA256).Hash.ToLower()
+            if ($actualHash -eq $tuHashes[$name]) {
                 Write-Host "    [OK] ${name}: verified bit-exact." -ForegroundColor Green
             } else {
                 Write-Host "    [FAIL] ${name}: checksum mismatch ($actualHash)" -ForegroundColor Red

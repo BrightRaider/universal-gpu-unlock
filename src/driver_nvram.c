@@ -1,14 +1,18 @@
 /* SPDX-License-Identifier: GPL-2.0-only */
 #include "port.h"
 #include "compat/compat.h"
+#include "boot_io.h"
+#include "profile.h"
 #include <Protocol/LoadedImage.h>
 #include <Protocol/DevicePath.h>
 #include <Protocol/SimpleFileSystem.h>
+#include <Guid/FileInfo.h>
 
 static EFI_GUID GlobalGuid = {0x8be4df61, 0x93ca, 0x11d2, {0xaa, 0x0d, 0, 0xe0, 0x98, 0x03, 0x2b, 0x8c}};
 static EFI_GUID LoadedGuid = EFI_LOADED_IMAGE_PROTOCOL_GUID;
 static EFI_GUID PathGuid = EFI_DEVICE_PATH_PROTOCOL_GUID;
 static EFI_GUID FsGuid = EFI_SIMPLE_FILE_SYSTEM_PROTOCOL_GUID;
+static EFI_GUID InfoGuid = EFI_FILE_INFO_ID;
 
 #ifndef LOAD_OPTION_ACTIVE
 #define LOAD_OPTION_ACTIVE 0x00000001U
@@ -89,17 +93,168 @@ static EFI_STATUS ReadDriverOrder(EFI_RUNTIME_SERVICES *rs, UINT16 order[GU_DRIV
   return EFI_SUCCESS;
 }
 
-static EFI_STATUS DriverFilePresent(EFI_BOOT_SERVICES *bs, EFI_HANDLE volume) {
+static EFI_STATUS DriverFilePresentOnVolume(EFI_BOOT_SERVICES *bs, EFI_HANDLE volume, const CHAR16 *path) {
   EFI_SIMPLE_FILE_SYSTEM_PROTOCOL *fs = NULL;
   EFI_FILE_PROTOCOL *root = NULL, *file = NULL;
   EFI_STATUS s = bs->HandleProtocol(volume, &FsGuid, (VOID **)&fs);
   if (s != EFI_SUCCESS || !fs) return EFI_UNSUPPORTED;
   s = fs->OpenVolume(fs, &root);
   if (s != EFI_SUCCESS || !root) return EFI_DEVICE_ERROR;
-  s = root->Open(root, &file, (CHAR16 *)DriverFile, EFI_FILE_MODE_READ, 0);
+  s = root->Open(root, &file, (CHAR16 *)path, EFI_FILE_MODE_READ, 0);
   if (s == EFI_SUCCESS && file) file->Close(file);
   root->Close(root);
   return s;
+}
+
+static EFI_STATUS CopyFileBetweenVolumes(EFI_BOOT_SERVICES *bs,
+                                         EFI_HANDLE src_vol, const CHAR16 *src_path,
+                                         EFI_HANDLE dst_vol, const CHAR16 *dst_dir, const CHAR16 *dst_file) {
+  if (!bs || !src_vol || !dst_vol || !src_path || !dst_file) return EFI_INVALID_PARAMETER;
+  EFI_SIMPLE_FILE_SYSTEM_PROTOCOL *src_fs = NULL, *dst_fs = NULL;
+  EFI_FILE_PROTOCOL *src_root = NULL, *dst_root = NULL, *src_file = NULL, *dst_dir_proto = NULL, *dst_file_proto = NULL;
+  EFI_STATUS s;
+
+  s = bs->HandleProtocol(src_vol, &FsGuid, (VOID **)&src_fs);
+  if (s != EFI_SUCCESS || !src_fs) return s;
+  s = src_fs->OpenVolume(src_fs, &src_root);
+  if (s != EFI_SUCCESS || !src_root) return s;
+
+  s = src_root->Open(src_root, &src_file, (CHAR16 *)src_path, EFI_FILE_MODE_READ, 0);
+  if (s != EFI_SUCCESS || !src_file) {
+    src_root->Close(src_root);
+    return s;
+  }
+
+  UINT64 info_buf[128];
+  UINTN info_sz = sizeof(info_buf);
+  s = src_file->GetInfo(src_file, &InfoGuid, &info_sz, info_buf);
+  if (s != EFI_SUCCESS) {
+    src_file->Close(src_file);
+    src_root->Close(src_root);
+    return s;
+  }
+
+  EFI_FILE_INFO *info = (EFI_FILE_INFO *)info_buf;
+  UINTN file_sz = (UINTN)info->FileSize;
+  VOID *buf = NULL;
+  s = bs->AllocatePool(EfiBootServicesData, file_sz, (VOID **)&buf);
+  if (s != EFI_SUCCESS || !buf) {
+    src_file->Close(src_file);
+    src_root->Close(src_root);
+    return EFI_OUT_OF_RESOURCES;
+  }
+
+  UINTN read_bytes = file_sz;
+  s = src_file->Read(src_file, &read_bytes, buf);
+  src_file->Close(src_file);
+  src_root->Close(src_root);
+  if (s != EFI_SUCCESS || read_bytes != file_sz) {
+    bs->FreePool(buf);
+    return EFI_DEVICE_ERROR;
+  }
+
+  s = bs->HandleProtocol(dst_vol, &FsGuid, (VOID **)&dst_fs);
+  if (s != EFI_SUCCESS || !dst_fs) {
+    bs->FreePool(buf);
+    return s;
+  }
+  s = dst_fs->OpenVolume(dst_fs, &dst_root);
+  if (s != EFI_SUCCESS || !dst_root) {
+    bs->FreePool(buf);
+    return s;
+  }
+
+  if (dst_dir && *dst_dir) {
+    s = dst_root->Open(dst_root, &dst_dir_proto, (CHAR16 *)dst_dir,
+                       EFI_FILE_MODE_READ | EFI_FILE_MODE_WRITE | EFI_FILE_MODE_CREATE,
+                       EFI_FILE_DIRECTORY);
+    if (s != EFI_SUCCESS || !dst_dir_proto) {
+      dst_root->Close(dst_root);
+      bs->FreePool(buf);
+      return s;
+    }
+  } else {
+    dst_dir_proto = dst_root;
+  }
+
+  s = dst_dir_proto->Open(dst_dir_proto, &dst_file_proto, (CHAR16 *)dst_file,
+                          EFI_FILE_MODE_READ | EFI_FILE_MODE_WRITE | EFI_FILE_MODE_CREATE, 0);
+  if (s == EFI_SUCCESS && dst_file_proto) {
+    UINTN write_bytes = file_sz;
+    s = dst_file_proto->Write(dst_file_proto, &write_bytes, buf);
+    dst_file_proto->Close(dst_file_proto);
+  }
+
+  if (dst_dir_proto != dst_root) dst_dir_proto->Close(dst_dir_proto);
+  dst_root->Close(dst_root);
+  bs->FreePool(buf);
+  return s;
+}
+
+static VOID StageArchAssetsToVolume(EFI_BOOT_SERVICES *bs, EFI_HANDLE src_vol, EFI_HANDLE dst_vol) {
+  const GU_ARCH_ASSETS *arch = GuGetArchAssets();
+  if (!arch || !src_vol || !dst_vol || src_vol == dst_vol) return;
+
+  for (UINTN i = 0; i < GU_ASSET_COUNT; i++) {
+    const CHAR16 *path = arch->entries[i].path;
+    if (!path) continue;
+    const CHAR16 *fn = path;
+    while (*fn == L'\\') fn++;
+    const CHAR16 *slash = fn;
+    while (*slash && *slash != L'\\') slash++;
+    if (*slash == L'\\') {
+      CHAR16 dir[64];
+      UINTN dir_len = slash - path;
+      if (dir_len < 63) {
+        for (UINTN k = 0; k < dir_len; k++) dir[k] = path[k];
+        dir[dir_len] = 0;
+        const CHAR16 *name = slash + 1;
+        (VOID)CopyFileBetweenVolumes(bs, src_vol, path, dst_vol, dir, name);
+      }
+    }
+  }
+}
+
+static EFI_HANDLE LocateInternalEspVolume(EFI_BOOT_SERVICES *bs) {
+  EFI_HANDLE target = GuBootGetTargetEspVolume();
+  if (target) return target;
+
+  EFI_HANDLE *h = NULL;
+  UINTN count = 0;
+  EFI_STATUS s = bs->LocateHandleBuffer(ByProtocol, &FsGuid, NULL, &count, &h);
+  if (s != EFI_SUCCESS || !h) return NULL;
+
+  for (UINTN i = 0; i < count; i++) {
+    EFI_DEVICE_PATH_PROTOCOL *p = NULL;
+    if (bs->HandleProtocol(h[i], &PathGuid, (VOID **)&p) != EFI_SUCCESS || !p) continue;
+
+    /* Check for media/disk path that is not USB */
+    BOOLEAN is_usb = FALSE, is_media = FALSE;
+    const EFI_DEVICE_PATH_PROTOCOL *node = p;
+    while (node->Type != 0x7f || node->SubType != 0xff) {
+      UINTN len = (UINTN)node->Length[0] | ((UINTN)node->Length[1] << 8);
+      if (len < 4) break;
+      if (node->Type == 0x03 && node->SubType == 0x05) is_usb = TRUE; /* MESSAGING / MSG_USB_DP */
+      if (node->Type == 0x04) is_media = TRUE; /* MEDIA_DEVICE_PATH */
+      node = (const EFI_DEVICE_PATH_PROTOCOL *)((const UINT8 *)node + len);
+    }
+    if (is_media && !is_usb) {
+      EFI_SIMPLE_FILE_SYSTEM_PROTOCOL *fs = NULL;
+      EFI_FILE_PROTOCOL *root = NULL, *mgfw = NULL;
+      if (bs->HandleProtocol(h[i], &FsGuid, (VOID **)&fs) == EFI_SUCCESS && fs &&
+          fs->OpenVolume(fs, &root) == EFI_SUCCESS && root) {
+        if (root->Open(root, &mgfw, L"\\EFI\\Microsoft\\Boot\\bootmgfw.efi", EFI_FILE_MODE_READ, 0) == EFI_SUCCESS && mgfw) {
+          mgfw->Close(mgfw);
+          root->Close(root);
+          target = h[i];
+          break;
+        }
+        root->Close(root);
+      }
+    }
+  }
+  bs->FreePool(h);
+  return target;
 }
 
 EFI_STATUS GuInstallDriverOption(EFI_HANDLE image, EFI_SYSTEM_TABLE *t) {
@@ -111,11 +266,37 @@ EFI_STATUS GuInstallDriverOption(EFI_HANDLE image, EFI_SYSTEM_TABLE *t) {
   EFI_STATUS s = bs->HandleProtocol(image, &LoadedGuid, (VOID **)&loaded);
   if (s != EFI_SUCCESS || !loaded || !loaded->DeviceHandle) return EFI_UNSUPPORTED;
 
-  s = DriverFilePresent(bs, loaded->DeviceHandle);
-  if (s != EFI_SUCCESS) return s;
+  /* Verify source driver file exists on the boot medium */
+  const CHAR16 *src_driver_path = DriverFile;
+  s = DriverFilePresentOnVolume(bs, loaded->DeviceHandle, src_driver_path);
+  if (s != EFI_SUCCESS) {
+    src_driver_path = L"\\EFI\\BOOT\\AdaUnlockDxe.efi";
+    s = DriverFilePresentOnVolume(bs, loaded->DeviceHandle, src_driver_path);
+    if (s != EFI_SUCCESS) return s;
+  }
+
+  EFI_HANDLE install_vol = loaded->DeviceHandle;
+  EFI_HANDLE esp_vol = LocateInternalEspVolume(bs);
+  BOOLEAN is_internal = FALSE;
+
+  if (esp_vol && esp_vol != loaded->DeviceHandle) {
+    /* Copy AdaUnlockDxe.efi to the Internal NVMe-ESP */
+    s = CopyFileBetweenVolumes(bs, loaded->DeviceHandle, src_driver_path,
+                               esp_vol, L"\\EFI\\Drivers", L"AdaUnlockDxe.efi");
+    if (s == EFI_SUCCESS) {
+      install_vol = esp_vol;
+      is_internal = TRUE;
+      GuLog("GuInstallDriverOption: Successfully deployed AdaUnlockDxe.efi to Internal ESP\\EFI\\Drivers\n");
+      /* Also stage active architecture assets to the Internal ESP */
+      StageArchAssetsToVolume(bs, loaded->DeviceHandle, esp_vol);
+    } else {
+      GuLog("GuInstallDriverOption: Warning: ESP copy failed (s=%#llx), falling back to USB medium\n",
+            (unsigned long long)s);
+    }
+  }
 
   EFI_DEVICE_PATH_PROTOCOL *vol_path = NULL;
-  s = bs->HandleProtocol(loaded->DeviceHandle, &PathGuid, (VOID **)&vol_path);
+  s = bs->HandleProtocol(install_vol, &PathGuid, (VOID **)&vol_path);
   if (s != EFI_SUCCESS || !vol_path) return EFI_UNSUPPORTED;
 
   UINTN vol_size = GetDevicePathSize(vol_path);
@@ -186,6 +367,9 @@ EFI_STATUS GuInstallDriverOption(EFI_HANDLE image, EFI_SYSTEM_TABLE *t) {
     s = rs->SetVariable(L"DriverOrder", &GlobalGuid, GU_DRIVER_VAR_ATTRS, (count + 1) * sizeof(UINT16), new_order);
     if (s != EFI_SUCCESS && !reinstall) (VOID)rs->SetVariable(name, &GlobalGuid, GU_DRIVER_VAR_ATTRS, 0, NULL);
   }
+
+  GuLog("GuInstallDriverOption: Success! Registered Driver%04x in DriverOrder (internal_esp=%u)\n",
+        (unsigned)slot, (unsigned)is_internal);
   return s;
 }
 
@@ -219,5 +403,22 @@ EFI_STATUS GuRemoveDriverOption(EFI_SYSTEM_TABLE *t) {
     s = rs->SetVariable(name, &GlobalGuid, GU_DRIVER_VAR_ATTRS, 0, NULL);
     if (s != EFI_SUCCESS && result == EFI_SUCCESS) result = s;
   }
+
+  /* Also clean up AdaUnlockDxe.efi from the Internal ESP if accessible */
+  if (t->BootServices) {
+    EFI_HANDLE esp_vol = LocateInternalEspVolume(t->BootServices);
+    if (esp_vol) {
+      EFI_SIMPLE_FILE_SYSTEM_PROTOCOL *fs = NULL;
+      EFI_FILE_PROTOCOL *root = NULL, *file = NULL;
+      if (t->BootServices->HandleProtocol(esp_vol, &FsGuid, (VOID **)&fs) == EFI_SUCCESS && fs &&
+          fs->OpenVolume(fs, &root) == EFI_SUCCESS && root) {
+        if (root->Open(root, &file, (CHAR16 *)DriverFile, EFI_FILE_MODE_READ | EFI_FILE_MODE_WRITE, 0) == EFI_SUCCESS && file) {
+          (VOID)file->Delete(file);
+        }
+        root->Close(root);
+      }
+    }
+  }
+
   return result;
 }

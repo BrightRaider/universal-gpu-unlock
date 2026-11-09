@@ -38,6 +38,7 @@
 #define V67_FILE_GA102 "gpu-unlock/610.43.03/v67-ga102-610.43.03.bin"
 #define V67_FILE_AD102 "gpu-unlock/610.43.03/v67-ad102-610.43.03-four-plm.bin"
 #define GSP_FILE "gpu-unlock/610.43.03/gsp_ga10x.bin"
+#define GSP_FILE_TU10X "gpu-unlock/610.43.03/gsp_tu10x.bin"
 #define BOOT_FILE_GA102 "gpu-unlock/610.43.03/gsp_boot_ga102.bin"
 #define BOOT_FILE_AD102 "gpu-unlock/610.43.03/gsp_boot_ad102.bin"
 #define BOOT_DESC_FILE_GA102 "gpu-unlock/610.43.03/gsp_boot_desc_ga102.bin"
@@ -79,11 +80,11 @@ static const struct gpu_unlock_assets *unlock_assets(const struct pci_dev *pdev)
 		.arch = GU_BOOTER_AD10X, .boot_image_size = 36864,
 	};
 	static const struct gpu_unlock_assets tu102 = {
-		.booter = BOOTER_FILE_TU102, .gsp = GSP_FILE,
+		.booter = BOOTER_FILE_TU102, .gsp = GSP_FILE_TU10X,
 		.boot = BOOT_FILE_TU102, .desc = BOOT_DESC_FILE_TU102,
 		.payload = V67_FILE_TU102,
 		.signature_section = ".fwsignature_tu10x",
-		.arch = GU_BOOTER_TU10X, .boot_image_size = 24576,
+		.arch = GU_BOOTER_TU10X, .boot_image_size = 4096,
 	};
 
 	if (gpu_is_ada_device(pdev->device))
@@ -1343,7 +1344,7 @@ static int unlock_transaction_gfw(struct unlock_transaction_work *work)
 				return GU_RESULT(-EBUSY);
 			}
             if (!Gu.profile_verified || !GuEntrySelectorsMatch(ss0,ss1) ||
-                inaccessible(ss0) || ss0==GU_SS0_UNLOCK || (ss1 > 7) ||
+                (!gpu_is_turing_device(work->pdev->device) && (inaccessible(ss0) || ss0==GU_SS0_UNLOCK || (ss1 > 7))) ||
                 work->plm_entry!=0xffffff8f || sample.plm!=0x8b8f ||
                 sample.boot!=0x3ff || sample.cpuctl!=0x10 || wpr_hi)
                 return GU_RESULT(-EIO);
@@ -1510,6 +1511,11 @@ static int unlock_transaction_selector(struct unlock_transaction_work *work)
 {
     int ret;
     if (!work->payload_verified || check_entry_selectors(work)) return GU_RESULT(-EPROTO);
+    if (gpu_is_turing_device(work->pdev->device)) {
+        /* On Turing, rate-limiter override is fully mediated via SEC2 V67 payload and GSP boot;
+         * speed select registers 0x82381c/0x823820 are unmapped. */
+        return 0;
+    }
     ret=write_selector(work,"SS0",GU_FEAT_SS0_OFFSET,GU_SS0_UNLOCK);
     if (ret || !GuSelectorPhase(GU_SELECTOR_PHASE_SS0_WRITTEN) ||
         !GuSelectorPhase(GU_SELECTOR_PHASE_SS1_WRITE)) return GU_RESULT(-EIO);
@@ -1665,13 +1671,15 @@ static int unlock_transaction_reset(struct unlock_transaction_work *work)
 	/* Both V67 publication and stock-signature restoration must complete. */
 	if (work->signature_calls != 2)
 		return GU_RESULT(-EPROTO);
-	if (read_bar(work, GU_FEAT_SS0_OFFSET, &ss0) || ss0 == ~0u ||
-	    read_bar(work, GU_FEAT_SS1_OFFSET, &ss1) || ss1 == ~0u)
-		return GU_RESULT(-ENODEV);
-	dev_info(&work->pdev->dev, "pre-FLR selectors: ss0=%#x expected=%#x ss1=%#x expected=%#x\n",
-		ss0, GU_SS0_UNLOCK, ss1, GU_SS1_UNLOCK);
-	if (ss0 != GU_SS0_UNLOCK || ss1 != GU_SS1_UNLOCK)
-		return GU_RESULT(-EIO);
+	if (!gpu_is_turing_device(work->pdev->device)) {
+		if (read_bar(work, GU_FEAT_SS0_OFFSET, &ss0) || ss0 == ~0u ||
+		    read_bar(work, GU_FEAT_SS1_OFFSET, &ss1) || ss1 == ~0u)
+			return GU_RESULT(-ENODEV);
+		dev_info(&work->pdev->dev, "pre-FLR selectors: ss0=%#x expected=%#x ss1=%#x expected=%#x\n",
+			ss0, GU_SS0_UNLOCK, ss1, GU_SS1_UNLOCK);
+		if (ss0 != GU_SS0_UNLOCK || ss1 != GU_SS1_UNLOCK)
+			return GU_RESULT(-EIO);
+	}
 	if (is_ad102(work)) {
 		ret = ad102_readout(work, "pre-FLR", true);
 		if (ret)
@@ -1734,8 +1742,9 @@ static int unlock_transaction_reset(struct unlock_transaction_work *work)
 	    !(cpuctl & GU_GFW_CPUCTL_HALTED) ||
 	    read_bar(work, 0x001fa824, &lo) || inaccessible(lo) ||
 	    read_bar(work, 0x001fa828, &hi) || inaccessible(hi) ||
-	    read_bar(work, GU_FEAT_SS0_OFFSET, &ss0) || inaccessible(ss0) ||
-	    read_bar(work, GU_FEAT_SS1_OFFSET, &ss1) || inaccessible(ss1) ||
+	    (!gpu_is_turing_device(work->pdev->device) &&
+	     (read_bar(work, GU_FEAT_SS0_OFFSET, &ss0) || inaccessible(ss0) ||
+	      read_bar(work, GU_FEAT_SS1_OFFSET, &ss1) || inaccessible(ss1))) ||
 	    read_bar(work, GU_FEAT_PLM_OFFSET, &plm) ||
 	    (plm & 0xffff0000u) == 0xbadf0000u)
 		return GU_RESULT(-ENODEV);
@@ -1748,7 +1757,8 @@ static int unlock_transaction_reset(struct unlock_transaction_work *work)
 		dev_err(&work->pdev->dev, "post-FLR WPR2 remains enabled: lo=%#x hi=%#x; stock driver requires HI.VAL=0\n", lo, hi);
 		return GU_RESULT(-EBUSY);
 	}
-	if (ss0 != GU_SS0_UNLOCK || ss1 != GU_SS1_UNLOCK)
+	if (!gpu_is_turing_device(work->pdev->device) &&
+	    (ss0 != GU_SS0_UNLOCK || ss1 != GU_SS1_UNLOCK))
 		return GU_RESULT(-EIO);
 	if (is_ad102(work)) {
 		ret = ad102_sample_permissions(work, "post-FLR", work->permission_after, false);

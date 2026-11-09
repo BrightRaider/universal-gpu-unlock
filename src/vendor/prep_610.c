@@ -21,6 +21,12 @@ int gpu_unlock_booter_validate(enum gpu_unlock_booter_arch arch,
 		return GU_DIAG(-EINVAL);
 	switch (arch) {
 	case GU_BOOTER_TU10X:
+		expected_image = 59136;
+		data_off = 34048;
+		data_size = 25088;
+		app_size = 33792;
+		patch_loc = 34560;
+		break;
 	case GU_BOOTER_GA10X:
 		expected_image = 60416;
 		data_off = 35328;
@@ -66,6 +72,18 @@ u32 gpu_unlock_fuse_version(u32 raw)
 }
 
 static const struct gpu_unlock_booter_geometry gpu_unlock_boot_fws[] = {
+	{	/* TU102 BooterLoadUcode, 610.43.03 */
+		.image_size = GU_BOOTER_IMAGE_SIZE_TU102,
+		.sig_bytes = GU_BOOTER_SIG_TOTAL,
+		.hdr = {
+			.os_code_off = 0, .os_code_size = 256,
+			.os_data_off = 34048, .os_data_size = 25088,
+			.num_apps = 1, .app_code_off = 256, .app_code_size = 33792,
+			.app_data_off = 256, .app_data_size = 0,
+			.patch_loc = 34560, .ucode_id = 3, .engine_id = 1,
+			.num_sigs = 2, .sig_bytes = GU_BOOTER_SIG_TOTAL,
+		},
+	},
 	{	/* GA102 BooterLoadUcode, 610.43.03 */
 		.image_size = GU_BOOTER_IMAGE_SIZE,
 		.sig_bytes = GU_BOOTER_SIG_TOTAL,
@@ -247,32 +265,59 @@ static void wr64(u8 *p, u64 value)
 int gpu_unlock_boot_desc_parse(const u8 *data, size_t size, u32 image_size,
 			       struct gpu_unlock_boot_desc *out)
 {
-	static const unsigned int ranges[] = { 1, 3, 8, 10, 12 };
+	static const unsigned int ranges_v5[] = { 1, 3, 8, 10, 12 };
+	static const unsigned int ranges_v4[] = { 1, 3 };
 	unsigned int i;
+	u32 ver;
 
-	if (!data || !out || size != 84 || !image_size ||
-	    rd32(data) != 5 || rd32(data + 56) != 1 ||
-	    rd32(data + 76) != image_size || rd32(data + 80))
+	if (!data || !out || !image_size)
 		return GU_DIAG(-EINVAL);
-	for (i = 0; i < sizeof(ranges) / sizeof(ranges[0]); i++) {
-		u32 off = rd32(data + ranges[i] * 4);
-		u32 len = rd32(data + (ranges[i] + 1) * 4);
 
-		if (!len || off > image_size || len > image_size - off)
-			return GU_DIAG(-ERANGE);
+	ver = rd32(data);
+	if (ver == 4) {
+		/* Turing TU102 Falcon bootloader descriptor (Version 4, 76 bytes) */
+		if (size != 76 || image_size != 4096 || rd32(data + 56) != 0)
+			return GU_DIAG(-EINVAL);
+		for (i = 0; i < sizeof(ranges_v4) / sizeof(ranges_v4[0]); i++) {
+			u32 off = rd32(data + ranges_v4[i] * 4);
+			u32 len = rd32(data + (ranges_v4[i] + 1) * 4);
+
+			if (!len || off > image_size || len > image_size - off)
+				return GU_DIAG(-ERANGE);
+		}
+		for (i = 5; i <= 18; i++)
+			if (rd32(data + i * 4))
+				return GU_DIAG(-EOPNOTSUPP);
+		out->manifest_offset = 0;
+		out->data_offset = 0;
+		out->code_offset = 0;
+		out->image_size = image_size;
+		return 0;
+	} else if (ver == 5) {
+		if (size != 84 || rd32(data + 56) != 1 ||
+		    rd32(data + 76) != image_size || rd32(data + 80))
+			return GU_DIAG(-EINVAL);
+		for (i = 0; i < sizeof(ranges_v5) / sizeof(ranges_v5[0]); i++) {
+			u32 off = rd32(data + ranges_v5[i] * 4);
+			u32 len = rd32(data + (ranges_v5[i] + 1) * 4);
+
+			if (!len || off > image_size || len > image_size - off)
+				return GU_DIAG(-ERANGE);
+		}
+		/* This path doesn't boot a secure partition, load ITCM or enable SMP. */
+		for (i = 5; i <= 7; i++)
+			if (rd32(data + i * 4))
+				return GU_DIAG(-EOPNOTSUPP);
+		for (i = 15; i <= 18; i++)
+			if (rd32(data + i * 4))
+				return GU_DIAG(-EOPNOTSUPP);
+		out->manifest_offset = rd32(data + 32);
+		out->data_offset = rd32(data + 40);
+		out->code_offset = rd32(data + 48);
+		out->image_size = image_size;
+		return 0;
 	}
-	/* This path doesn't boot a secure partition, load ITCM or enable SMP. */
-	for (i = 5; i <= 7; i++)
-		if (rd32(data + i * 4))
-			return GU_DIAG(-EOPNOTSUPP);
-	for (i = 15; i <= 18; i++)
-		if (rd32(data + i * 4))
-			return GU_DIAG(-EOPNOTSUPP);
-	out->manifest_offset = rd32(data + 32);
-	out->data_offset = rd32(data + 40);
-	out->code_offset = rd32(data + 48);
-	out->image_size = image_size;
-	return 0;
+	return GU_DIAG(-EINVAL);
 }
 
 int gpu_unlock_radix_page(u8 out[GU_RADIX_PAGE], const u64 *children, size_t count)

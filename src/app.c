@@ -95,10 +95,10 @@ EFI_STATUS EFIAPI UefiMain(EFI_HANDLE image, EFI_SYSTEM_TABLE *t) {
       GuLog("DXE Driver successfully installed to Driver#### / DriverOrder\n");
 
       GuBootSay(
-          L"\r\n\r\n[OK] AdaUnlock DXE Driver installed to UEFI NVRAM.\r\n"
+          L"\r\n\r\n[OK] AdaUnlock DXE Driver installed to Internal NVMe-ESP & UEFI NVRAM.\r\n"
 
-          L"Driver runs during early boot on every startup while this USB "
-          L"drive is connected.\r\n"
+          L"Driver executes automatically during UEFI POST on every cold boot.\r\n"
+          L"USB drive is NO LONGER required and can be safely removed!\r\n"
 
           L"Rebooting system in 3 seconds...\r\n");
 
@@ -133,7 +133,7 @@ EFI_STATUS EFIAPI UefiMain(EFI_HANDLE image, EFI_SYSTEM_TABLE *t) {
 
     GuBootSay(
         s == EFI_SUCCESS
-            ? L"\r\n\r\n[OK] AdaUnlock DXE Driver removed from UEFI NVRAM.\r\n"
+            ? L"\r\n\r\n[OK] AdaUnlock DXE Driver removed from UEFI NVRAM & Internal ESP.\r\n"
         : s == EFI_NOT_FOUND ? L"\r\n\r\n[INFO] No AdaUnlock DXE Driver entry "
                                L"found. Nothing was changed.\r\n"
                              : L"\r\n\r\n[ERROR] Could not remove the "

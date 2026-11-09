@@ -6,6 +6,24 @@ For packaged binaries and downloads, visit [GitHub Releases](https://github.com/
 
 ---
 
+## [v1.8.4] - 2026-11-09
+### Turing TU102 Full Rate-Limiter Unlock & Internal NVMe-ESP Persistence (Addresses #15)
+- **Turing TU102 Full Rate-Limiter Unlock:**
+  - Integrated 5 verified binary assets for Turing TU102 (`booter_load_tu102.bin`, `v67-tu102-610.43.03.bin`, `gsp_tu10x.bin`, `gsp_boot_tu102.bin`, `gsp_boot_desc_tu102.bin`) in `TU102-ASSETS` with bit-exact SHA-256 attestation in `src/profile.c`.
+  - Added dedicated Version 4 Falcon bootloader descriptor parser (`image_size = 4096`, 76-byte layout) in `src/vendor/prep_610.c` alongside existing Version 5 descriptors.
+  - Configured TU102 booter image geometry (`expected_image = 59136`, `data_off = 34048`, `patch_loc = 34560`) in `gpu_unlock_boot_fws[]`.
+  - Handled Turing-specific register topology: bypassed unmapped speed select register writes (`0xbadf5040`) and cold-state polling during pre- and post-FLR reset sequences in `src/vendor/unlock_610.c`.
+  - Enables full V67 rate-limiter bypass on Turing TU102 (RTX 2080 Ti, TITAN RTX, Quadro RTX 6000/8000) with zero Windows VRAM loss (no GSP-RM runtime driver requirement under Windows).
+- **Internal NVMe-ESP DXE Persistence Installer (`[I]` Mode):**
+  - Upgraded the interactive boot menu installer mode `[I]` to install directly to the internal NVMe SSD's EFI System Partition (ESP) where Windows `bootmgfw.efi` resides.
+  - Automatically copies `AdaUnlockDxe.efi` to `\EFI\Drivers\AdaUnlockDxe.efi` and stages architecture microcode assets on the internal ESP volume.
+  - Registers a persistent `Driver####` entry in UEFI NVRAM `DriverOrder` targeting the internal NVMe ESP device path.
+  - Enables permanent stickless operation: the USB setup flash drive can be safely removed immediately after initial configuration and is never needed again.
+  - Multi-volume asset fallback in `src/boot_io.c` dynamically searches all accessible filesystem handles across the system.
+  - Uninstall mode `[R]` cleanly removes the NVRAM variable, cleans `DriverOrder`, and deletes staged files from the internal ESP.
+
+---
+
 ## [v1.8.3] - 2026-11-09
 ### Turing FWSEC vDesc v2 Geometry Parser & DMEM Bounds Hardening (Addresses #15)
 - **Turing FWSEC vDesc v2 Structural Geometry Parser:**
