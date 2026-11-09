@@ -7,7 +7,11 @@ For packaged binaries and downloads, visit [GitHub Releases](https://github.com/
 ---
 
 ## [v1.8.6] - 2026-11-10
-### Version Header Logging & Multi-Display Console Auto-Selection (Addresses #16)
+### Turing Selector Latch Fix, Top Version Header & Multi-Display Console Selection (Addresses #15, #16)
+- **Turing Speed Selector Latch & Post-Unlock Readiness Fix (Addresses #15):**
+  - Resolved `GuPrepare: GuLatchEntrySelectors failed` and `STOP: stage=read-only-cold-profile status=0x8000000000000006` on Turing GPUs reported by @mibby in `RUN0002.TXT`.
+  - In `src/port.c`, `GuLatchEntrySelectors()` now correctly handles unmapped speed select registers (`0xbadf5040`) on Turing silicon (`!Gu.is_turing`), safely latching cold-state selector values.
+  - In `src/unlock_release.c`, `GuUnlockReadyForWindows()` bypasses `ss0 != 0x88888888 || ss1 != 8` register checks on Turing silicon, since Turing rate-limiter bypass is mediated entirely via SEC2 V67 microcode.
 - **Top-of-Log Version Banner:**
   - Added explicit tool version header (`=== Universal Multi-Gen GPU Unlock v1.8.6 (BOOTX64.EFI) ===`) to line 1 of every `RUN000x.TXT` log.
   - Added corresponding banner (`=== Universal Multi-Gen GPU Unlock v1.8.6 (AdaUnlockDxe.efi) ===`) to early DXE driver execution logs.
