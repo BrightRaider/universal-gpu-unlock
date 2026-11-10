@@ -6,6 +6,19 @@ For packaged binaries and downloads, visit [GitHub Releases](https://github.com/
 
 ---
 
+## [v1.8.12] - 2026-11-10
+### ASUS AMI Aptio V 2-Agent Console Topology & Turing Post-FLR Status Drift Alignment (Addresses #15, #16)
+- **ASUS / AMI Aptio V 2-Agent Console Topology Support (Addresses #16):**
+  - Resolved `Preflight failed at Consumers(): 0x800000000000000f` (`Consumers check: pci=1 child=1 idle=0 text=0 virtual=0 gfx=1`) reported by @crdobbs on ASUS PRIME Z690-A with EVGA RTX 3080 Ti.
+  - On ASUS motherboards with AMI Aptio V UEFI firmware, console management does not create a third `ConSplitter` driver binding edge (`TextGuid`) on the GOP controller handle.
+  - In `Consumers()` (`src/unlock_release.c`), relaxed the 3-agent requirement to permit the 2-agent architecture (`Plan.gfx_agent` + `Plan.nv_agent`) when `Plan.out_agent` is absent.
+  - In `GuUnlockRelease()`, gracefully treats Stage 1 disconnect as a clean no-op when `Plan.out_agent` is NULL, smoothly proceeding with Stage 2 and Stage 3 driver detachment.
+- **Turing PCIe FLR Post-Reset Device Status Config Drift Tolerance (Addresses #15):**
+  - Resolved `Release check failed: config-drift` (`PCI config drift refused: offset=0x7c captured=0x112c8de1 now=0x10008de1 bits=0x12c0000 flrs=1`) reported by @mibby in `RUN0009.TXT`.
+  - In `ConfigStable()` (`src/unlock_release.c`), dynamically tolerates PCIe Device Status (DevSta at `(Gu.pcie_cap + 8) / 4` / `0x7c/4`) bit clears following PCIe FLR reset. Hardware-cleared transaction and error bits on Turing TU102 now cleanly pass stability validation, enabling seamless handover to Windows Boot Manager.
+
+---
+
 ## [v1.8.11] - 2026-11-10
 ### Turing PCIe FLR Pre-Reset Selector Guard (Addresses #15)
 - **Turing PCIe FLR Pre-Reset Selector Validation Guard (Addresses #15):**

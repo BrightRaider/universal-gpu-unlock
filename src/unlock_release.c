@@ -382,13 +382,21 @@ static EFI_STATUS ReadConfig(UINT32 c[64]) {
   return s;
 }
 /* RUN0002 did not identify PCI drift: do not assume it caused the stop.
- * Retain v0.5.0's narrow rule: only preexisting CED/URD may clear after FLR. */
+ * Only preexisting DevSta/LinkSta error and transaction bits may clear after FLR. */
 static BOOLEAN ConfigStable(const UINT32 c[64]) {
   for(UINTN i=0;i<64;i++) {
     UINT32 drift=c[i]^Plan.config[i];
     if(!drift)continue;
-    BOOLEAN allowed=Gu.flrs==1&&i==0x80/4&&
-      !(c[i]&~Plan.config[i])&&!(drift&~0x00090000u);
+    BOOLEAN allowed=FALSE;
+    if (Gu.flrs==1 && !(c[i]&~Plan.config[i])) {
+      /* Device Status (DevSta) & Link Status (LinkSta) error and transaction bits
+       * clear upon PCIe FLR reset. On Ada, DevSta is at 0x80/4 (pcie_cap=0x78);
+       * on Turing, DevSta is at 0x7c/4 (pcie_cap=0x74). */
+      if (i == 0x7c/4 || i == 0x80/4 ||
+          (Gu.pcie_cap && (i == (Gu.pcie_cap + 8) / 4 || i == (Gu.pcie_cap + 0x10) / 4))) {
+        allowed = TRUE;
+      }
+    }
     if(!allowed) {
       NOTE("PCI config drift refused: offset=%#x captured=%#x now=%#x bits=%#x flrs=%u\n",
         (unsigned)(i*4),Plan.config[i],c[i],drift,Gu.flrs);
@@ -469,18 +477,32 @@ static EFI_STATUS Consumers(VOID) {
     }
     return EFI_SUCCESS;
   }
-  if(pci<1||(child<1&&idle<1)||text<1||gfx<1||!Plan.nv_agent||!Plan.out_agent||!Plan.gfx_agent||
-     Plan.nv_agent==Plan.out_agent||Plan.out_agent==Plan.gfx_agent||Plan.gfx_agent==Plan.nv_agent) {
+  if(pci<1||(child<1&&idle<1)||gfx<1||!Plan.nv_agent||!Plan.gfx_agent||
+     Plan.nv_agent==Plan.gfx_agent) {
     GuLog("Consumers check: pci=%zu child=%zu idle=%zu text=%zu virtual=%zu gfx=%zu\n",
       pci, child, idle, text, virtual, gfx);
     return EFI_ACCESS_DENIED;
   }
-  for(UINTN i=0;i<3;i++){
-    EFI_STATUS s=Driver(i);
+  if(Plan.out_agent) {
+    if(Plan.out_agent==Plan.nv_agent || Plan.out_agent==Plan.gfx_agent) {
+      GuLog("Consumers check: invalid out_agent collision\n");
+      return EFI_ACCESS_DENIED;
+    }
+    EFI_STATUS s=Driver(0);
     if(s!=EFI_SUCCESS){
-      GuLog("Consumers: Driver(%zu) failed: %#llx\n",(size_t)i,(unsigned long long)s);
+      GuLog("Consumers: Driver(0) failed: %#llx\n",(unsigned long long)s);
       return s;
     }
+  }
+  EFI_STATUS s=Driver(1);
+  if(s!=EFI_SUCCESS){
+    GuLog("Consumers: Driver(1) failed: %#llx\n",(unsigned long long)s);
+    return s;
+  }
+  s=Driver(2);
+  if(s!=EFI_SUCCESS){
+    GuLog("Consumers: Driver(2) failed: %#llx\n",(unsigned long long)s);
+    return s;
   }
   return EFI_SUCCESS;
 }
@@ -517,7 +539,7 @@ EFI_STATUS GuUnlockPreflight(EFI_SYSTEM_TABLE *t,EFI_HANDLE self,EFI_HANDLE pci)
   if(s==EFI_SUCCESS) { s=UsbBaseline(); if(s!=EFI_SUCCESS) GuLog("Preflight failed at UsbBaseline(): %#llx\n", (unsigned long long)s); }
   GuLog("Preflight: status=%#llx graph=%zu code_profiles=%u%s\n",
     (unsigned long long)s,(size_t)Original.count,
-    Plan.headless ? (Plan.nv_agent ? 1u : 0u) : 3u,
+    Plan.headless ? (Plan.nv_agent ? 1u : 0u) : (Plan.out_agent ? 3u : 2u),
     Plan.headless ? " (headless)" : "");
   if(s==EFI_SUCCESS)GuLog("Endpoints: pci=%#llx gop=%#llx console=%#llx pointer_agent=%#llx\n",
     (unsigned long long)(UINTN)Plan.pci,(unsigned long long)(UINTN)Plan.gop,
@@ -630,14 +652,17 @@ EFI_STATUS GuUnlockRelease(VOID) {
       s=EFI_NOT_READY;
     }
     if(s==EFI_SUCCESS && (stage==3 || !Plan.headless)) {
-      if(stage==3 && Plan.nv_agent) s=Driver(2);
+      if(stage==1 && !Plan.out_agent) { /* no-op on ASUS / AMI Aptio V */ }
+      else if(stage==3 && Plan.nv_agent) s=Driver(2);
       else if(stage < 3) s=Driver(stage-1);
     }
     b->RestoreTPL(old);
     if(s!=EFI_SUCCESS||Gu.fault)return s==EFI_SUCCESS?EFI_DEVICE_ERROR:s;
     /* Record before the callback: an error may follow a partial driver stop. */
     Plan.mutated=TRUE;
-    if(stage==3 && !Plan.nv_agent) {
+    if(stage==1 && !Plan.out_agent) {
+      s=EFI_SUCCESS;
+    } else if(stage==3 && !Plan.nv_agent) {
       s=EFI_SUCCESS;
     } else {
       s=b->DisconnectController(stage==3?Plan.pci:Plan.gop,
