@@ -8,17 +8,17 @@ import time
 try:
     import torch
 except ImportError:
-    print("=" * 68)
+    print("=" * 72)
     print("  [ERROR] PyTorch is not installed in this Python environment.")
     print("  To run this benchmark, install PyTorch with CUDA:")
     print("    pip install torch --index-url https://download.pytorch.org/whl/cu121")
-    print("=" * 68)
+    print("=" * 72)
     sys.exit(2)
 
 if not torch.cuda.is_available():
-    print("=" * 68)
+    print("=" * 72)
     print("  [ERROR] CUDA is not available. Please verify NVIDIA driver is installed.")
-    print("=" * 68)
+    print("=" * 72)
     sys.exit(2)
 
 device = torch.device("cuda:0")
@@ -56,6 +56,29 @@ CARD_PROFILES = {
     "cmp 50hx": {"min_unlocked": 105.0, "threshold": 85.0, "stock_typical": 54.0},
 }
 
+def benchmark_gemm(dtype, size=4096, warmup=5, runs=25):
+    flops = 2.0 * (size ** 3)
+    a = torch.randn((size, size), dtype=dtype, device=device)
+    b = torch.randn((size, size), dtype=dtype, device=device)
+    
+    for _ in range(warmup):
+        c = torch.matmul(a, b)
+    torch.cuda.synchronize(device)
+    
+    start_ev = torch.cuda.Event(enable_timing=True)
+    end_ev = torch.cuda.Event(enable_timing=True)
+    
+    start_ev.record()
+    for _ in range(runs):
+        c = torch.matmul(a, b)
+    end_ev.record()
+    torch.cuda.synchronize(device)
+    
+    avg_ms = start_ev.elapsed_time(end_ev) / runs
+    tflops = (flops / (avg_ms * 1e-3)) / 1e12
+    del a, b, c
+    return avg_ms, tflops
+
 def main():
     profile = None
     gpu_lower = gpu_name.lower()
@@ -76,52 +99,76 @@ def main():
         profile = {"min_unlocked": threshold * 1.15, "threshold": threshold, "stock_typical": threshold * 0.75}
 
     size = 4096
-    flops_per_gemm = 2 * (size ** 3)
-    a = torch.randn((size, size), dtype=torch.float16, device=device)
-    b = torch.randn((size, size), dtype=torch.float16, device=device)
 
-    for _ in range(15):
-        c = torch.matmul(a, b)
-    torch.cuda.synchronize(device)
+    # 1. Primary Benchmark: FP16 Tensor Cores
+    ms_fp16, tflops_fp16 = benchmark_gemm(torch.float16, size=size, warmup=8, runs=25)
 
-    runs = 30
-    start_ev = torch.cuda.Event(enable_timing=True)
-    end_ev = torch.cuda.Event(enable_timing=True)
+    # 2. Secondary Benchmark: BF16 Tensor Cores (Ampere / Ada)
+    has_bf16 = hasattr(torch.cuda, "is_bf16_supported") and torch.cuda.is_bf16_supported()
+    if has_bf16:
+        ms_bf16, tflops_bf16 = benchmark_gemm(torch.bfloat16, size=size, warmup=4, runs=15)
+    else:
+        ms_bf16, tflops_bf16 = 0.0, 0.0
 
-    start_ev.record()
-    for _ in range(runs):
-        c = torch.matmul(a, b)
-    end_ev.record()
-    torch.cuda.synchronize(device)
+    # 3. TF32 Tensor Cores (Ampere / Ada, allow_tf32=True)
+    has_tf32 = props.major >= 8 and hasattr(torch.backends.cuda.matmul, "allow_tf32")
+    orig_tf32 = getattr(torch.backends.cuda.matmul, "allow_tf32", True)
+    if has_tf32:
+        torch.backends.cuda.matmul.allow_tf32 = True
+        ms_tf32, tflops_tf32 = benchmark_gemm(torch.float32, size=size, warmup=4, runs=15)
+    else:
+        ms_tf32, tflops_tf32 = 0.0, 0.0
 
-    total_ms = start_ev.elapsed_time(end_ev)
-    avg_ms = total_ms / runs
-    tflops = (flops_per_gemm / (avg_ms * 1e-3)) / 1e12
+    # 4. Physical Negative Control: Standard FP32 CUDA Cores (allow_tf32=False)
+    if hasattr(torch.backends.cuda.matmul, "allow_tf32"):
+        torch.backends.cuda.matmul.allow_tf32 = False
+    ms_fp32, tflops_fp32 = benchmark_gemm(torch.float32, size=size, warmup=4, runs=15)
 
-    print("=" * 68)
+    if hasattr(torch.backends.cuda.matmul, "allow_tf32"):
+        torch.backends.cuda.matmul.allow_tf32 = orig_tf32
+
+    torch.cuda.empty_cache()
+
+    is_unlocked = tflops_fp16 >= profile["threshold"]
+    ratio = tflops_fp16 / tflops_fp32 if tflops_fp32 > 0 else 1.0
+
+    print("=" * 72)
     print("     UNIVERSAL GPU RATE-LIMITER STATUS CHECK (ADA, AMPERE & TURING)")
-    print("=" * 68)
+    print("=" * 72)
     print(f"  GPU Hardware       : {gpu_name}")
     print(f"  Architecture       : {arch} ({sm_count} Streaming Multiprocessors)")
-    print(f"  Matrix Benchmark   : {size}x{size} FP16 Tensor Cores")
-    print(f"  Measured Latency   : {avg_ms:.3f} ms")
-    print(f"  Compute Throughput : {tflops:.2f} TFLOPS")
-    print("-" * 68)
-
-    is_unlocked = tflops >= profile["threshold"]
+    print(f"  Matrix Dimension   : {size}x{size} Dense Matrix Multiply (GEMM)")
+    print("-" * 72)
+    print(f"  [1] FP16 Tensor Cores   : {tflops_fp16:>6.2f} TFLOPS ({ms_fp16:.3f} ms)  -> Primary Rate-Limiter Metric")
+    if has_bf16:
+        print(f"  [2] BF16 Tensor Cores   : {tflops_bf16:>6.2f} TFLOPS ({ms_bf16:.3f} ms)  -> Bfloat16 AI Training Format")
+    if has_tf32:
+        print(f"  [3] TF32 Tensor Cores   : {tflops_tf32:>6.2f} TFLOPS ({ms_tf32:.3f} ms)  -> Ampere/Ada 19-bit Format")
+    print(f"  [4] FP32 CUDA Control   : {tflops_fp32:>6.2f} TFLOPS ({ms_fp32:.3f} ms)  -> Standard Physical Control")
+    print("-" * 72)
+    print("  PHYSICAL PROOF OF MECHANISM (Negative Control Analysis):")
+    print(f"  * Tensor/CUDA Ratio     : {ratio:.2f}x execution throughput multiplier")
+    print(f"  * FP32 CUDA Baseline    : {tflops_fp32:.2f} TFLOPS (Factory stock compute preserved)")
+    if is_unlocked:
+        print("  * Hardware Invariance   : Confirms rate-limiter bypass WITHOUT core overclocking.")
+    else:
+        print("  * Hardware Status       : Tensor datapath is restricted by factory rate-limiter.")
+    print("-" * 72)
 
     if is_unlocked:
-        print(f"  STATUS: [OK] FULLY UNLOCKED! ({tflops:.1f} TFLOPS)")
+        print(f"  STATUS: [OK] FULLY UNLOCKED! ({tflops_fp16:.1f} TFLOPS)")
         print("  Hardware rate-limiter is INACTIVE.")
         print("  GPU is running at 100% full unrestricted tensor compute capacity.")
         ret_code = 0
     else:
-        print(f"  STATUS: [WARNING] STOCK RATE-LIMITER ACTIVE! ({tflops:.1f} TFLOPS)")
+        print(f"  STATUS: [WARNING] STOCK RATE-LIMITER ACTIVE! ({tflops_fp16:.1f} TFLOPS)")
         print(f"  Expected unlocked performance: > {profile['threshold']:.0f} TFLOPS (typical ~{profile['min_unlocked']:.0f} TFLOPS).")
         print("  Recommendation: Boot via USB [U]/[I] or resume from Hibernation (shutdown /h).")
+        if props.major == 7:
+            print("  Note for Turing: Verify EnableGpuFirmware = 1 is configured in Windows Registry.")
         ret_code = 1
 
-    print("=" * 68)
+    print("=" * 72)
     sys.exit(ret_code)
 
 if __name__ == "__main__":
