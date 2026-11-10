@@ -239,13 +239,20 @@ failed:
     return EFI_ABORTED;
   }
 
-  GuBootSay(L"\r\nPreflight refused. No driver release or GPU transaction. Log "
-            L"saved to USB.\r\nReturning to Boot Menu in 3 seconds...\r\n");
+  GuBootSay(L"\r\n=======================================================\r\n"
+            L" UNIVERSAL GPU UNLOCK - PREFLIGHT REFUSED\r\n"
+            L"=======================================================\r\n"
+            L" Preflight check refused unlock. Hardware remains stock.\r\n"
+            L" Diagnostic log saved to USB: ");
+  GuBootSay(GuBootGetLogPath());
+  GuBootSay(L"\r\n Please report this log on GitHub if unexpected:\r\n"
+            L" https://github.com/BrightRaider/universal-gpu-unlock/issues\r\n\r\n"
+            L" Returning to Boot Menu in 5 seconds...\r\n");
 
   (VOID) GuBootClose();
 
   if (t && t->BootServices && t->BootServices->Stall)
-    t->BootServices->Stall(3000000);
+    t->BootServices->Stall(5000000);
 
   return s;
 }

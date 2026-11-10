@@ -28,6 +28,8 @@ static EFI_FILE_PROTOCOL *Root, *Log;
 
 static BOOLEAN Silent;
 
+static CHAR16 ActiveLogName[32] = L"\\GPU-UNLOCK\\RUN0001.TXT";
+
 static EFI_GUID LoadedGuid = EFI_LOADED_IMAGE_PROTOCOL_GUID,
                 FsGuid = EFI_SIMPLE_FILE_SYSTEM_PROTOCOL_GUID;
 
@@ -125,6 +127,7 @@ VOID GuLog(const char *format, ...) {
 
 BOOLEAN GuBootLogOpen(VOID) { return Log != NULL; }
 EFI_HANDLE GuBootGetTargetEspVolume(VOID) { return TargetEspVolume; }
+const CHAR16 *GuBootGetLogPath(VOID) { return ActiveLogName; }
 
 EFI_STATUS GuBootOpen(EFI_HANDLE image, EFI_SYSTEM_TABLE *t) {
 
@@ -166,6 +169,7 @@ EFI_STATUS GuBootOpen(EFI_HANDLE image, EFI_SYSTEM_TABLE *t) {
     return EFI_DEVICE_ERROR;
 
   EFI_FILE_PROTOCOL *dir = NULL;
+  BOOLEAN is_ad102_dir = FALSE;
 
   s = Root->Open(Root, &dir, L"\\GPU-UNLOCK",
                  EFI_FILE_MODE_READ | EFI_FILE_MODE_WRITE |
@@ -176,6 +180,8 @@ EFI_STATUS GuBootOpen(EFI_HANDLE image, EFI_SYSTEM_TABLE *t) {
                    EFI_FILE_MODE_READ | EFI_FILE_MODE_WRITE |
                        EFI_FILE_MODE_CREATE,
                    EFI_FILE_DIRECTORY);
+    if (s == EFI_SUCCESS && dir)
+      is_ad102_dir = TRUE;
   }
 
   if (s != EFI_SUCCESS || !dir) {
@@ -214,6 +220,18 @@ EFI_STATUS GuBootOpen(EFI_HANDLE image, EFI_SYSTEM_TABLE *t) {
     s = dir->Open(
         dir, &Log, name,
         EFI_FILE_MODE_READ | EFI_FILE_MODE_WRITE | EFI_FILE_MODE_CREATE, 0);
+    if (s == EFI_SUCCESS && Log) {
+      const CHAR16 *dir_prefix = is_ad102_dir ? L"\\AD102-UNLOCK\\" : L"\\GPU-UNLOCK\\";
+      UINTN d = 0, n = 0;
+      while (dir_prefix[d] && d < 20) {
+        ActiveLogName[d] = dir_prefix[d];
+        d++;
+      }
+      while (name[n] && d < 31) {
+        ActiveLogName[d++] = name[n++];
+      }
+      ActiveLogName[d] = L'\0';
+    }
     break;
   }
 
@@ -566,6 +584,26 @@ EFI_STATUS GuBootLoadWindows(VOID) {
   return s;
 }
 
+static VOID GuPrintCountdownPrompt(BOOLEAN hide_s3, UINTN sec) {
+  CHAR16 prompt[80];
+  const CHAR16 *prefix = hide_s3
+      ? L"\rSelect mode [U/I/R/S] (default: Stock Windows in "
+      : L"\rSelect mode [U/P/I/R/S] (default: Stock Windows in ";
+  UINTN i = 0;
+  while (prefix[i]) {
+    prompt[i] = prefix[i];
+    i++;
+  }
+  prompt[i++] = (CHAR16)(L'0' + ((sec / 10) % 10));
+  prompt[i++] = (CHAR16)(L'0' + (sec % 10));
+  prompt[i++] = L's';
+  prompt[i++] = L')';
+  prompt[i++] = L':';
+  prompt[i++] = L' ';
+  prompt[i] = L'\0';
+  GuBootSay(prompt);
+}
+
 EFI_STATUS GuBootChoose(CHAR16 *choice) {
 
   if (!choice || !Table || !Table->ConIn || !Table->ConIn->ReadKeyStroke)
@@ -601,16 +639,22 @@ EFI_STATUS GuBootChoose(CHAR16 *choice) {
   }
   GuBootSay(L"  [R] Remove DXE Driver from UEFI NVRAM\r\n"
             L"  [S] Stock Windows (Diagnostic hardware scan, logs to USB, normal boot)\r\n\r\n");
-  GuBootSay(hide_s3
-                ? L"Select mode [U/I/R/S] (default: Stock Windows in 30s): "
-                : L"Select mode [U/P/I/R/S] (default: Stock Windows in 30s): ");
 
-  for (UINTN i = 0; i < 300; i++) {
+#define GU_BOOT_TIMEOUT_SEC 15U
+  BOOLEAN timed_out = TRUE;
+
+  for (UINTN tick = 0; tick < GU_BOOT_TIMEOUT_SEC * 10; tick++) {
+    if (tick % 10 == 0) {
+      UINTN remaining = GU_BOOT_TIMEOUT_SEC - (tick / 10);
+      GuPrintCountdownPrompt(hide_s3, remaining);
+    }
 
     EFI_INPUT_KEY key;
     EFI_STATUS s = Table->ConIn->ReadKeyStroke(Table->ConIn, &key);
 
     if (s == EFI_SUCCESS) {
+      GuBootSay(L"\r\n");
+      timed_out = FALSE;
 
       if (key.UnicodeChar == 'u' || key.UnicodeChar == 'U') {
         *choice = L'U';
@@ -644,6 +688,17 @@ EFI_STATUS GuBootChoose(CHAR16 *choice) {
     s = Table->BootServices->Stall(100000);
     if (s != EFI_SUCCESS)
       return s;
+  }
+
+  if (timed_out) {
+    GuPrintCountdownPrompt(hide_s3, 0);
+    GuBootSay(L"\r\n\r\n[TIMEOUT] 15s elapsed - booting Stock Windows.\r\n"
+              L"  Diagnostic log: ");
+    GuBootSay(ActiveLogName);
+    GuBootSay(L"\r\n  Need help or want to report your hardware? Open an issue:\r\n"
+              L"  https://github.com/BrightRaider/universal-gpu-unlock/issues\r\n\r\n");
+    if (Table->BootServices && Table->BootServices->Stall)
+      Table->BootServices->Stall(2000000);
   }
 
   return EFI_SUCCESS;
@@ -680,9 +735,91 @@ EFI_STATUS GuBootWindows(VOID) {
 }
 
 VOID GuBootHalt(VOID) {
+  GuBootUnsilence();
 
   GuBootSay(
-      L"\r\nSTOPPED. Power OFF fully; next boot use Windows Boot Manager.\r\n");
+      L"\r\n=======================================================\r\n"
+      L" UNIVERSAL GPU UNLOCK - TRANSACTION HALTED\r\n"
+      L"=======================================================\r\n"
+      L" [!] Hardware unlock could not be completed safely.\r\n"
+      L" [+] Hardware state: SAFE (Registers intact, stock preserved)\r\n"
+      L" [+] Diagnostic log: ");
+  GuBootSay(ActiveLogName);
+  GuBootSay(
+      L"\r\n=======================================================\r\n"
+      L" Please report this issue with your log file on GitHub:\r\n"
+      L" https://github.com/BrightRaider/universal-gpu-unlock/issues\r\n\r\n");
+
+  /* Live countdown for automatic system reboot */
+  for (UINTN sec = 15; sec > 0; sec--) {
+    CHAR16 prompt[80];
+    const CHAR16 *prefix = L"\rRebooting to safe stock state in ";
+    UINTN i = 0;
+    while (prefix[i]) {
+      prompt[i] = prefix[i];
+      i++;
+    }
+    prompt[i++] = (CHAR16)(L'0' + ((sec / 10) % 10));
+    prompt[i++] = (CHAR16)(L'0' + (sec % 10));
+    prompt[i++] = L's';
+    prompt[i++] = L' ';
+    prompt[i++] = L'(';
+    prompt[i++] = L'p';
+    prompt[i++] = L'r';
+    prompt[i++] = L'e';
+    prompt[i++] = L's';
+    prompt[i++] = L's';
+    prompt[i++] = L' ';
+    prompt[i++] = L'a';
+    prompt[i++] = L'n';
+    prompt[i++] = L'y';
+    prompt[i++] = L' ';
+    prompt[i++] = L'k';
+    prompt[i++] = L'e';
+    prompt[i++] = L'y';
+    prompt[i++] = L' ';
+    prompt[i++] = L't';
+    prompt[i++] = L'o';
+    prompt[i++] = L' ';
+    prompt[i++] = L'r';
+    prompt[i++] = L'e';
+    prompt[i++] = L'b';
+    prompt[i++] = L'o';
+    prompt[i++] = L'o';
+    prompt[i++] = L't';
+    prompt[i++] = L' ';
+    prompt[i++] = L'n';
+    prompt[i++] = L'o';
+    prompt[i++] = L'w';
+    prompt[i++] = L')';
+    prompt[i++] = L'.';
+    prompt[i++] = L'.';
+    prompt[i++] = L'.';
+    prompt[i++] = L' ';
+    prompt[i] = L'\0';
+    GuBootSay(prompt);
+
+    for (UINTN tick = 0; tick < 10; tick++) {
+      if (Table && Table->ConIn && Table->ConIn->ReadKeyStroke) {
+        EFI_INPUT_KEY key;
+        if (Table->ConIn->ReadKeyStroke(Table->ConIn, &key) == EFI_SUCCESS) {
+          sec = 0;
+          break;
+        }
+      }
+      if (Table && Table->BootServices && Table->BootServices->Stall) {
+        Table->BootServices->Stall(100000);
+      }
+    }
+  }
+
+  GuBootSay(L"\r\nRebooting now...\r\n");
+  if (Table && Table->BootServices && Table->BootServices->Stall)
+    Table->BootServices->Stall(500000);
+
+  if (Table && Table->RuntimeServices && Table->RuntimeServices->ResetSystem) {
+    Table->RuntimeServices->ResetSystem(EfiResetCold, EFI_SUCCESS, 0, NULL);
+  }
 
 #if defined(_MSC_VER)
 
