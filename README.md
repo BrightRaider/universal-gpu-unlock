@@ -4,7 +4,7 @@
 ### High-Performance Tensor Core Rate-Limiter Bypass for NVIDIA GPUs
 
 [![GitHub Release](https://img.shields.io/github/v/release/BrightRaider/universal-gpu-unlock?color=blue&logo=github)](https://github.com/BrightRaider/universal-gpu-unlock/releases/latest)
-[![Pre-release](https://img.shields.io/badge/Pre--release-v1.8.8%20(Recommended)-orange?logo=github)](https://github.com/BrightRaider/universal-gpu-unlock/releases/tag/v1.8.8)
+[![Pre-release](https://img.shields.io/badge/Pre--release-v1.8.9%20(Recommended)-orange?logo=github)](https://github.com/BrightRaider/universal-gpu-unlock/releases/tag/v1.8.9)
 [![Downloads](https://img.shields.io/github/downloads/BrightRaider/universal-gpu-unlock/total?color=green&logo=github)](https://github.com/BrightRaider/universal-gpu-unlock/releases)
 [![Stars](https://img.shields.io/github/stars/BrightRaider/universal-gpu-unlock?style=social)](https://github.com/BrightRaider/universal-gpu-unlock)
 [![Safety](https://img.shields.io/badge/Safety-100%25%20RAM--Only-success.svg)](#-safety--anti-cheat-guarantee)
@@ -28,10 +28,11 @@
 ## ⚡ 60-Second Quick Start
 
 > [!TIP]
-> **🚀 Recommended: [Universal GPU Unlock v1.8.8 Pre-release](https://github.com/BrightRaider/universal-gpu-unlock/releases/tag/v1.8.8)**  
-> Version **v1.8.8** is the recommended build for all modern configurations. Key additions:
-> - **Turing TU102 Booter Signature & Fuse Hardening:** Resolves `patch_booter error=-34` on Turing silicon (RTX 2080 Ti / TITAN RTX) with dedicated production RSA-384 signature selection and FWSEC version 0 alignment.
-> - **Turing Framebuffer Local Memory Range Detection:** Resolves unmapped MMIO layout halts via `NV_PFB_PRI_MMU_LOCAL_MEMORY_RANGE` (`0x00100ce0`) hardware query and 11GB reservation fallback.
+> **🚀 Recommended: [Universal GPU Unlock v1.8.9 Pre-release](https://github.com/BrightRaider/universal-gpu-unlock/releases/tag/v1.8.9)**  
+> Version **v1.8.9** is the recommended build for all modern configurations. Key additions:
+> - **Turing TU102 GFW Readiness & Dynamic Register Alignment:** Bypassed Ampere-specific GFW register assertions (`sample.plm != 0x8b8f`), resolving `unlock_transaction_gfw error=-5` on RTX 2080 Ti and TITAN RTX.
+> - **Turing Booter Signature & Fuse Hardening:** Resolves `patch_booter error=-34` on Turing silicon with dedicated production RSA-384 signature selection and FWSEC version 0 alignment.
+> - **Turing Framebuffer Local Memory Range Detection:** Resolves unmapped MMIO layout halts via `NV_PFB_PRI_MMU_LOCAL_MEMORY_RANGE` (`0x00100ce0`) hardware query.
 > - **Internal NVMe-ESP Persistence Installer (`[I]`):** 1-Click persistent installation directly onto the internal NVMe EFI System Partition (ESP) with UEFI NVRAM `DriverOrder` registration — USB flash drive never needed again after setup.
 > - **Multi-Display GOP Console Auto-Selection:** Resolves dual-monitor preflight halts on ASUS and other motherboards by automatically selecting the primary console GOP handle.
 > - **Turing FWSEC vDesc v2 Geometry Parser:** Full support for Turing VBIOS descriptor v2 layout on RTX 20-series (TU102 / RTX 2080 Ti / 2080 Super), mapping DMEM boundaries and signature layouts.
@@ -39,9 +40,9 @@
 > - **Headless & Dedicated Compute Accelerators:** Full support for dGPUs with all displays routed via AMD Ryzen (7000/9000 Raphael) or Intel UHD iGPUs.
 > - **Expanded Device IDs:** Added RTX 3060 Ti GA104 (`0x2486`), RTX 3050 GA106 (`0x2582`), and Ada AD104/AD106/AD107 variants.
 > 
-> 📦 **Download Pre-release:** **[Universal_GPU_Unlock_v1.8.8.zip](https://github.com/BrightRaider/universal-gpu-unlock/releases/tag/v1.8.8)** *(or previous stable: [v1.7.9](https://github.com/BrightRaider/universal-gpu-unlock/releases/tag/v1.7.9))*.
+> 📦 **Download Pre-release:** **[Universal_GPU_Unlock_v1.8.9.zip](https://github.com/BrightRaider/universal-gpu-unlock/releases/tag/v1.8.9)** *(or previous stable: [v1.7.9](https://github.com/BrightRaider/universal-gpu-unlock/releases/tag/v1.7.9))*.
 
-1. **Download:** Get the recommended build: **[Universal_GPU_Unlock_v1.8.8.zip](https://github.com/BrightRaider/universal-gpu-unlock/releases/tag/v1.8.8)** *(or [v1.7.9](https://github.com/BrightRaider/universal-gpu-unlock/releases/latest))*.
+1. **Download:** Get the recommended build: **[Universal_GPU_Unlock_v1.8.9.zip](https://github.com/BrightRaider/universal-gpu-unlock/releases/tag/v1.8.9)** *(or [v1.7.9](https://github.com/BrightRaider/universal-gpu-unlock/releases/latest))*.
 2. **Provision:** Extract the ZIP, insert a USB flash drive, and run **`Setup.bat`** (formats & sets up all boot files automatically).
 3. **Boot & Unlock (or Install Permanently):** Restart your PC, boot from the USB drive (`F8`/`F11`/`F12`):
    - Press **`[U]`** for Standard RAM-Only Unlock (temporary, reverts if USB removed).

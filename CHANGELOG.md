@@ -6,6 +6,17 @@ For packaged binaries and downloads, visit [GitHub Releases](https://github.com/
 
 ---
 
+## [v1.8.9] - 2026-11-10
+### Turing GFW Readiness & Dynamic Local Memory Range Logging (Addresses #15)
+- **Turing GFW Sample Feature Assertion Fix (Addresses #15):**
+  - Resolved `failure unlock_610.c:1400 unlock_transaction_gfw error=-5` reported by @mibby in `RUN0006.TXT`.
+  - In `unlock_transaction_gfw()`, guarded Ampere/Ada-specific GFW register assertions (`sample.plm != 0x8b8f || sample.boot != 0x3ff || sample.cpuctl != 0x10`) with `!gpu_is_turing_device`. Turing silicon GFW completion is verified via `gpu_unlock_gfw_assess(&sample)` without requiring Ampere bitmask matches.
+  - Added explicit telemetry logging for `gfw_plm`, `gfw_boot`, and `gfw_cpuctl` in the entry diagnostics banner.
+- **Dynamic Local Memory Range Detection:**
+  - `NV_PFB_PRI_MMU_LOCAL_MEMORY_RANGE` (`0x00100ce0`) dynamically detected 11264 MB (`0x2c00`) on TU102; refined aperture fallback behavior for general multi-capacity Turing SKUs.
+
+---
+
 ## [v1.8.8] - 2026-11-10
 ### Turing Booter Signature, Fuse Selection & Framebuffer Local Memory Range Fix (Addresses #15)
 - **Turing Booter Signature & Fuse Calculation Fix (Addresses #15):**

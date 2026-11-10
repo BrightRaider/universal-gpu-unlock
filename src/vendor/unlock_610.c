@@ -1379,8 +1379,8 @@ static int unlock_transaction_gfw(struct unlock_transaction_work *work)
 				if (read_bar(work, 0x001fa828, &wpr_hi) || inaccessible(wpr_hi))
 					return GU_RESULT(-ENODEV);
 			}
-			dev_info(&work->pdev->dev, "entry: plm=%#x ss0=%#x ss1=%#x wpr2_hi=%#x\n",
-				 work->plm_entry, ss0, ss1, wpr_hi);
+			dev_info(&work->pdev->dev, "entry: plm=%#x ss0=%#x ss1=%#x wpr2_hi=%#x gfw_plm=%#x gfw_boot=%#x gfw_cpuctl=%#x\n",
+				 work->plm_entry, ss0, ss1, wpr_hi, sample.plm, sample.boot, sample.cpuctl);
 			/* An open PLM means the card was already unlocked or not cold. */
 			if (work->plm_entry == ~0u)
 				return GU_RESULT(-EALREADY);
@@ -1395,8 +1395,8 @@ static int unlock_transaction_gfw(struct unlock_transaction_work *work)
             if (!Gu.profile_verified || !GuEntrySelectorsMatch(ss0,ss1) ||
                 (!gpu_is_turing_device(work->pdev->device) && (inaccessible(ss0) || ss0==GU_SS0_UNLOCK || (ss1 > 7))) ||
                 (!gpu_is_turing_device(work->pdev->device) && work->plm_entry!=0xffffff8f) ||
-                sample.plm!=0x8b8f ||
-                sample.boot!=0x3ff || sample.cpuctl!=0x10 || wpr_hi)
+                (!gpu_is_turing_device(work->pdev->device) && (sample.plm!=0x8b8f || sample.boot!=0x3ff || sample.cpuctl!=0x10)) ||
+                wpr_hi)
                 return GU_RESULT(-EIO);
             work->ss0_entry=ss0;work->ss1_entry=ss1;work->selectors_saved=true;
 			if (is_ad102(work)) {
