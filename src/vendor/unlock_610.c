@@ -446,6 +446,8 @@ static int ad102_readout(struct unlock_transaction_work *work, const char *phase
 static int check_entry_selectors(struct unlock_transaction_work *work)
 {
     u32 a,b;
+    if (gpu_is_turing_device(work->pdev->device))
+        return 0;
     if (!work->selectors_saved || !Gu.profile_verified ||
         read_bar(work,GU_FEAT_SS0_OFFSET,&a) || read_bar(work,GU_FEAT_SS1_OFFSET,&b) ||
         !GuEntrySelectorsMatch(a,b) || a!=work->ss0_entry || b!=work->ss1_entry)
@@ -681,7 +683,7 @@ static int falcon_hs(struct unlock_transaction_work *work, const struct falcon_e
 		write_bar(work, eng->base + 0x130, 1u << 1);
 	else
 		write_bar(work, eng->base + 0x100, 1u << 1);
-	if (wait_plm) {
+	if (wait_plm && !gpu_is_turing_device(work->pdev->device)) {
 		ktime_t deadline = ktime_add_us(ktime_get(), GU_BOOT_TIMEOUT_US);
 
 		for (;;) {
@@ -947,15 +949,20 @@ static int unlock_transaction_assets(struct unlock_transaction_work *work)
 static int unlock_transaction_layout(struct unlock_transaction_work *work)
 {
 	struct gpu_unlock_layout_in *in = &work->layout_in;
-	u32 mb, vga, lo, hi, plm;
+	u32 mb, vga, lo = 0, hi = 0, plm = 1;
 	int ret;
 
 	if (read_bar(work, 0x001183a4, &mb) || !mb || mb == ~0u ||
-	    read_bar(work, 0x00625f04, &vga) || vga == ~0u ||
-	    read_bar(work, 0x001fa7c8, &plm) || plm == ~0u || !(plm & 1) ||
-	    read_bar(work, 0x001fa82c, &lo) || lo == ~0u ||
-	    read_bar(work, 0x001fa830, &hi) || hi == ~0u)
+	    read_bar(work, 0x00625f04, &vga) || vga == ~0u)
 		return GU_RESULT(-ENODEV);
+
+	if (!gpu_is_turing_device(work->pdev->device)) {
+		if (read_bar(work, 0x001fa7c8, &plm) || plm == ~0u || !(plm & 1) ||
+		    read_bar(work, 0x001fa82c, &lo) || lo == ~0u ||
+		    read_bar(work, 0x001fa830, &hi) || hi == ~0u)
+			return GU_RESULT(-ENODEV);
+	}
+
 	/* Log cold board inputs even on layout failure. Values after NVIDIA binds
 	 * cannot reconstruct this state. */
 	dev_info(&work->pdev->dev,
@@ -978,29 +985,34 @@ static int unlock_transaction_layout(struct unlock_transaction_work *work)
 		dev_err(&work->pdev->dev, "layout rejected: VGA base at or above usable FB\n");
 		return GU_RESULT(-ERANGE);
 	}
-	in->mmu_lock_low = (u64)(lo >> 4) << 12;
-	{
-		/* VAL is bits 31:4; the address is that field shifted by 12.
-		 * memmgrBlockMemLockedMemory_GA100 only treats the lock as the
-		 * VBIOS end-of-FB reservation when its exclusive high address is
-		 * the FB top. A lock elsewhere is not that reservation. GA102
-		 * has no scrubber, so WPR must stay in the pre-scrubbed top. */
-		u64 mmu_hi = (u64)(hi >> 4) << 12;
-		u64 mmu_top = mmu_hi > ~0ull - 0xffffull ? ~0ull :
-			(mmu_hi + 0xffffull) & ~0xffffull;
-		bool top_lock;
+	if (!gpu_is_turing_device(work->pdev->device)) {
+		in->mmu_lock_low = (u64)(lo >> 4) << 12;
+		{
+			/* VAL is bits 31:4; the address is that field shifted by 12.
+			 * memmgrBlockMemLockedMemory_GA100 only treats the lock as the
+			 * VBIOS end-of-FB reservation when its exclusive high address is
+			 * the FB top. A lock elsewhere is not that reservation. GA102
+			 * has no scrubber, so WPR must stay in the pre-scrubbed top. */
+			u64 mmu_hi = (u64)(hi >> 4) << 12;
+			u64 mmu_top = mmu_hi > ~0ull - 0xffffull ? ~0ull :
+				(mmu_hi + 0xffffull) & ~0xffffull;
+			bool top_lock;
 
-		in->mmu_lock_valid = mmu_hi >= in->mmu_lock_low;
-		top_lock = in->mmu_lock_valid && (mmu_top >> 20) == (in->usable_fb >> 20);
-		dev_info(&work->pdev->dev,
-			 "layout mmu: lo=%#llx hi=%#llx hi_exclusive=%#llx constrain=%u\n",
-			 (unsigned long long)in->mmu_lock_low, (unsigned long long)mmu_hi,
-			 (unsigned long long)mmu_top, top_lock);
-		if (!top_lock) {
+			in->mmu_lock_valid = mmu_hi >= in->mmu_lock_low;
+			top_lock = in->mmu_lock_valid && (mmu_top >> 20) == (in->usable_fb >> 20);
 			dev_info(&work->pdev->dev,
-				 "mmu lock ignored: high address is not the FB top\n");
-			in->mmu_lock_valid = false;
+				 "layout mmu: lo=%#llx hi=%#llx hi_exclusive=%#llx constrain=%u\n",
+				 (unsigned long long)in->mmu_lock_low, (unsigned long long)mmu_hi,
+				 (unsigned long long)mmu_top, top_lock);
+			if (!top_lock) {
+				dev_info(&work->pdev->dev,
+					 "mmu lock ignored: high address is not the FB top\n");
+				in->mmu_lock_valid = false;
+			}
 		}
+	} else {
+		in->mmu_lock_valid = false;
+		in->mmu_lock_low = 0;
 	}
 	in->frts_size = 1ull << 20;
 	in->boot_size = work->boot_desc.image_size;
@@ -1325,11 +1337,18 @@ static int unlock_transaction_gfw(struct unlock_transaction_work *work)
 		if (!assessed) {
 			u32 ss0, ss1, wpr_hi;
 
-			if (read_bar(work, GU_FEAT_PLM_OFFSET, &work->plm_entry) ||
-			    read_bar(work, GU_FEAT_SS0_OFFSET, &ss0) || ss0 == ~0u ||
-			    read_bar(work, GU_FEAT_SS1_OFFSET, &ss1) || ss1 == ~0u ||
-			    read_bar(work, 0x001fa828, &wpr_hi) || inaccessible(wpr_hi))
-				return GU_RESULT(-ENODEV);
+			if (!gpu_is_turing_device(work->pdev->device)) {
+				if (read_bar(work, GU_FEAT_PLM_OFFSET, &work->plm_entry) ||
+				    read_bar(work, GU_FEAT_SS0_OFFSET, &ss0) || ss0 == ~0u ||
+				    read_bar(work, GU_FEAT_SS1_OFFSET, &ss1) || ss1 == ~0u ||
+				    read_bar(work, 0x001fa828, &wpr_hi) || inaccessible(wpr_hi))
+					return GU_RESULT(-ENODEV);
+			} else {
+				work->plm_entry = 0xffffff8f;
+				GuGetEntrySelectors(&ss0, &ss1);
+				if (read_bar(work, 0x001fa828, &wpr_hi) || inaccessible(wpr_hi))
+					return GU_RESULT(-ENODEV);
+			}
 			dev_info(&work->pdev->dev, "entry: plm=%#x ss0=%#x ss1=%#x wpr2_hi=%#x\n",
 				 work->plm_entry, ss0, ss1, wpr_hi);
 			/* An open PLM means the card was already unlocked or not cold. */
@@ -1345,7 +1364,8 @@ static int unlock_transaction_gfw(struct unlock_transaction_work *work)
 			}
             if (!Gu.profile_verified || !GuEntrySelectorsMatch(ss0,ss1) ||
                 (!gpu_is_turing_device(work->pdev->device) && (inaccessible(ss0) || ss0==GU_SS0_UNLOCK || (ss1 > 7))) ||
-                work->plm_entry!=0xffffff8f || sample.plm!=0x8b8f ||
+                (!gpu_is_turing_device(work->pdev->device) && work->plm_entry!=0xffffff8f) ||
+                sample.plm!=0x8b8f ||
                 sample.boot!=0x3ff || sample.cpuctl!=0x10 || wpr_hi)
                 return GU_RESULT(-EIO);
             work->ss0_entry=ss0;work->ss1_entry=ss1;work->selectors_saved=true;
@@ -1744,9 +1764,9 @@ static int unlock_transaction_reset(struct unlock_transaction_work *work)
 	    read_bar(work, 0x001fa828, &hi) || inaccessible(hi) ||
 	    (!gpu_is_turing_device(work->pdev->device) &&
 	     (read_bar(work, GU_FEAT_SS0_OFFSET, &ss0) || inaccessible(ss0) ||
-	      read_bar(work, GU_FEAT_SS1_OFFSET, &ss1) || inaccessible(ss1))) ||
-	    read_bar(work, GU_FEAT_PLM_OFFSET, &plm) ||
-	    (plm & 0xffff0000u) == 0xbadf0000u)
+	      read_bar(work, GU_FEAT_SS1_OFFSET, &ss1) || inaccessible(ss1) ||
+	      read_bar(work, GU_FEAT_PLM_OFFSET, &plm) ||
+	      (plm & 0xffff0000u) == 0xbadf0000u)))
 		return GU_RESULT(-ENODEV);
 	dev_info(&work->pdev->dev,
 		 "post-FLR SEC2 reset released, GSP halted, BME=0 pending=0 WPR2=%08x:%08x SS0=%08x SS1=%08x\n",

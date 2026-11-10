@@ -6,6 +6,18 @@ For packaged binaries and downloads, visit [GitHub Releases](https://github.com/
 
 ---
 
+## [v1.8.7] - 2026-11-10
+### Turing MMU Lock & Transaction Layout Fix (Addresses #15)
+- **Turing MMU Layout Architecture Fix (Addresses #15):**
+  - Resolved `failure unlock_610.c:958 unlock_transaction_layout error=-19 last_mmio=0x1fa7c8 value=0xbadf5040` on Turing GPUs reported by @mibby.
+  - On Turing (TU102), the Ampere/GA100 memory lock register block (`0x001fa7c8` `NV_PFB_PRI_MMU_PHYS_SECURE_PLM`, `0x001fa82c`, `0x001fa830`) is physically unmapped and returns `0xbadf5040`. In `unlock_transaction_layout()`, bypassed these reads on Turing silicon (`!gpu_is_turing_device`), cleanly initializing usable framebuffer layout without requiring GA100 MMU lock ranges.
+  - In `check_entry_selectors()`, bypassed unmapped selector register reads (`0x82381c` / `0x823820`) on Turing silicon.
+  - In `unlock_transaction_gfw()`, populated cold-state entry selectors via `GuGetEntrySelectors()` and bypassed the Ampere feature PLM check (`GU_FEAT_PLM_OFFSET` `0x823804`), allowing the GFW readiness assessment to pass cleanly.
+  - In `falcon_hs()`, bypassed the Ampere feature PLM polling loop on Turing (`wait_plm && !gpu_is_turing_device`), proceeding directly to SEC2 engine halt verification.
+  - In `unlock_transaction_reset()`, guarded post-FLR speed selector and PLM register assertions with `!gpu_is_turing_device`.
+
+---
+
 ## [v1.8.6] - 2026-11-10
 ### Turing Selector Latch Fix, Top Version Header & Multi-Display Console Selection (Addresses #15, #16)
 - **Turing Speed Selector Latch & Post-Unlock Readiness Fix (Addresses #15):**
