@@ -71,6 +71,7 @@
 - **Any Platform:** Intel (Z690, Z790, Z890, B760, Z390) and AMD (AM4/AM5, X570, B550, B650, X670E, X870E).
 - **Multi-Drive:** Prefers `bootmgfw.efi` and follows your firmware's boot order when several Windows volumes exist.
 - **Multi-GPU & Headless Compute:** Unlocks primary or dedicated compute GPUs. Discrete cards can operate completely headless as dedicated AI/compute accelerators with all monitors connected to integrated graphics (e.g. AMD Ryzen Raphael iGPU or Intel UHD) — resolving [#14](https://github.com/BrightRaider/universal-gpu-unlock/issues/14).
+- **ASUS & AMI Console Topology Verified:** Multi-display console detachment verified on ASUS PRIME Z690-A at **127.61 TFLOPS** (100% unrestricted compute) on EVGA GeForce RTX 3080 Ti — resolving [#16](https://github.com/BrightRaider/universal-gpu-unlock/issues/16).
 - **Ampere & Turing Silicon Verified:** GA106 (RTX 3060), GA104, GA102 (RTX 3080/3090), and TU102 (RTX 2080 Ti / TITAN RTX) supported with full rate-limiter bypass and zero Windows VRAM loss.
 - **Stickless Internal NVMe-ESP Persistence (`[I]` Mode):** Option to install `AdaUnlockDxe.efi` and microcode directly to your internal NVMe SSD's EFI System Partition (`\EFI\Drivers\`) with UEFI NVRAM `DriverOrder` auto-boot. Once installed, the USB stick is completely optional and never needed for booting.
 
