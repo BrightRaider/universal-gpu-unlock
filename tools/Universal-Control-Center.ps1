@@ -1,4 +1,4 @@
-﻿<#
+<#
 .SYNOPSIS
     Windows GPU UNLOCK - Executive Control, Compatibility Checker & Deployment Utility
 .DESCRIPTION
@@ -209,7 +209,7 @@ $xamlPath = Join-Path $scriptDir "Universal-Control-Center.xaml"
 if (-not (Test-Path -LiteralPath $xamlPath)) {
     throw "Universal-Control-Center.xaml not found at: $xamlPath"
 }
-[xml]$xaml = Get-Content -LiteralPath $xamlPath -Raw
+[xml]$xaml = [System.IO.File]::ReadAllText($xamlPath, [System.Text.Encoding]::UTF8)
 
 # --- LOAD WPF WINDOW ---
 
@@ -372,7 +372,7 @@ function Refresh-AuditData {
         if ($txtAssessmentTitle) { $txtAssessmentTitle.Text = "100% COMPATIBLE & READY (MULTI-GPU DETECTED: $($supportedGpus.Count) GPUS)" }
         if ($txtAssessmentSub) { $txtAssessmentSub.Text = "Multi-GPU System: $names on $($info['Motherboard']) - All Architectures Supported!" }
         $txtAssessment.Text = "Universal GPU Unlock: Multi-GPU system detected ($($supportedGpus.Count) accelerators). Pre-boot booter inventories all installed NVIDIA GPUs. Dynamic UEFI DriverBinding protocol cleanly decouples active display GOP instances, unlocking tensor throughput in volatile RAM without hardware conflict."
-        if ($txtBadgeCompat) { $txtBadgeCompat.Text = "✔ 100% COMPATIBLE: MULTI-GPU ($($supportedGpus.Count))" }
+        if ($txtBadgeCompat) { $txtBadgeCompat.Text = "$([char]0x2714) 100% COMPATIBLE: MULTI-GPU ($($supportedGpus.Count))" }
         Write-GuiLog "Multi-GPU Topology: Found $($supportedGpus.Count) supported NVIDIA GPUs: $names"
     }
     elseif ($gpu -and ($gpu.IsSupported -or $gpu.IsAda -or $gpu.IsAmpere -or $gpu.IsTuring)) {
@@ -385,7 +385,7 @@ function Refresh-AuditData {
         if ($txtAssessmentTitle) { $txtAssessmentTitle.Text = "100% COMPATIBLE & READY (OUT-OF-THE-BOX)" }
         if ($txtAssessmentSub) { $txtAssessmentSub.Text = "Hardware Status: $($gpu.Name) ($($gpu.Architecture)) on $($info['Motherboard']) is fully supported!" }
         $txtAssessment.Text = "Universal GPU Unlock: Full tensor core and FP8/FP16/TF32 rate-limiter bypass available for your system. Dynamic topology discovery unlocks your GPU directly in volatile RAM  -  zero VBIOS modification, full BitLocker protection, and OEM warranty intact."
-        if ($txtBadgeCompat) { $txtBadgeCompat.Text = "✔ 100% COMPATIBLE: $($gpu.Architecture)" }
+        if ($txtBadgeCompat) { $txtBadgeCompat.Text = "$([char]0x2714) 100% COMPATIBLE: $($gpu.Architecture)" }
     }
     else {
         if ($gpu) {
@@ -1092,7 +1092,7 @@ if ($btnRunCheckUnlock) {
         }
 
         $btnRunCheckUnlock.IsEnabled = $false
-        $btnRunCheckUnlock.Content = "⏳ Benchmarking..."
+        $btnRunCheckUnlock.Content = "$([char]0x23F3) Benchmarking..."
         $txtBenchmarkOutput.Text = "Initializing CUDA FP16 Tensor Core GEMM (4096x4096)...`r`nMeasuring throughput and latencies across 30 iterations... Please wait ~2-3 seconds...`r`n"
         if ($window.Dispatcher) {
             $window.Dispatcher.Invoke([Action]{}, [System.Windows.Threading.DispatcherPriority]::Render)
@@ -1153,7 +1153,7 @@ if ($btnRunCheckUnlock) {
             $txtBenchmarkOutput.Text = "Failed to run benchmark: $($_.Exception.Message)"
         } finally {
             $btnRunCheckUnlock.IsEnabled = $true
-            $btnRunCheckUnlock.Content = "🚀 Run Benchmark"
+            $btnRunCheckUnlock.Content = "$([char]::ConvertFromUtf32(0x1F680)) Run Benchmark"
         }
         Refresh-TelemetryData
     })

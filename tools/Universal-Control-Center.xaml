@@ -1,4 +1,4 @@
-<Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+﻿<Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         Title="Universal GPU Unlock Control Center - Ada, Ampere &amp; Turing (BrightRaider)"
         Height="820" Width="1080"
@@ -188,7 +188,7 @@
                                         <ColumnDefinition Width="Auto"/>
                                     </Grid.ColumnDefinitions>
                                     <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
-                                        <TextBlock Text="✔" FontSize="24" FontWeight="Bold" Foreground="#A6E3A1" Margin="0,0,12,0" VerticalAlignment="Center"/>
+                                        <TextBlock Text="&#x2714;" FontSize="24" FontWeight="Bold" Foreground="#A6E3A1" Margin="0,0,12,0" VerticalAlignment="Center"/>
                                         <StackPanel VerticalAlignment="Center">
                                             <TextBlock Name="TxtAssessmentTitle" Text="100% COMPATIBLE &amp; READY (OUT-OF-THE-BOX)" FontSize="15" FontWeight="Bold" Foreground="#A6E3A1"/>
                                             <TextBlock Name="TxtAssessmentSub" Text="Hardware verification passed: Your host platform and GPU are fully supported." FontSize="12" Foreground="#BAC2DE" Margin="0,2,0,0"/>
@@ -206,13 +206,13 @@
                                         <ColumnDefinition Width="*"/>
                                     </Grid.ColumnDefinitions>
                                     <Border Grid.Column="0" Background="#1E3A2F" CornerRadius="4" Padding="8,6" Margin="0,0,5,0">
-                                        <TextBlock Text="✔ NO VBIOS FLASH&#x0a;100% Safe in RAM" FontSize="11" FontWeight="SemiBold" Foreground="#A6E3A1" TextAlignment="Center"/>
+                                        <TextBlock Text="&#x2714; NO VBIOS FLASH&#x0a;100% Safe in RAM" FontSize="11" FontWeight="SemiBold" Foreground="#A6E3A1" TextAlignment="Center"/>
                                     </Border>
                                     <Border Grid.Column="1" Background="#1E3A2F" CornerRadius="4" Padding="8,6" Margin="5,0,5,0">
-                                        <TextBlock Text="✔ ZERO COMPILE&#x0a;Universal Signed EFI" FontSize="11" FontWeight="SemiBold" Foreground="#A6E3A1" TextAlignment="Center"/>
+                                        <TextBlock Text="&#x2714; ZERO COMPILE&#x0a;Universal Signed EFI" FontSize="11" FontWeight="SemiBold" Foreground="#A6E3A1" TextAlignment="Center"/>
                                     </Border>
                                     <Border Grid.Column="2" Background="#1E3A2F" CornerRadius="4" Padding="8,6" Margin="5,0,0,0">
-                                        <TextBlock Text="✔ FULL OEM WARRANTY&#x0a;BitLocker Certified" FontSize="11" FontWeight="SemiBold" Foreground="#A6E3A1" TextAlignment="Center"/>
+                                        <TextBlock Text="&#x2714; FULL OEM WARRANTY&#x0a;BitLocker Certified" FontSize="11" FontWeight="SemiBold" Foreground="#A6E3A1" TextAlignment="Center"/>
                                     </Border>
                                 </Grid>
                             </StackPanel>
@@ -375,7 +375,7 @@
                             <TextBlock Text="1-Click Universal USB Deployer" FontSize="16" FontWeight="Bold" Foreground="#89B4FA" Margin="0,0,0,10"/>
                             <Border Background="#162E22" BorderBrush="#A6E3A1" BorderThickness="1" CornerRadius="6" Padding="12" Margin="0,0,0,14">
                                 <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
-                                    <TextBlock Text="✔" FontSize="18" FontWeight="Bold" Foreground="#A6E3A1" Margin="0,0,10,0" VerticalAlignment="Center"/>
+                                    <TextBlock Text="&#x2714;" FontSize="18" FontWeight="Bold" Foreground="#A6E3A1" Margin="0,0,10,0" VerticalAlignment="Center"/>
                                     <TextBlock Text="HARDWARE VALIDATION PASSED: Your system is 100% compatible. Select your FAT32 USB drive below and click 'Deploy Universal Unlock to USB'. The bootloader unlocks GPU registers and immediately hands off to Windows." FontSize="12" FontWeight="SemiBold" Foreground="#A6E3A1" VerticalAlignment="Center" TextWrapping="Wrap"/>
                                 </StackPanel>
                             </Border>
@@ -415,7 +415,7 @@
                             </Border>
 
                             <WrapPanel Margin="0,0,0,14">
-                                <Button Name="BtnDeployUsb" Content="✔ Deploy Universal Unlock to USB (1-Click)" Background="#A6E3A1" Foreground="#11111B" FontWeight="Bold" FontSize="13" Padding="18,10" Margin="0,0,10,6"/>
+                                <Button Name="BtnDeployUsb" Content="&#x2714; Deploy Universal Unlock to USB (1-Click)" Background="#A6E3A1" Foreground="#11111B" FontWeight="Bold" FontSize="13" Padding="18,10" Margin="0,0,10,6"/>
                                 <Button Name="BtnStageProbeDirect" Content="Stage Diagnostic Probe Only (Optional)" Background="#313244" Foreground="#89B4FA" FontWeight="SemiBold" FontSize="12" Padding="14,10" Margin="0,0,10,6"/>
                             </WrapPanel>
 
@@ -505,7 +505,7 @@
                                     <TextBlock Grid.Column="0" Text="Language:" VerticalAlignment="Center" Margin="0,0,8,0" Foreground="#A6ADC8" FontSize="12"/>
                                     <ComboBox Name="ComboCheckerLang" Grid.Column="1" Width="120" Height="30" Background="#181825" Foreground="#CDD6F4" VerticalContentAlignment="Center">
                                         <ComboBoxItem Content="English (en)" IsSelected="True"/>
-                                        <ComboBoxItem Content="한국어 (ko)"/>
+                                        <ComboBoxItem Content="&#xD55C;&#xAD6D;&#xC5B4; (ko)"/>
                                     </ComboBox>
                                     <Button Name="BtnRunOfflineCheck" Grid.Column="3" Content="Run Offline Compatibility Check" Background="#89B4FA" Foreground="#11111B" FontWeight="Bold" FontSize="13" Padding="18,8"/>
                                 </Grid>
@@ -657,7 +657,7 @@
                                 <!-- Clarification / Guidance Box -->
                                 <Border Name="BorderUnlockGuidance" Background="#181825" CornerRadius="4" Padding="12,10" Margin="0,10,0,0" BorderBrush="#313244" BorderThickness="1">
                                     <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
-                                        <TextBlock Text="ℹ" FontSize="16" FontWeight="Bold" Foreground="#89B4FA" Margin="0,0,10,0" VerticalAlignment="Top"/>
+                                        <TextBlock Text="&#x2139;" FontSize="16" FontWeight="Bold" Foreground="#89B4FA" Margin="0,0,10,0" VerticalAlignment="Top"/>
                                         <TextBlock Name="TxtUnlockGuidance" Text="Notice: The GPU unlocker operates strictly in volatile RAM and never modifies physical VBIOS ROM. In a standard Windows boot, the card runs in its safe default factory state. To activate the unlock, reboot via your prepared USB drive [U] or install the DXE driver [I]." FontSize="12" Foreground="#BAC2DE" TextWrapping="Wrap"/>
                                     </StackPanel>
                                 </Border>
@@ -705,10 +705,10 @@
                                         <ColumnDefinition Width="*"/>
                                         <ColumnDefinition Width="Auto"/>
                                     </Grid.ColumnDefinitions>
-                                    <TextBlock Text="⚡ Universal Tensor Core Benchmark (Check-GPU-Unlock.bat):" FontWeight="Bold" FontSize="13" Foreground="#89B4FA" VerticalAlignment="Center"/>
+                                    <TextBlock Text="&#x26A1; Universal Tensor Core Benchmark (Check-GPU-Unlock.bat):" FontWeight="Bold" FontSize="13" Foreground="#89B4FA" VerticalAlignment="Center"/>
                                     <StackPanel Orientation="Horizontal" Grid.Column="1">
-                                        <Button Name="BtnRunCheckUnlock" Content="🚀 Run Benchmark" Padding="12,5" Margin="0,0,8,0" Background="#89B4FA" Foreground="#11111B" FontWeight="Bold" Cursor="Hand"/>
-                                        <Button Name="BtnRunCheckUnlockWin" Content="🪟 Run in Terminal" Padding="10,5" Background="#313244" Foreground="#CDD6F4" Cursor="Hand"/>
+                                        <Button Name="BtnRunCheckUnlock" Content="&#x1F680; Run Benchmark" Padding="12,5" Margin="0,0,8,0" Background="#89B4FA" Foreground="#11111B" FontWeight="Bold" Cursor="Hand"/>
+                                        <Button Name="BtnRunCheckUnlockWin" Content="&#x1FA9F; Run in Terminal" Padding="10,5" Background="#313244" Foreground="#CDD6F4" Cursor="Hand"/>
                                     </StackPanel>
                                 </Grid>
                                 <TextBlock Text="Executes real-time 4096x4096 GEMM matrix benchmark across FP16, BF16, TF32 and FP32 to verify active throughput and physical rate-limiter state." FontSize="12" Foreground="#A6ADC8" Margin="0,0,0,8" TextWrapping="Wrap"/>
@@ -719,10 +719,10 @@
                                         <ColumnDefinition Width="*"/>
                                         <ColumnDefinition Width="Auto"/>
                                     </Grid.ColumnDefinitions>
-                                    <TextBlock Text="🔧 Hardware Driver &amp; Power Utilities:" FontWeight="Bold" FontSize="12" Foreground="#F9E2AF" VerticalAlignment="Center"/>
+                                    <TextBlock Text="&#x1F527; Hardware Driver &amp; Power Utilities:" FontWeight="Bold" FontSize="12" Foreground="#F9E2AF" VerticalAlignment="Center"/>
                                     <StackPanel Orientation="Horizontal" Grid.Column="1">
-                                        <Button Name="BtnToggleTuringGsp" Content="🎮 Toggle Turing GSP Mode" Padding="10,5" Margin="0,0,8,0" Background="#A6E3A1" Foreground="#11111B" FontWeight="Bold" Cursor="Hand"/>
-                                        <Button Name="BtnToggleSleepButton" Content="💤 Toggle Sleep Button" Padding="10,5" Background="#313244" Foreground="#CDD6F4" Cursor="Hand"/>
+                                        <Button Name="BtnToggleTuringGsp" Content="&#x1F3AE; Toggle Turing GSP Mode" Padding="10,5" Margin="0,0,8,0" Background="#A6E3A1" Foreground="#11111B" FontWeight="Bold" Cursor="Hand"/>
+                                        <Button Name="BtnToggleSleepButton" Content="&#x1F4A4; Toggle Sleep Button" Padding="10,5" Background="#313244" Foreground="#CDD6F4" Cursor="Hand"/>
                                     </StackPanel>
                                 </Grid>
                             </StackPanel>
