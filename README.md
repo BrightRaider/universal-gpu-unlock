@@ -83,7 +83,6 @@ The following GPU models, system motherboards, and compute readbacks have been i
 | Verified GPU | Architecture & Silicon | Motherboard & Platform | Real-World Throughput | Verification Issue |
 | :--- | :--- | :--- | :--- | :--- |
 | **Palit GeForce RTX 3060 12GB** | Ampere (GA106 LHR) | MSI MPG Z390 GAMING PLUS | **46.08 TFLOPS** (~45% ComfyUI speedup) | [#11](https://github.com/BrightRaider/universal-gpu-unlock/issues/11) |
-| **MSI GeForce RTX 2080 Ti 11GB** | Turing (TU102) | Intel Z390 / UEFI Platform | **45.13 TFLOPS** (Full Unrestricted Tensor Compute) | [#15](https://github.com/BrightRaider/universal-gpu-unlock/issues/15) |
 | **EVGA GeForce RTX 3080 Ti 12GB** | Ampere (GA102) | ASUS PRIME Z690-A | **127.61 TFLOPS** (100% Unrestricted Compute) | [#16](https://github.com/BrightRaider/universal-gpu-unlock/issues/16) |
 | **EVGA GeForce RTX 3080 Ti 12GB** | Ampere (GA102) | MSI X570-A PRO | **119.0 TFLOPS** (+84.5% boost, Unrestricted Compute) | [#12](https://github.com/BrightRaider/universal-gpu-unlock/issues/12) |
 | **NVIDIA GeForce RTX 3090 24GB** | Ampere (GA102) | Gigabyte TRX40 AORUS MASTER (AMD Threadripper 3960X) | **117.24 TFLOPS** (100% Unrestricted Tensor Compute) | [#13](https://github.com/BrightRaider/universal-gpu-unlock/issues/13) |

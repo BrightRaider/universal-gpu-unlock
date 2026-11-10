@@ -17,9 +17,6 @@ For packaged binaries and downloads, visit [GitHub Releases](https://github.com/
   - Added verbose logging in `GuDiscoverAllGpus()` (`src/gpu_discovery.c`) to trace scanned PCI handles, candidate Device IDs, locations, and explicit rejection reasons.
 - **Universal Log Directory Structure:**
   - Updated default pre-boot log folder to `\GPU-UNLOCK` with seamless fallback for legacy `\AD102-UNLOCK`.
-- **Turing Rate-Limiter Benchmark Threshold Calibration (Addresses #15):**
-  - Calibrated real-world PyTorch matrix multiplication bounds for Turing GPUs (RTX 2080 Ti, TITAN RTX, RTX 2080/2070/2060) in `tools/quick_check.py`.
-  - Replaced uncalibrated theoretical marketing ceilings with realistic PyTorch GEMM bounds (`threshold: 40.0 TFLOPS` for RTX 2080 Ti), ensuring verified unlocked runs correctly report `[OK] FULLY UNLOCKED!`.
 
 ---
 
