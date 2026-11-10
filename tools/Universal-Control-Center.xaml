@@ -711,8 +711,20 @@
                                         <Button Name="BtnRunCheckUnlockWin" Content="🪟 Run in Terminal" Padding="10,5" Background="#313244" Foreground="#CDD6F4" Cursor="Hand"/>
                                     </StackPanel>
                                 </Grid>
-                                <TextBlock Text="Executes real-time 4096x4096 FP16 GEMM tensor core matrix benchmark to verify active hardware throughput and rate-limiter state." FontSize="12" Foreground="#A6ADC8" Margin="0,0,0,8" TextWrapping="Wrap"/>
-                                <TextBox Name="TxtBenchmarkOutput" Text="Click 'Run Benchmark' above to execute live rate-limiter verification..." FontFamily="Consolas" FontSize="11" Background="#11111B" Foreground="#CDD6F4" Padding="10" Height="140" TextWrapping="Wrap" IsReadOnly="True" VerticalScrollBarVisibility="Auto"/>
+                                <TextBlock Text="Executes real-time 4096x4096 GEMM matrix benchmark across FP16, BF16, TF32 and FP32 to verify active throughput and physical rate-limiter state." FontSize="12" Foreground="#A6ADC8" Margin="0,0,0,8" TextWrapping="Wrap"/>
+                                <TextBox Name="TxtBenchmarkOutput" Text="Click 'Run Benchmark' above to execute live rate-limiter verification..." FontFamily="Consolas" FontSize="11" Background="#11111B" Foreground="#CDD6F4" Padding="10" Height="200" TextWrapping="Wrap" IsReadOnly="True" VerticalScrollBarVisibility="Auto"/>
+
+                                <Grid Margin="0,12,0,0">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="Auto"/>
+                                    </Grid.ColumnDefinitions>
+                                    <TextBlock Text="🔧 Hardware Driver &amp; Power Utilities:" FontWeight="Bold" FontSize="12" Foreground="#F9E2AF" VerticalAlignment="Center"/>
+                                    <StackPanel Orientation="Horizontal" Grid.Column="1">
+                                        <Button Name="BtnToggleTuringGsp" Content="🎮 Toggle Turing GSP Mode" Padding="10,5" Margin="0,0,8,0" Background="#A6E3A1" Foreground="#11111B" FontWeight="Bold" Cursor="Hand"/>
+                                        <Button Name="BtnToggleSleepButton" Content="💤 Toggle Sleep Button" Padding="10,5" Background="#313244" Foreground="#CDD6F4" Cursor="Hand"/>
+                                    </StackPanel>
+                                </Grid>
                             </StackPanel>
                         </Border>
                     </StackPanel>

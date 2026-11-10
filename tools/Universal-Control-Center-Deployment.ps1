@@ -73,7 +73,7 @@ function Stage-DiagnosticProbeUsb([string]$Letter) {
 5. Diagnostic telemetry will be written to this USB drive, handing off directly to Windows.
 "@
         Set-Content -LiteralPath (Join-Path $driveRoot "README-PROBE.TXT") -Value $readmeContent -Encoding utf8
-        return "Successfully staged pre-compiled Diagnostic Probe to $cleanLetter:\EFI\BOOT\BOOTX64.EFI (Zero-Compile)."
+        return "Successfully staged pre-compiled Diagnostic Probe to ${cleanLetter}:\EFI\BOOT\BOOTX64.EFI (Zero-Compile)."
     }
 
     $buildScript = Join-Path $Script:RepoRoot "research\profile\build-probe.ps1"

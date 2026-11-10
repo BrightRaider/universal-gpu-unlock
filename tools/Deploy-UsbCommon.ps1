@@ -12,7 +12,7 @@ function Deploy-UniversalToUsb {
 
         [bool]$HideS3 = $false,
 
-        [string]$AppVersion = "v1.7.9",
+        [string]$AppVersion = "v1.8.14",
 
         [scriptblock]$OnLog = $null
     )
@@ -117,12 +117,20 @@ function Deploy-UniversalToUsb {
         Emit-Log "  [OK] Secure Boot certificate copied to $driveRoot\AdaUnlock_SecureBoot.cer" "Green"
     }
 
-    # 3. Copy Setup and Benchmark Scripts
+    # 3. Copy Setup, Toggles and Benchmark Scripts
     $setupBat = Join-Path $RepoRoot "Setup.bat"
     $checkBat = Join-Path $RepoRoot "Check-GPU-Unlock.bat"
+    $turingBat = Join-Path $RepoRoot "Toggle-Turing-GSP.bat"
+    $sleepBat = Join-Path $RepoRoot "Toggle-Sleep-Button.bat"
     $toolsDir = Join-Path $RepoRoot "tools"
     if (Test-Path -LiteralPath $setupBat) {
         Copy-Item -LiteralPath $setupBat -Destination (Join-Path $driveRoot "Setup.bat") -Force
+    }
+    if (Test-Path -LiteralPath $turingBat) {
+        Copy-Item -LiteralPath $turingBat -Destination (Join-Path $driveRoot "Toggle-Turing-GSP.bat") -Force
+    }
+    if (Test-Path -LiteralPath $sleepBat) {
+        Copy-Item -LiteralPath $sleepBat -Destination (Join-Path $driveRoot "Toggle-Sleep-Button.bat") -Force
     }
     if (Test-Path -LiteralPath $checkBat) {
         Copy-Item -LiteralPath $checkBat -Destination (Join-Path $driveRoot "Check-GPU-Unlock.bat") -Force

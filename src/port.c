@@ -285,7 +285,7 @@ EFI_STATUS GuEnableMaster(VOID) {
   if (EFI_ERROR(Status) || !GuIsSupportedPciId(Id))
     goto fail;
   Status = RawRead(EfiPciIoWidthUint16, 4, &Command);
-  if (EFI_ERROR(Status) || Command == 0xffff || (Command & 4) || !(Command & 2))
+  if (EFI_ERROR(Status) || Command == 0xffff || !(Command & 2))
     goto fail;
   Status = Gu.pci->Attributes(Gu.pci, EfiPciIoAttributeOperationSupported, 0,
                               &Supported);
@@ -294,10 +294,11 @@ EFI_STATUS GuEnableMaster(VOID) {
   Status =
       Gu.pci->Attributes(Gu.pci, EfiPciIoAttributeOperationGet, 0, &Before);
   Decode = (Command & 1 ? EFI_PCI_IO_ATTRIBUTE_IO : 0) |
-           (Command & 2 ? EFI_PCI_IO_ATTRIBUTE_MEMORY : 0);
-  if (EFI_ERROR(Status) || (Before & EFI_PCI_IO_ATTRIBUTE_BUS_MASTER) ||
-      (Before & (EFI_PCI_IO_ATTRIBUTE_IO | EFI_PCI_IO_ATTRIBUTE_MEMORY)) !=
-          Decode)
+           (Command & 2 ? EFI_PCI_IO_ATTRIBUTE_MEMORY : 0) |
+           (Command & 4 ? EFI_PCI_IO_ATTRIBUTE_BUS_MASTER : 0);
+  if (EFI_ERROR(Status) ||
+      (Before & (EFI_PCI_IO_ATTRIBUTE_IO | EFI_PCI_IO_ATTRIBUTE_MEMORY |
+                 EFI_PCI_IO_ATTRIBUTE_BUS_MASTER)) != Decode)
     goto fail;
   GuLog("Bus Master enable intent: command=%#x attributes=%#llx\n", Command,
         (unsigned long long)Before);
@@ -319,10 +320,12 @@ EFI_STATUS GuEnableMaster(VOID) {
 #endif
   /* Track before the call: an error may be returned after a hardware change. */
   Gu.master_attributes_pending = TRUE;
-  Status = Gu.pci->Attributes(Gu.pci, EfiPciIoAttributeOperationEnable,
-                              EFI_PCI_IO_ATTRIBUTE_BUS_MASTER, NULL);
-  if (EFI_ERROR(Status))
-    goto fail;
+  if (!(Before & EFI_PCI_IO_ATTRIBUTE_BUS_MASTER)) {
+    Status = Gu.pci->Attributes(Gu.pci, EfiPciIoAttributeOperationEnable,
+                                EFI_PCI_IO_ATTRIBUTE_BUS_MASTER, NULL);
+    if (EFI_ERROR(Status))
+      goto fail;
+  }
   Status = Gu.pci->Attributes(Gu.pci, EfiPciIoAttributeOperationGet, 0, &After);
   if (EFI_ERROR(Status) || After != (Before | EFI_PCI_IO_ATTRIBUTE_BUS_MASTER))
     goto fail;
@@ -371,7 +374,8 @@ EFI_STATUS GuClearMaster(VOID) {
       if (!EFI_ERROR(AttributeStatus) && EFI_ERROR(ReadStatus))
         AttributeStatus = ReadStatus;
       if (!EFI_ERROR(AttributeStatus) &&
-          Attributes != Gu.master_original_attributes)
+          (Attributes & ~EFI_PCI_IO_ATTRIBUTE_BUS_MASTER) !=
+              (Gu.master_original_attributes & ~EFI_PCI_IO_ATTRIBUTE_BUS_MASTER))
         AttributeStatus = EFI_DEVICE_ERROR;
     }
     Gu.master_last_attributes = Attributes;
@@ -392,7 +396,7 @@ EFI_STATUS GuClearMaster(VOID) {
   if (EFI_ERROR(Status) || Now == 0xffff || (Now & 4))
     goto fail;
   /* Do not silently repair unrelated bits changed by the bus driver's API. */
-  if (Gu.master_attributes_pending && Now != Gu.master_original_command)
+  if (Gu.master_attributes_pending && (Now & ~4U) != (Gu.master_original_command & ~4U))
     goto fail;
   Gu.master_last_command = Now;
   if (EFI_ERROR(AttributeStatus)) {

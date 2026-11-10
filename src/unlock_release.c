@@ -378,7 +378,7 @@ static EFI_STATUS ReadConfig(UINT32 c[64]) {
   s=io->GetLocation(io,&seg,&bus,&dev,&fun);
   if(s!=EFI_SUCCESS||seg||bus>255||dev||fun)return EFI_UNSUPPORTED;
   s=io->Pci.Read(io,EfiPciIoWidthUint32,0,64,c);
-  if(s==EFI_SUCCESS&&(!GuTargetConfig(c,seg,bus,dev,fun)||(c[1]&4)))s=EFI_UNSUPPORTED;
+  if(s==EFI_SUCCESS&&!GuTargetConfig(c,seg,bus,dev,fun))s=EFI_UNSUPPORTED;
   return s;
 }
 /* RUN0002 did not identify PCI drift: do not assume it caused the stop.
@@ -526,7 +526,9 @@ EFI_STATUS GuUnlockPreflight(EFI_SYSTEM_TABLE *t,EFI_HANDLE self,EFI_HANDLE pci)
   if(s==EFI_SUCCESS) { s=Bar(); if(s!=EFI_SUCCESS) GuLog("Preflight failed at Bar(): %#llx\n", (unsigned long long)s); }
   if(s==EFI_SUCCESS) { s=ReadConfig(Plan.config); if(s!=EFI_SUCCESS) GuLog("Preflight failed at ReadConfig(): %#llx\n", (unsigned long long)s); }
   if(s==EFI_SUCCESS) { s=Gu.pci->Attributes?Gu.pci->Attributes(Gu.pci,EfiPciIoAttributeOperationGet,0,&Plan.attributes):EFI_UNSUPPORTED; if(s!=EFI_SUCCESS) GuLog("Preflight failed at Attributes: %#llx\n", (unsigned long long)s); }
-  UINT64 decode=(Plan.config[1]&1?EFI_PCI_IO_ATTRIBUTE_IO:0)|(Plan.config[1]&2?EFI_PCI_IO_ATTRIBUTE_MEMORY:0);
+  UINT64 decode=(Plan.config[1]&1?EFI_PCI_IO_ATTRIBUTE_IO:0)|
+                (Plan.config[1]&2?EFI_PCI_IO_ATTRIBUTE_MEMORY:0)|
+                (Plan.config[1]&4?EFI_PCI_IO_ATTRIBUTE_BUS_MASTER:0);
   UINT64 allowed_attrs=decode|EFI_PCI_IO_ATTRIBUTE_IO;
   UINT64 checked_attrs=Plan.attributes&(EFI_PCI_IO_ATTRIBUTE_IO|EFI_PCI_IO_ATTRIBUTE_MEMORY|EFI_PCI_IO_ATTRIBUTE_BUS_MASTER);
   if(s==EFI_SUCCESS&&checked_attrs!=decode&&checked_attrs!=allowed_attrs) {
@@ -547,10 +549,13 @@ EFI_STATUS GuUnlockPreflight(EFI_SYSTEM_TABLE *t,EFI_HANDLE self,EFI_HANDLE pci)
   if(s==EFI_SUCCESS)Plan.ready=TRUE;return s;
 }
 static BOOLEAN DecodeMask(const UINT32 c[64],UINT64 *mask) {
-  *mask=0;UINT32 missing=Plan.config[1]&~c[1]&3;
-  if((Plan.config[1]&6)!=2||(c[1]&4))return FALSE;
+  *mask=0;UINT32 missing=Plan.config[1]&~c[1]&7;
+  if((Plan.config[1]&2)!=2||(!(Plan.config[1]&4)&&(c[1]&4)))return FALSE;
   for(UINTN i=0;i<64;i++)if((c[i]|(i==1?missing:0))!=Plan.config[i])return FALSE;
-  *mask=(missing&1?EFI_PCI_IO_ATTRIBUTE_IO:0)|(missing&2?EFI_PCI_IO_ATTRIBUTE_MEMORY:0);return TRUE;
+  *mask=(missing&1?EFI_PCI_IO_ATTRIBUTE_IO:0)|
+        (missing&2?EFI_PCI_IO_ATTRIBUTE_MEMORY:0)|
+        (missing&4?EFI_PCI_IO_ATTRIBUTE_BUS_MASTER:0);
+  return TRUE;
 }
 static EFI_STATUS ClaimRestore(VOID) {
   EFI_BOOT_SERVICES *b=Plan.table->BootServices;EFI_PCI_IO_PROTOCOL *io=NULL;
@@ -578,8 +583,8 @@ static EFI_STATUS ClaimRestore(VOID) {
     UINT64 chk_pre = attrs & (EFI_PCI_IO_ATTRIBUTE_IO|EFI_PCI_IO_ATTRIBUTE_MEMORY|EFI_PCI_IO_ATTRIBUTE_BUS_MASTER);
     GuLog("ClaimRestore: pre-enable attrs=%#llx (plan=%#llx mask=%#llx exp=%#llx)\n",
       (unsigned long long)attrs, (unsigned long long)Plan.attributes, (unsigned long long)mask, (unsigned long long)exp_pre);
-    if((attrs & EFI_PCI_IO_ATTRIBUTE_BUS_MASTER) ||
-       (chk_pre != exp_pre && chk_pre != Plan.attributes && chk_pre != 0 && chk_pre != EFI_PCI_IO_ATTRIBUTE_IO)) {
+    if((!(Plan.attributes & EFI_PCI_IO_ATTRIBUTE_BUS_MASTER) && (attrs & EFI_PCI_IO_ATTRIBUTE_BUS_MASTER)) ||
+       (chk_pre != exp_pre && chk_pre != Plan.attributes && chk_pre != 0 && chk_pre != EFI_PCI_IO_ATTRIBUTE_IO && chk_pre != (Plan.attributes & (EFI_PCI_IO_ATTRIBUTE_IO|EFI_PCI_IO_ATTRIBUTE_MEMORY)))) {
       GuLog("ClaimRestore failed at pre-enable attrs: attrs=%#llx exp=%#llx\n", (unsigned long long)attrs, (unsigned long long)exp_pre);
       s=EFI_NOT_READY;
     }

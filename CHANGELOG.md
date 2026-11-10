@@ -6,6 +6,22 @@ For packaged binaries and downloads, visit [GitHub Releases](https://github.com/
 
 ---
 
+## [v1.8.14] - 2026-11-10
+### ASRock & AMD Preflight ReadConfig Bus Master Alignment & Turing GSP Utilities (Addresses #17, refs #15)
+- **ASRock & AMD AM4 Preflight ReadConfig & Bus Master Alignment (Addresses #17):**
+  * Resolved `Preflight failed at ReadConfig(): 0x8000000000000003` reported by @KaengiSchmaengi on ASRock A520M-HVS with Gainward RTX 3080.
+  * In `ReadConfig()` (`src/unlock_release.c`), eliminated the restrictive assertion `|| (c[1] & 4)` that rejected GPUs initialized by motherboard POST with Bus Master enabled.
+  * In `GuUnlockPreflight()`, updated `decode` attribute computation to dynamically include `EFI_PCI_IO_ATTRIBUTE_BUS_MASTER` when active at boot, preventing decode check mismatches.
+  * In `DecodeMask()` and `ClaimRestore()`, dynamically tolerates preexisting Bus Master attributes on platforms where UEFI firmware sets Bus Master during early POST.
+  * In `GuEnableBusMaster()` and `GuDisableBusMaster()` (`src/port.c`), gracefully handles preexisting Bus Master attributes without faulting on pre-asserted states or command writebacks.
+- **Turing GSP Firmware Mode Toggle Utility (refs #15):**
+  * Added `Toggle-Turing-GSP.bat` for 1-click configuration of `EnableGpuFirmware = 1` in Windows Registry, allowing Turing (RTX 2080 Ti / TITAN RTX) to bind to unlocked GSP firmware.
+  * Integrated 1-click Turing GSP toggle and sleep toggle buttons into Universal Control Center GUI.
+- **Enhanced Multi-Precision Benchmark (FP16, BF16, TF32, and FP32 Negative Control):**
+  * Updated `tools/quick_check.py` to evaluate FP16 Tensor Cores alongside pure FP32 CUDA cores (`allow_tf32 = False`) as a physical negative control, proving rate-limiter bypass without core overclocking.
+
+---
+
 ## [v1.8.13] - 2026-11-10
 ### ASRock AMD Motherboard Discovery Alignment & Ampere Device ID Expansion (Addresses #17)
 - **ASRock / AMD AM4 Discovery Filter Relaxation (Addresses #17):**

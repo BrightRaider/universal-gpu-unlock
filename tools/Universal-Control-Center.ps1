@@ -1166,6 +1166,30 @@ if ($btnRunCheckUnlockWin) {
     })
 }
 
+$btnToggleTuringGsp = $window.FindName("BtnToggleTuringGsp")
+if ($btnToggleTuringGsp) {
+    $btnToggleTuringGsp.Add_Click({
+        $turingBat = Join-Path $Script:RepoRoot "Toggle-Turing-GSP.bat"
+        if (Test-Path -LiteralPath $turingBat) {
+            Start-Process -FilePath "cmd.exe" -ArgumentList "/c `"$turingBat`"" -WorkingDirectory $Script:RepoRoot
+        } else {
+            [System.Windows.MessageBox]::Show("Toggle-Turing-GSP.bat not found at $turingBat", "Warning", [System.Windows.MessageBoxButton]::OK, [System.Windows.MessageBoxImage]::Warning)
+        }
+    })
+}
+
+$btnToggleSleepButton = $window.FindName("BtnToggleSleepButton")
+if ($btnToggleSleepButton) {
+    $btnToggleSleepButton.Add_Click({
+        $sleepBat = Join-Path $Script:RepoRoot "Toggle-Sleep-Button.bat"
+        if (Test-Path -LiteralPath $sleepBat) {
+            Start-Process -FilePath "cmd.exe" -ArgumentList "/c `"$sleepBat`"" -WorkingDirectory $Script:RepoRoot
+        } else {
+            [System.Windows.MessageBox]::Show("Toggle-Sleep-Button.bat not found at $sleepBat", "Warning", [System.Windows.MessageBoxButton]::OK, [System.Windows.MessageBoxImage]::Warning)
+        }
+    })
+}
+
 # Load Initial Data
 Refresh-AuditData
 Refresh-PreflightData

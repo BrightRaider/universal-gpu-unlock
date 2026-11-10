@@ -4,7 +4,7 @@
 ### High-Performance Tensor Core Rate-Limiter Bypass for NVIDIA GPUs
 
 [![GitHub Release](https://img.shields.io/github/v/release/BrightRaider/universal-gpu-unlock?color=blue&logo=github)](https://github.com/BrightRaider/universal-gpu-unlock/releases/latest)
-[![Pre-release](https://img.shields.io/badge/Pre--release-v1.8.13%20(Recommended)-orange?logo=github)](https://github.com/BrightRaider/universal-gpu-unlock/releases/tag/v1.8.13)
+[![Pre-release](https://img.shields.io/badge/Pre--release-v1.8.14%20(Recommended)-orange?logo=github)](https://github.com/BrightRaider/universal-gpu-unlock/releases/tag/v1.8.14)
 [![Downloads](https://img.shields.io/github/downloads/BrightRaider/universal-gpu-unlock/total?color=green&logo=github)](https://github.com/BrightRaider/universal-gpu-unlock/releases)
 [![Stars](https://img.shields.io/github/stars/BrightRaider/universal-gpu-unlock?style=social)](https://github.com/BrightRaider/universal-gpu-unlock)
 [![Safety](https://img.shields.io/badge/Safety-100%25%20RAM--Only-success.svg)](#-safety--anti-cheat-guarantee)
@@ -28,8 +28,11 @@
 ## ⚡ 60-Second Quick Start
 
 > [!TIP]
-> **🚀 Recommended: [Universal GPU Unlock v1.8.13 Pre-release](https://github.com/BrightRaider/universal-gpu-unlock/releases/tag/v1.8.13)**  
-> Version **v1.8.13** is the recommended build for all modern configurations. Key additions:
+> **🚀 Recommended: [Universal GPU Unlock v1.8.14 Pre-release](https://github.com/BrightRaider/universal-gpu-unlock/releases/tag/v1.8.14)**  
+> Version **v1.8.14** is the recommended build for all modern configurations. Key additions:
+> - **ASRock & AMD AM4 Preflight ReadConfig Bus Master Alignment:** Removed restrictive `|| (c[1] & 4)` assertions and aligned decode attribute checking, resolving `Preflight failed at ReadConfig(): 0x8000000000000003` on ASRock A520M-HVS and AMD AM4 motherboards.
+> - **Turing GSP Firmware Mode 1-Click Utility:** Includes `Toggle-Turing-GSP.bat` for seamless configuration of `EnableGpuFirmware = 1` in Windows Registry, allowing Turing (RTX 2080 Ti / TITAN RTX) to activate full enterprise compute.
+> - **Enhanced Multi-Precision Hardware Verification:** `Check-GPU-Unlock.bat` tests FP16, BF16, TF32, and pure FP32 CUDA cores as physical negative controls.
 > - **ASRock & AMD AM4 Discovery Filter Alignment:** Removed restrictive boot-time Bus Master and Expansion ROM checks, resolving `STOP: stage=discover status=0x8000000000000003` on ASRock A520M-HVS and AMD platforms.
 > - **Ampere Device ID Additions:** Added RTX 3080 GA103 (`0x2414`), RTX 3090 Ti (`0x2203`), RTX 3080 Ti OEM (`0x2205`), and `0x220b`.
 > - **ASUS / AMI Aptio V 2-Agent Console Topology Support:** Resolves `Preflight failed at Consumers(): 0x800000000000000f` on ASUS PRIME and other AMI Aptio V motherboards with dual or single displays.
@@ -46,15 +49,16 @@
 > - **Headless & Dedicated Compute Accelerators:** Full support for dGPUs with all displays routed via AMD Ryzen (7000/9000 Raphael) or Intel UHD iGPUs.
 > - **Expanded Device IDs:** Added RTX 3060 Ti GA104 (`0x2486`), RTX 3050 GA106 (`0x2582`), and Ada AD104/AD106/AD107 variants.
 > 
-> 📦 **Download Pre-release:** **[Universal_GPU_Unlock_v1.8.13.zip](https://github.com/BrightRaider/universal-gpu-unlock/releases/tag/v1.8.13)** *(or previous stable: [v1.7.9](https://github.com/BrightRaider/universal-gpu-unlock/releases/tag/v1.7.9))*.
+> 📦 **Download Pre-release:** **[Universal_GPU_Unlock_v1.8.14.zip](https://github.com/BrightRaider/universal-gpu-unlock/releases/tag/v1.8.14)** *(or previous stable: [v1.7.9](https://github.com/BrightRaider/universal-gpu-unlock/releases/tag/v1.7.9))*.
 
-1. **Download:** Get the recommended build: **[Universal_GPU_Unlock_v1.8.13.zip](https://github.com/BrightRaider/universal-gpu-unlock/releases/tag/v1.8.13)** *(or [v1.7.9](https://github.com/BrightRaider/universal-gpu-unlock/releases/latest))*.
+1. **Download:** Get the recommended build: **[Universal_GPU_Unlock_v1.8.14.zip](https://github.com/BrightRaider/universal-gpu-unlock/releases/tag/v1.8.14)** *(or [v1.7.9](https://github.com/BrightRaider/universal-gpu-unlock/releases/latest))*.
 2. **Provision:** Extract the ZIP, insert a USB flash drive, and run **`Setup.bat`** (formats & sets up all boot files automatically).
 3. **Boot & Unlock (or Install Permanently):** Restart your PC, boot from the USB drive (`F8`/`F11`/`F12`):
    - Press **`[U]`** for Standard RAM-Only Unlock (temporary, reverts if USB removed).
    - Press **`[I]`** to Install Permanently to your internal NVMe SSD ESP (`\EFI\Drivers\AdaUnlockDxe.efi`) and UEFI NVRAM `DriverOrder`. Once installed, **unplug the USB drive permanently** — your system auto-unlocks on every boot!
    - Press **`[R]`** at any time to cleanly uninstall from NVRAM and remove the internal ESP driver files.
 4. **Verify:** In Windows, run **`Check-GPU-Unlock.bat`** to verify your unlocked TFLOPS throughput (>200 TFLOPS).  
+   *(Note for RTX 20 / Turing users: Run **`Toggle-Turing-GSP.bat`** once in Windows as Administrator to bind the official NVIDIA driver to GSP firmware mode).*  
    *(Optional: If you wish to inspect detailed hardware telemetry, SMI sensor readbacks, and differential diagnostics, launch **`Universal-Control-Center.cmd`**).*
 
 ---
