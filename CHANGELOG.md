@@ -6,6 +6,15 @@ For packaged binaries and downloads, visit [GitHub Releases](https://github.com/
 
 ---
 
+## [v1.8.16] - 2026-11-10
+### Pre-Claim Transaction Bus Master Quiescence Alignment (Addresses #17)
+- **Pre-Claim Transaction Bus Master Quiescence Alignment (Addresses #17):**
+  * Resolved `failure unlock_610.c:1151 unlock_transaction_claim error=-16` reported by @KaengiSchmaengi on ASRock A520M-HVS with Gainward RTX 3080.
+  * In `unlock_transaction_claim()` (`src/vendor/unlock_610.c`), when the GPU is initialized at boot with PCI Bus Master enabled (`Command = 0x07`), gracefully clear Bus Master via `pci_clear_master(work->pdev)` before acquiring the memory region.
+  * Preserved `work->original_cmd` to guarantee the motherboard's native Command state (`0x07`) is faithfully restored at the end of the transaction upon handover to Windows.
+
+---
+
 ## [v1.8.15] - 2026-11-10
 ### AMI Aptio V Display Consumers Topology & Post-Enable Bus Master Alignment (Addresses #17)
 - **AMI Aptio V Display Consumers Topology Alignment (Addresses #17):**

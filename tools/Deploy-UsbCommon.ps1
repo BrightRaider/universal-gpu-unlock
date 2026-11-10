@@ -12,7 +12,7 @@ function Deploy-UniversalToUsb {
 
         [bool]$HideS3 = $false,
 
-        [string]$AppVersion = "v1.8.15",
+        [string]$AppVersion = "v1.8.16",
 
         [scriptblock]$OnLog = $null
     )
