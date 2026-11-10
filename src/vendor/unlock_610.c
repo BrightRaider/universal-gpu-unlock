@@ -1336,11 +1336,15 @@ static int unlock_transaction_fwsec(struct unlock_transaction_work *work)
 		wpr_lo, wpr_hi, (unsigned long long)(frts >> 12),
 		(unsigned long long)work->layout.wpr_end);
 	/* Match NVIDIA's initialized-WPR2 check as well as the expected low
-	 * address. Never publish Booter metadata for disabled/alien WPR2. */
-	if (!(wpr_hi >> 4) || (wpr_hi >> 4) < (wpr_lo >> 4) ||
-	    ((u64)(wpr_hi >> 4) << 12) >= work->layout.wpr_end ||
-	    (wpr_lo >> 4) != (u32)(frts >> 12))
-		ret = -EIO;
+	 * address. Never publish Booter metadata for disabled/alien WPR2.
+	 * On Turing (TU102), WPR2 is populated during GSP Booter execution,
+	 * not during early FWSEC-FRTS setup. */
+	if (!gpu_is_turing_device(work->pdev->device)) {
+		if (!(wpr_hi >> 4) || (wpr_hi >> 4) < (wpr_lo >> 4) ||
+		    ((u64)(wpr_hi >> 4) << 12) >= work->layout.wpr_end ||
+		    (wpr_lo >> 4) != (u32)(frts >> 12))
+			ret = -EIO;
+	}
 out:
 	/* Ownership transfers to work before publication, including failure paths. */
 	kvfree(rom);

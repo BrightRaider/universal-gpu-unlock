@@ -6,6 +6,15 @@ For packaged binaries and downloads, visit [GitHub Releases](https://github.com/
 
 ---
 
+## [v1.8.10] - 2026-11-10
+### Turing FWSEC Post-FRTS WPR2 Assertion Guard (Addresses #15)
+- **Turing FWSEC Post-FRTS WPR2 Verification Alignment (Addresses #15):**
+  - Resolved `failure unlock_610.c:1347 unlock_transaction_fwsec error=-5` reported by @mibby in `RUN0007.TXT`.
+  - On Turing silicon (TU102), FWSEC registers FRTS tables cleanly (`scratch=0`), while WPR2 ranges are populated during subsequent Falcon SEC2 Booter execution rather than immediately by FWSEC.
+  - Guarded post-FWSEC WPR2 assertion (`wpr_hi >> 4`) with `!gpu_is_turing_device`, allowing the transaction to proceed directly to V67 publication and SEC2 Booter execution.
+
+---
+
 ## [v1.8.9] - 2026-11-10
 ### Turing GFW Readiness & Dynamic Local Memory Range Logging (Addresses #15)
 - **Turing GFW Sample Feature Assertion Fix (Addresses #15):**
