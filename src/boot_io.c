@@ -584,11 +584,13 @@ EFI_STATUS GuBootLoadWindows(VOID) {
   return s;
 }
 
-static VOID GuPrintCountdownPrompt(BOOLEAN hide_s3, UINTN sec) {
+static VOID GuPrintCountdownPrompt(BOOLEAN hide_s3, UINTN sec, BOOLEAN overwrite) {
   CHAR16 prompt[80];
-  const CHAR16 *prefix = hide_s3
-      ? L"\rSelect mode [U/I/R/S] (default: Stock Windows in "
-      : L"\rSelect mode [U/P/I/R/S] (default: Stock Windows in ";
+  const CHAR16 *prefix = overwrite
+      ? (hide_s3 ? L"\rSelect mode [U/I/R/S] (default: Stock Windows in "
+                 : L"\rSelect mode [U/P/I/R/S] (default: Stock Windows in ")
+      : (hide_s3 ? L"Select mode [U/I/R/S] (default: Stock Windows in "
+                 : L"Select mode [U/P/I/R/S] (default: Stock Windows in ");
   UINTN i = 0;
   while (prefix[i]) {
     prompt[i] = prefix[i];
@@ -646,7 +648,7 @@ EFI_STATUS GuBootChoose(CHAR16 *choice) {
   for (UINTN tick = 0; tick < GU_BOOT_TIMEOUT_SEC * 10; tick++) {
     if (tick % 10 == 0) {
       UINTN remaining = GU_BOOT_TIMEOUT_SEC - (tick / 10);
-      GuPrintCountdownPrompt(hide_s3, remaining);
+      GuPrintCountdownPrompt(hide_s3, remaining, tick > 0);
     }
 
     EFI_INPUT_KEY key;
@@ -691,7 +693,7 @@ EFI_STATUS GuBootChoose(CHAR16 *choice) {
   }
 
   if (timed_out) {
-    GuPrintCountdownPrompt(hide_s3, 0);
+    GuPrintCountdownPrompt(hide_s3, 0, TRUE);
     GuBootSay(L"\r\n\r\n[TIMEOUT] 15s elapsed - booting Stock Windows.\r\n"
               L"  Diagnostic log: ");
     GuBootSay(ActiveLogName);
@@ -737,6 +739,15 @@ EFI_STATUS GuBootWindows(VOID) {
 VOID GuBootHalt(VOID) {
   GuBootUnsilence();
 
+  if (Table && Table->ConIn && Table->ConIn->ReadKeyStroke) {
+    EFI_INPUT_KEY discard;
+    while (Table->ConIn->ReadKeyStroke(Table->ConIn, &discard) == EFI_SUCCESS)
+      ;
+  }
+  if (Table && Table->ConOut && Table->ConOut->Reset) {
+    Table->ConOut->Reset(Table->ConOut, FALSE);
+  }
+
   GuBootSay(
       L"\r\n=======================================================\r\n"
       L" UNIVERSAL GPU UNLOCK - TRANSACTION HALTED\r\n"
@@ -753,7 +764,9 @@ VOID GuBootHalt(VOID) {
   /* Live countdown for automatic system reboot */
   for (UINTN sec = 15; sec > 0; sec--) {
     CHAR16 prompt[80];
-    const CHAR16 *prefix = L"\rRebooting to safe stock state in ";
+    const CHAR16 *prefix = (sec == 15)
+        ? L"Rebooting to safe stock state in "
+        : L"\rRebooting to safe stock state in ";
     UINTN i = 0;
     while (prefix[i]) {
       prompt[i] = prefix[i];

@@ -231,6 +231,13 @@ failed:
 
   if (GuUnlockMutated() || Gu.started || Gu.retained) {
 
+    if (t && t->BootServices && t->BootServices->ConnectController && device_count > 0) {
+      (VOID) t->BootServices->ConnectController(devices[0].handle, NULL, NULL, TRUE);
+    }
+    if (t && t->ConOut && t->ConOut->Reset) {
+      (VOID) t->ConOut->Reset(t->ConOut, FALSE);
+    }
+
     if (Gu.started || Gu.master_attributes_pending)
       (VOID) GuClearMaster();
 

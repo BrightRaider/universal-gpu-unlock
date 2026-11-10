@@ -6,6 +6,20 @@ For packaged binaries and downloads, visit [GitHub Releases](https://github.com/
 
 ---
 
+## [v1.8.18] - 2026-11-10
+### Pre-FLR Bus Master Quiescence Drift Tolerance & Halt Display Reconnection (Addresses #17)
+- **Pre-FLR Bus Master Quiescence Drift Tolerance (Addresses #17):**
+  * Resolved `PCI config drift refused: offset=0x4 captured=0x100007 now=0x100003 bits=0x4 flrs=0` (`Release check failed: config-drift`, `unlock_610.c:1764 error=-16`) reported by @KaengiSchmaengi on ASRock A520M-HVS with Gainward RTX 3080 Phoenix.
+  * In `ConfigStable()` (`src/unlock_release.c`), added explicit tolerance for bit 2 (`PCI_COMMAND_MASTER`) in Command Register Dword 1 (offset 0x4) during pre-FLR quiescence. Right before PCIe Function Level Reset, `pci_clear_master()` legitimately clears Bus Master (`0x100007` → `0x100003`) to ensure bus quiescence; this single bit is now recognized as expected drift prior to FLR.
+  * Note: In silicon, the RTX 3080 hardware unlock completed 100% (`SS0=0x88888888`, `SS1=0x8`); tolerating this intentional pre-FLR bus master quiescence clears the final gate to PCIe FLR and Windows Boot Manager handover.
+- **Halt Console Output & Keystroke Drain Fix (Addresses #17):**
+  * Resolved invisible halt screen / flashing underscore when `GuBootHalt()` was entered while UEFI GOP was detached.
+  * In `src/app.c` (`failed:` label), proactively reconnects the primary display controller via `ConnectController()` and resets `ConOut` prior to calling `GuBootHalt()`, ensuring the diagnostic box and countdown are visibly rendered on physical monitors.
+  * In `GuBootHalt()` (`src/boot_io.c`), drained buffered keystrokes from `ConIn` prior to starting the countdown loop, preventing queued keypresses from prematurely aborting the 15-second reboot countdown.
+  * In `GuPrintCountdownPrompt()` (`src/boot_io.c`), formatted initial tick prompt without a leading carriage return to ensure crisp rendering across all UEFI terminal implementations.
+
+---
+
 ## [v1.8.17] - 2026-11-10
 ### UEFI Bus Master Attribute Synchronization & Live Boot Menu Countdown (Addresses #17)
 - **UEFI Bus Master Attribute Synchronization (Addresses #17):**

@@ -397,6 +397,11 @@ static BOOLEAN ConfigStable(const UINT32 c[64]) {
         allowed = TRUE;
       }
     }
+    /* Command register (offset 0x4, Dword 1): Bus Master bit (bit 2) is
+     * legitimately cleared during pre-FLR quiescence (e.g. pci_clear_master()). */
+    if (i == 1 && (drift & ~4U) == 0) {
+      allowed = TRUE;
+    }
     if(!allowed) {
       NOTE("PCI config drift refused: offset=%#x captured=%#x now=%#x bits=%#x flrs=%u\n",
         (unsigned)(i*4),Plan.config[i],c[i],drift,Gu.flrs);
