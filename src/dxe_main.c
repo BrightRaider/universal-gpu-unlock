@@ -100,6 +100,18 @@ finish:
   } else {
     GuLog("DXE-DRIVER: Succeeded for GPU [1/%u]. Handing over to OS loader.\n",
           (unsigned)device_count);
+
+    for (UINTN g = 0; g < device_count; g++) {
+      if (mDxeTable && mDxeTable->BootServices && mDxeTable->BootServices->ConnectController && devices[g].handle) {
+        (VOID) mDxeTable->BootServices->ConnectController(devices[g].handle, NULL, NULL, TRUE);
+      }
+    }
+    if (mDxeTable && mDxeTable->BootServices && mDxeTable->BootServices->Stall) {
+      mDxeTable->BootServices->Stall(200000);
+    }
+    if (mDxeTable && mDxeTable->ConOut && mDxeTable->ConOut->Reset) {
+      (VOID) mDxeTable->ConOut->Reset(mDxeTable->ConOut, FALSE);
+    }
   }
   (VOID)GuBootClose();
 }

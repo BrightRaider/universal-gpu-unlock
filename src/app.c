@@ -194,6 +194,30 @@ EFI_STATUS EFIAPI UefiMain(EFI_HANDLE image, EFI_SYSTEM_TABLE *t) {
     (VOID) GuRegisterS3(t);
   }
 
+  stage = "final-Windows-verification";
+  if (!GuUnlockReadyForWindows()) {
+    s = EFI_NOT_READY;
+    goto failed;
+  }
+
+  stage = "reconnect-display";
+  for (UINTN g = 0; g < device_count; g++) {
+    if (t && t->BootServices && t->BootServices->ConnectController && devices[g].handle) {
+      EFI_STATUS cs = t->BootServices->ConnectController(devices[g].handle, NULL, NULL, TRUE);
+      GuLog("Display reconnect: GPU [%u/%u] handle=%#llx status=%#llx\n",
+            (unsigned)(g + 1), (unsigned)device_count,
+            (unsigned long long)(UINTN)devices[g].handle, (unsigned long long)cs);
+    }
+  }
+
+  if (t && t->BootServices && t->BootServices->Stall) {
+    t->BootServices->Stall(200000); /* 200ms for DP/HDMI physical link training */
+  }
+
+  if (t && t->ConOut && t->ConOut->Reset) {
+    (VOID) t->ConOut->Reset(t->ConOut, FALSE);
+  }
+
   GuBootUnsilence();
   GuBootSay(L" [3/4] Display Handover .................... [ OK ]\r\n"
             L" [4/4] Hardware SEC2 and MSR Unlock ........ [ OK ]\r\n"
@@ -201,12 +225,6 @@ EFI_STATUS EFIAPI UefiMain(EFI_HANDLE image, EFI_SYSTEM_TABLE *t) {
 
   GuLog("TRANSACTION OK: GPU [1/%u] unlocked, hardware readbacks passed!\n",
         (unsigned)device_count);
-
-  stage = "final-Windows-verification";
-  if (!GuUnlockReadyForWindows()) {
-    s = EFI_NOT_READY;
-    goto failed;
-  }
 
   stage = "close-USB-log";
   s = GuBootClose();

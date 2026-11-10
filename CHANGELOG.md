@@ -6,6 +6,18 @@ For packaged binaries and downloads, visit [GitHub Releases](https://github.com/
 
 ---
 
+## [v1.8.19] - 2026-11-10
+### Post-Unlock UEFI GOP Display Controller Reconnection & Windows Handover (Addresses #17)
+- **Post-Unlock UEFI GOP Display Controller Reconnection (Addresses #17):**
+  * Resolved "no more video output / screen not recognized" after successful hardware unlock reported by @KaengiSchmaengi on ASRock A520M-HVS with Gainward RTX 3080 Phoenix.
+  * In `src/app.c` (`reconnect-display` stage), after silicon verification passes 100% (`SS0=0x88888888`, `SS1=0x8`), proactively reconnects all primary display controllers via `ConnectController(devices[g].handle, NULL, NULL, TRUE)`.
+  * Added 200ms link-training stall (`Stall(200000)`) and `ConOut->Reset()` to ensure physical DisplayPort / HDMI clocks and TMDS/DP link training are stabilized before printing the completion status and handing over control to Windows Boot Manager (`bootmgfw.efi`).
+  * In `src/dxe_main.c`, mirrored the recursive `ConnectController()` and display link-training stabilization in the DXE Driver prior to OS loader dispatch.
+- **Universal Control Center UTF-8 Mojibake Resolution:**
+  * Replaced raw UTF-8 Unicode glyphs with robust XML numeric character entities (`&#x2714;`, `&#x26A1;`, etc.) in `Universal-Control-Center.xaml` and native character escapes in `Universal-Control-Center.ps1`, eliminating `âœ”` rendering artifacts across all Windows system locales.
+
+---
+
 ## [v1.8.18] - 2026-11-10
 ### Pre-FLR Bus Master Quiescence Drift Tolerance & Halt Display Reconnection (Addresses #17)
 - **Pre-FLR Bus Master Quiescence Drift Tolerance (Addresses #17):**

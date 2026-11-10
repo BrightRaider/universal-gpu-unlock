@@ -4,7 +4,7 @@
 ### High-Performance Tensor Core Rate-Limiter Bypass for NVIDIA GPUs
 
 [![GitHub Release](https://img.shields.io/github/v/release/BrightRaider/universal-gpu-unlock?color=blue&logo=github)](https://github.com/BrightRaider/universal-gpu-unlock/releases/latest)
-[![Pre-release](https://img.shields.io/badge/Pre--release-v1.8.18%20(Recommended)-orange?logo=github)](https://github.com/BrightRaider/universal-gpu-unlock/releases/tag/v1.8.18)
+[![Pre-release](https://img.shields.io/badge/Pre--release-v1.8.19%20(Recommended)-orange?logo=github)](https://github.com/BrightRaider/universal-gpu-unlock/releases/tag/v1.8.19)
 [![Downloads](https://img.shields.io/github/downloads/BrightRaider/universal-gpu-unlock/total?color=green&logo=github)](https://github.com/BrightRaider/universal-gpu-unlock/releases)
 [![Stars](https://img.shields.io/github/stars/BrightRaider/universal-gpu-unlock?style=social)](https://github.com/BrightRaider/universal-gpu-unlock)
 [![Safety](https://img.shields.io/badge/Safety-100%25%20RAM--Only-success.svg)](#-safety--anti-cheat-guarantee)
@@ -28,8 +28,10 @@
 ## ⚡ 60-Second Quick Start
 
 > [!TIP]
-> **🚀 Recommended: [Universal GPU Unlock v1.8.18 Pre-release](https://github.com/BrightRaider/universal-gpu-unlock/releases/tag/v1.8.18)**  
-> Version **v1.8.18** is the recommended build for all modern configurations. Key additions:
+> **🚀 Recommended: [Universal GPU Unlock v1.8.19 Pre-release](https://github.com/BrightRaider/universal-gpu-unlock/releases/tag/v1.8.19)**  
+> Version **v1.8.19** is the recommended build for all modern configurations. Key additions:
+> - **Post-Unlock UEFI GOP Display Controller Reconnection:** Proactively reconnects primary display controllers via `ConnectController(devices[g].handle, ...)` and stabilizes TMDS/DP link training prior to handing over control to Windows Boot Manager (`bootmgfw.efi`), resolving monitor signal loss on systems without integrated graphics.
+> - **Universal Control Center UTF-8 Mojibake Fix:** Standardized XML numeric character entities across `Universal-Control-Center.xaml` and native character escapes in `Universal-Control-Center.ps1`, resolving `âœ”` rendering artifacts on all Windows system locales.
 > - **Pre-FLR Bus Master Quiescence Drift Tolerance:** Aligned `ConfigStable()` to tolerate bit 2 (`PCI_COMMAND_MASTER`) of Command Register Dword 1 (offset 0x4) during pre-FLR quiescence, resolving `PCI config drift refused: offset=0x4 captured=0x100007 now=0x100003 bits=0x4 flrs=0` (`Release check failed: config-drift`, `unlock_610.c:1764 error=-16`) on ASRock A520M-HVS and Ampere RTX 3080.
 > - **Halt Console Output & Keystroke Drain Fix:** Proactively reconnects the display controller via `ConnectController()` and resets `ConOut` prior to calling `GuBootHalt()`, ensuring the diagnostic box and 15-second reboot countdown are visibly rendered on physical displays instead of a frozen underscore cursor. Drains queued keystrokes from `ConIn` to prevent accidental premature reboots.
 > - **UEFI Bus Master Attribute Synchronization:** Aligned `GuEnableMaster()` and `GuClearMaster()` attribute state handling with hardware PCI config register assertions, resolving `Bus Master enable failed: status=0x8000000000000007` (`failure unlock_610.c:1356 unlock_transaction_fwsec error=-5`) on ASRock A520M-HVS and AM4 motherboards.
