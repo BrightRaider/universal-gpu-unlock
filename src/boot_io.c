@@ -585,12 +585,10 @@ EFI_STATUS GuBootLoadWindows(VOID) {
 }
 
 static VOID GuPrintCountdownPrompt(BOOLEAN hide_s3, UINTN sec, BOOLEAN overwrite) {
-  CHAR16 prompt[80];
+  CHAR16 prompt[96];
   const CHAR16 *prefix = overwrite
-      ? (hide_s3 ? L"\rSelect mode [U/I/R/S] (default: Stock Windows in "
-                 : L"\rSelect mode [U/P/I/R/S] (default: Stock Windows in ")
-      : (hide_s3 ? L"Select mode [U/I/R/S] (default: Stock Windows in "
-                 : L"Select mode [U/P/I/R/S] (default: Stock Windows in ");
+      ? L"\r--> TIMER: "
+      : L"--> TIMER: ";
   UINTN i = 0;
   while (prefix[i]) {
     prompt[i] = prefix[i];
@@ -598,10 +596,13 @@ static VOID GuPrintCountdownPrompt(BOOLEAN hide_s3, UINTN sec, BOOLEAN overwrite
   }
   prompt[i++] = (CHAR16)(L'0' + ((sec / 10) % 10));
   prompt[i++] = (CHAR16)(L'0' + (sec % 10));
-  prompt[i++] = L's';
-  prompt[i++] = L')';
-  prompt[i++] = L':';
-  prompt[i++] = L' ';
+  const CHAR16 *suffix = hide_s3
+      ? L"s left (default: Stock Windows) - Select [U/I/R/S]: "
+      : L"s left (default: Stock Windows) - Select [U/P/I/R/S]: ";
+  UINTN j = 0;
+  while (suffix[j]) {
+    prompt[i++] = suffix[j++];
+  }
   prompt[i] = L'\0';
   GuBootSay(prompt);
 }
@@ -628,6 +629,9 @@ EFI_STATUS GuBootChoose(CHAR16 *choice) {
   GuBootSay(
       L"\r\n=======================================================\r\n"
       L" UNIVERSAL GPU UNLOCK " GU_VERSION_TAG_WIDE L" (Multi-Gen Edition)\r\n"
+      L"=======================================================\r\n"
+      L" >>> 30-SECOND TIMER ACTIVE - PRESS [U] TO UNLOCK <<<\r\n"
+      L" (Press [Space] to pause countdown and read in peace)\r\n"
       L"=======================================================\r\n");
   if (hide_s3) {
     GuBootSay(L"  [U] Full GPU Unlock (proven rock-solid, RAM-only)\r\n"
@@ -640,13 +644,16 @@ EFI_STATUS GuBootChoose(CHAR16 *choice) {
               L"stays in)\r\n");
   }
   GuBootSay(L"  [R] Remove DXE Driver from UEFI NVRAM\r\n"
-            L"  [S] Stock Windows (Diagnostic hardware scan, logs to USB, normal boot)\r\n\r\n");
+            L"  [S] Stock Windows (Diagnostic hardware scan, logs to USB, normal boot)\r\n"
+            L"=======================================================\r\n\r\n");
 
-#define GU_BOOT_TIMEOUT_SEC 15U
+#define GU_BOOT_TIMEOUT_SEC 30U
   BOOLEAN timed_out = TRUE;
+  BOOLEAN paused = FALSE;
+  UINTN tick = 0;
 
-  for (UINTN tick = 0; tick < GU_BOOT_TIMEOUT_SEC * 10; tick++) {
-    if (tick % 10 == 0) {
+  while (paused || tick < GU_BOOT_TIMEOUT_SEC * 10) {
+    if (!paused && tick % 10 == 0) {
       UINTN remaining = GU_BOOT_TIMEOUT_SEC - (tick / 10);
       GuPrintCountdownPrompt(hide_s3, remaining, tick > 0);
     }
@@ -655,6 +662,12 @@ EFI_STATUS GuBootChoose(CHAR16 *choice) {
     EFI_STATUS s = Table->ConIn->ReadKeyStroke(Table->ConIn, &key);
 
     if (s == EFI_SUCCESS) {
+      if (key.UnicodeChar == ' ' && !paused) {
+        paused = TRUE;
+        GuBootSay(L"\r\n[PAUSED] Countdown stopped. Take your time to select [U/P/I/R/S]: ");
+        continue;
+      }
+
       GuBootSay(L"\r\n");
       timed_out = FALSE;
 
@@ -690,11 +703,14 @@ EFI_STATUS GuBootChoose(CHAR16 *choice) {
     s = Table->BootServices->Stall(100000);
     if (s != EFI_SUCCESS)
       return s;
+
+    if (!paused)
+      tick++;
   }
 
   if (timed_out) {
     GuPrintCountdownPrompt(hide_s3, 0, TRUE);
-    GuBootSay(L"\r\n\r\n[TIMEOUT] 15s elapsed - booting Stock Windows.\r\n"
+    GuBootSay(L"\r\n\r\n[TIMEOUT] 30s elapsed - booting Stock Windows.\r\n"
               L"  Diagnostic log: ");
     GuBootSay(ActiveLogName);
     GuBootSay(L"\r\n  Need help or want to report your hardware? Open an issue:\r\n"

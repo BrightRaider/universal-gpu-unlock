@@ -6,6 +6,14 @@ For packaged binaries and downloads, visit [GitHub Releases](https://github.com/
 
 ---
 
+## [v1.8.22] - 2026-11-10
+### Boot Selection Timeout Extension to 30 Seconds
+- **Boot Countdown Timeout Extended:**
+  * Increased the boot selection prompt countdown from 15 seconds to **30 seconds** (`GU_BOOT_TIMEOUT_SEC 30U`).
+  * Compensates for high-refresh-rate DisplayPort and HDMI monitors that take 3–5 seconds to synchronize pixel clocks during early UEFI text-mode initialization, ensuring users have ample time to read options and select their desired mode.
+
+---
+
 ## [v1.8.21] - 2026-11-10
 ### Redundant Handle-Graph Scan Elimination & Console Reconnect (Addresses #17)
 - **Elimination of Redundant Post-Close Handle Scan (Addresses #17):**
