@@ -210,6 +210,10 @@ EFI_STATUS EFIAPI UefiMain(EFI_HANDLE image, EFI_SYSTEM_TABLE *t) {
     }
   }
 
+  if (t && t->BootServices && t->BootServices->ConnectController && t->ConsoleOutHandle) {
+    (VOID) t->BootServices->ConnectController(t->ConsoleOutHandle, NULL, NULL, TRUE);
+  }
+
   if (t && t->BootServices && t->BootServices->Stall) {
     t->BootServices->Stall(200000); /* 200ms for DP/HDMI physical link training */
   }

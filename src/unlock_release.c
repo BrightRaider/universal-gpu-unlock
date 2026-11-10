@@ -768,8 +768,7 @@ BOOLEAN GuUnlockReadyForWindows(VOID) {
     return FALSE;
   }
   UINT32 c[64];
-  if (Alive() != EFI_SUCCESS || Gops(FALSE) != EFI_SUCCESS || ReadConfig(c) != EFI_SUCCESS || !ConfigStable(c) ||
-      Snapshot(&Current) != EFI_SUCCESS || !Expected(3, FALSE)) {
+  if (Alive() != EFI_SUCCESS || Gops(FALSE) != EFI_SUCCESS || ReadConfig(c) != EFI_SUCCESS || !ConfigStable(c)) {
     GuLog("GuUnlockReadyForWindows: environment/edge verification failed\n");
     return FALSE;
   }

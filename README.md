@@ -4,7 +4,7 @@
 ### High-Performance Tensor Core Rate-Limiter Bypass for NVIDIA GPUs
 
 [![GitHub Release](https://img.shields.io/github/v/release/BrightRaider/universal-gpu-unlock?color=blue&logo=github)](https://github.com/BrightRaider/universal-gpu-unlock/releases/latest)
-[![Pre-release](https://img.shields.io/badge/Pre--release-v1.8.20%20(Recommended)-orange?logo=github)](https://github.com/BrightRaider/universal-gpu-unlock/releases/tag/v1.8.20)
+[![Pre-release](https://img.shields.io/badge/Pre--release-v1.8.21%20(Recommended)-orange?logo=github)](https://github.com/BrightRaider/universal-gpu-unlock/releases/tag/v1.8.21)
 [![Downloads](https://img.shields.io/github/downloads/BrightRaider/universal-gpu-unlock/total?color=green&logo=github)](https://github.com/BrightRaider/universal-gpu-unlock/releases)
 [![Stars](https://img.shields.io/github/stars/BrightRaider/universal-gpu-unlock?style=social)](https://github.com/BrightRaider/universal-gpu-unlock)
 [![Safety](https://img.shields.io/badge/Safety-100%25%20RAM--Only-success.svg)](#-safety--anti-cheat-guarantee)
@@ -28,8 +28,10 @@
 ## ⚡ 60-Second Quick Start
 
 > [!TIP]
-> **🚀 Recommended: [Universal GPU Unlock v1.8.20 Pre-release](https://github.com/BrightRaider/universal-gpu-unlock/releases/tag/v1.8.20)**  
-> Version **v1.8.20** is the recommended build for all modern configurations. Key additions:
+> **🚀 Recommended: [Universal GPU Unlock v1.8.21 Pre-release](https://github.com/BrightRaider/universal-gpu-unlock/releases/tag/v1.8.21)**  
+> Version **v1.8.21** is the recommended build for all modern configurations. Key additions:
+> - **Redundant Handle-Graph Scan Elimination:** Removed the redundant second handle-table walk in `GuUnlockReadyForWindows()`, resolving firmware stalls on ASRock AM4 / AMD platforms and transitioning directly into display reconnection and Windows Boot Manager handover.
+> - **Direct Console Splitter Reconnection:** Proactively reconnects `SystemTable->ConsoleOutHandle` alongside the GPU controller, ensuring monitor sync and display pipeline stability.
 > - **Pre-Close Hardware Register Verification:** Moves all silicon register readbacks (`chip`, `cpu`, `hi`, `ss0`, `ss1`, `readout`, `plm`) strictly before `CloseProtocol()`, preventing post-close volatile MMIO reads (`GuRead32(0)`) that triggered a PCIe Master Abort / bus freeze on AMI Aptio V / AMD platforms.
 > - **Post-Unlock UEFI GOP Display Controller Reconnection:** Proactively reconnects primary display controllers via `ConnectController(devices[g].handle, ...)` and stabilizes TMDS/DP link training prior to handing over control to Windows Boot Manager (`bootmgfw.efi`), resolving monitor signal loss on systems without integrated graphics.
 > - **Universal Control Center UTF-8 Mojibake Fix:** Standardized XML numeric character entities across `Universal-Control-Center.xaml` and native character escapes in `Universal-Control-Center.ps1`, resolving `âœ”` rendering artifacts on all Windows system locales.

@@ -6,6 +6,17 @@ For packaged binaries and downloads, visit [GitHub Releases](https://github.com/
 
 ---
 
+## [v1.8.21] - 2026-11-10
+### Redundant Handle-Graph Scan Elimination & Console Reconnect (Addresses #17)
+- **Elimination of Redundant Post-Close Handle Scan (Addresses #17):**
+  * Resolved boot stall on ASRock AM4 UEFI firmware during the final handover check (`GuUnlockReadyForWindows`).
+  * In `v1.8.20`, after `GuUnlockFinish()` had already closed `PciIo` and validated the entire device graph via `Snapshot(&Current)` and `Expected(3, FALSE)`, `GuUnlockReadyForWindows()` performed a second full scan of all UEFI handles and protocol databases. On ASRock A520M-HVS, querying hundreds of handles a second time after protocol close caused the firmware to hang.
+  * Removed the redundant second `Snapshot(&Current)` from `GuUnlockReadyForWindows()`, transitioning execution immediately from verified PCI config stability into GOP display reconnection.
+- **Direct Console Splitter Reconnect:**
+  * Added proactive recursive reconnection of `SystemTable->ConsoleOutHandle` in addition to the GPU device handle, ensuring UEFI text console multiplexers and physical display links are synchronized prior to launching Windows Boot Manager (`bootmgfw.efi`).
+
+---
+
 ## [v1.8.20] - 2026-11-10
 ### Post-Protocol-Close MMIO Bus Freeze Resolution & Display Link Handover (Addresses #17)
 - **Pre-Close Hardware Register Verification (Addresses #17):**
