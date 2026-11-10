@@ -436,13 +436,13 @@ static EFI_STATUS Consumers(VOID) {
         Plan.nv_agent=e->agent;
         pci++;
       }
-      else if(Guid(&e->protocol,&PathGuid)&&e->attributes==8&&Plan.gop&&e->controller==Plan.gop){
+      else if((Guid(&e->protocol,&PathGuid)||Guid(&e->protocol,&PciGuid))&&e->attributes==8&&Plan.gop&&e->controller==Plan.gop){
         child++;
       }
-      else if(Guid(&e->protocol,&PathGuid)&&e->attributes==8&&IdleOutput(e->controller)){
+      else if((Guid(&e->protocol,&PathGuid)||Guid(&e->protocol,&PciGuid))&&e->attributes==8&&IdleOutput(e->controller)){
         idle++;
       }
-      else if(Guid(&e->protocol,&PathGuid)&&e->attributes==8){
+      else if((Guid(&e->protocol,&PathGuid)||Guid(&e->protocol,&PciGuid))&&e->attributes==8){
         for(UINTN k=0;k<8;k++) {
           if(!Plan.idle[k]){Plan.idle[k]=e->controller;break;}
           if(Plan.idle[k]==e->controller)break;
@@ -477,7 +477,7 @@ static EFI_STATUS Consumers(VOID) {
     }
     return EFI_SUCCESS;
   }
-  if(pci<1||(child<1&&idle<1)||gfx<1||!Plan.nv_agent||!Plan.gfx_agent||
+  if(pci<1||(!Plan.gop&&(child<1&&idle<1))||gfx<1||!Plan.nv_agent||!Plan.gfx_agent||
      Plan.nv_agent==Plan.gfx_agent) {
     GuLog("Consumers check: pci=%zu child=%zu idle=%zu text=%zu virtual=%zu gfx=%zu\n",
       pci, child, idle, text, virtual, gfx);
@@ -620,8 +620,9 @@ static EFI_STATUS ClaimRestore(VOID) {
   if(s==EFI_SUCCESS) {
     GuLog("ClaimRestore: post-enable attrs=%#llx (mem=%d bm=%d)\n",
       (unsigned long long)attrs, (int)!!(attrs & EFI_PCI_IO_ATTRIBUTE_MEMORY), (int)!!(attrs & EFI_PCI_IO_ATTRIBUTE_BUS_MASTER));
-    if((attrs & EFI_PCI_IO_ATTRIBUTE_BUS_MASTER) || !(attrs & EFI_PCI_IO_ATTRIBUTE_MEMORY) ||
-       (attrs & ~(EFI_PCI_IO_ATTRIBUTE_IO|EFI_PCI_IO_ATTRIBUTE_MEMORY))) {
+    if((!(Plan.attributes & EFI_PCI_IO_ATTRIBUTE_BUS_MASTER) && (attrs & EFI_PCI_IO_ATTRIBUTE_BUS_MASTER)) ||
+       !(attrs & EFI_PCI_IO_ATTRIBUTE_MEMORY) ||
+       (attrs & ~(EFI_PCI_IO_ATTRIBUTE_IO|EFI_PCI_IO_ATTRIBUTE_MEMORY|EFI_PCI_IO_ATTRIBUTE_BUS_MASTER))) {
       GuLog("ClaimRestore failed at post-enable attrs check: attrs=%#llx\n", (unsigned long long)attrs);
       s=EFI_NOT_READY;
     } else {
@@ -700,8 +701,8 @@ BOOLEAN GuUnlockReleased(VOID) {
   else if(!ConfigStable(c))failed="config-drift";
   else if(Gu.pci->Attributes(Gu.pci,EfiPciIoAttributeOperationGet,0,&attrs)!=EFI_SUCCESS)failed="attributes-get";
   else if(!(attrs & EFI_PCI_IO_ATTRIBUTE_MEMORY))failed="attributes-no-mem";
-  else if(attrs & EFI_PCI_IO_ATTRIBUTE_BUS_MASTER)failed="bus-master";
-  else if(attrs & ~(EFI_PCI_IO_ATTRIBUTE_IO|EFI_PCI_IO_ATTRIBUTE_MEMORY))failed="attributes-extra";
+  else if(!(Plan.attributes & EFI_PCI_IO_ATTRIBUTE_BUS_MASTER) && (attrs & EFI_PCI_IO_ATTRIBUTE_BUS_MASTER))failed="bus-master";
+  else if(attrs & ~(EFI_PCI_IO_ATTRIBUTE_IO|EFI_PCI_IO_ATTRIBUTE_MEMORY|EFI_PCI_IO_ATTRIBUTE_BUS_MASTER))failed="attributes-extra";
   else if(Snapshot(&Current)!=EFI_SUCCESS)failed="graph-snapshot";
   else if(!Expected(3,TRUE)){failed="graph";GraphDiff(3, TRUE);}
   if(failed)NOTE("Release check failed: %s attributes=%#llx expected=%#llx graph=%zu original=%zu fault=%u flrs=%u\n",

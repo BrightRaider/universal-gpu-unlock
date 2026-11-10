@@ -6,6 +6,18 @@ For packaged binaries and downloads, visit [GitHub Releases](https://github.com/
 
 ---
 
+## [v1.8.15] - 2026-11-10
+### AMI Aptio V Display Consumers Topology & Post-Enable Bus Master Alignment (Addresses #17)
+- **AMI Aptio V Display Consumers Topology Alignment (Addresses #17):**
+  * Resolved `Preflight failed at Consumers(): 0x800000000000000f` reported by @KaengiSchmaengi on ASRock A520M-HVS with Gainward RTX 3080 (`pci=1 child=0 idle=0 text=1 virtual=1 gfx=1`).
+  * In `Consumers()` (`src/unlock_release.c`), eliminated the artificial requirement `(child < 1 && idle < 1)` when `Plan.gop` is already selected and verified on the target GPU. On single-display AMI Aptio V platforms where the firmware binds GOP directly without creating separate `PathGuid` child handles on the PCI controller, the console display consumer is now cleanly validated.
+  * In `Consumers()` edge matching, expanded child controller recognition to accept `PciGuid` along with `PathGuid`.
+- **ClaimRestore & Release Post-Enable Bus Master Preservation (Addresses #17):**
+  * In `ClaimRestore()` (`src/unlock_release.c`), aligned the post-enable attribute assertion to preserve `EFI_PCI_IO_ATTRIBUTE_BUS_MASTER` when initialized at boot by motherboard POST.
+  * In `GuUnlockReleased()`, aligned `bus-master` and `attributes-extra` checks to accept Bus Master when part of the card's boot-time profile.
+
+---
+
 ## [v1.8.14] - 2026-11-10
 ### ASRock & AMD Preflight ReadConfig Bus Master Alignment & Turing GSP Utilities (Addresses #17, refs #15)
 - **ASRock & AMD AM4 Preflight ReadConfig & Bus Master Alignment (Addresses #17):**
