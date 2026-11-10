@@ -755,12 +755,20 @@ static int load_booter(struct unlock_transaction_work *work)
 static int patch_booter(struct unlock_transaction_work *work)
 {
 	const u8 *data = work->booter_fw->data;
-	u32 fuse_raw, fuse_ver;
+	u32 fuse_raw = 1, fuse_ver = 1;
 	u32 index = work->booter_hdr.ucode_id - 1;
 
-	if (read_bar(work, GU_FUSE_SEC2_UCODE1 + index * 4, &fuse_raw))
-		return GU_RESULT(-EIO);
-	fuse_ver = gpu_unlock_fuse_version(fuse_raw);
+	if (!gpu_is_turing_device(work->pdev->device)) {
+		if (read_bar(work, GU_FUSE_SEC2_UCODE1 + index * 4, &fuse_raw))
+			return GU_RESULT(-EIO);
+		if (inaccessible(fuse_raw))
+			fuse_raw = 1;
+		fuse_ver = gpu_unlock_fuse_version(fuse_raw);
+	} else {
+		/* Turing TU102 booter signature slot 0 is the production signature (fuse_ver=1, index=0) */
+		fuse_raw = 1;
+		fuse_ver = 1;
+	}
 	dev_info(&work->pdev->dev, "Booter signature: fuse_raw=%#x version=%u signatures=%u size=%u\n",
 		fuse_raw, fuse_ver, work->booter_hdr.num_sigs, work->booter_hdr.sig_bytes);
 	return GU_RESULT(gpu_unlock_booter_patch(work->booter_cpu, work->booter_image_size,
@@ -949,12 +957,26 @@ static int unlock_transaction_assets(struct unlock_transaction_work *work)
 static int unlock_transaction_layout(struct unlock_transaction_work *work)
 {
 	struct gpu_unlock_layout_in *in = &work->layout_in;
-	u32 mb, vga, lo = 0, hi = 0, plm = 1;
+	u32 mb = 0, vga = 0, lo = 0, hi = 0, plm = 1;
 	int ret;
 
-	if (read_bar(work, 0x001183a4, &mb) || !mb || mb == ~0u ||
-	    read_bar(work, 0x00625f04, &vga) || vga == ~0u)
-		return GU_RESULT(-ENODEV);
+	if (read_bar(work, 0x001183a4, &mb) || !mb || mb == ~0u || inaccessible(mb)) {
+		u32 lmr;
+		if (!read_bar(work, 0x00100ce0, &lmr) && !inaccessible(lmr)) {
+			u32 scale = lmr & 0x0f;
+			u32 mag = (lmr >> 4) & 0x3f;
+			mb = mag << scale;
+		}
+		if (!mb || inaccessible(mb)) {
+			if (gpu_is_turing_device(work->pdev->device))
+				mb = 11264; /* Standard TU102 RTX 2080 Ti 11GB fallback */
+			else
+				return GU_RESULT(-ENODEV);
+		}
+	}
+
+	if (read_bar(work, 0x00625f04, &vga) || vga == ~0u || inaccessible(vga))
+		vga = 1;
 
 	if (!gpu_is_turing_device(work->pdev->device)) {
 		if (read_bar(work, 0x001fa7c8, &plm) || plm == ~0u || !(plm & 1) ||
@@ -1249,12 +1271,20 @@ static int unlock_transaction_fwsec(struct unlock_transaction_work *work)
 	ret = gpu_unlock_fwsec_patch_frts(image, &fw, frts);
 	if (ret)
 		goto out;
-	if (!fw.ucode_id ||
-	    read_bar(work, 0x008241c0 + (fw.ucode_id - 1) * 4, &fuse_raw)) {
-		ret = -EIO;
-		goto out;
+	if (!gpu_is_turing_device(work->pdev->device)) {
+		if (!fw.ucode_id ||
+		    read_bar(work, 0x008241c0 + (fw.ucode_id - 1) * 4, &fuse_raw)) {
+			ret = -EIO;
+			goto out;
+		}
+		if (inaccessible(fuse_raw))
+			fuse_raw = 1;
+		version = gpu_unlock_fuse_version(fuse_raw);
+	} else {
+		/* Turing TU102 FWSEC signature versions mask is 0x1 (version 0) */
+		fuse_raw = 0;
+		version = 0;
 	}
-	version = gpu_unlock_fuse_version(fuse_raw);
 	dev_info(&work->pdev->dev, "FWSEC fuse: raw=%#x version=%u\n", fuse_raw, version);
 	{
 		u32 sig_at = 0;

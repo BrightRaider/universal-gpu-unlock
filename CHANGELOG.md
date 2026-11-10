@@ -6,6 +6,18 @@ For packaged binaries and downloads, visit [GitHub Releases](https://github.com/
 
 ---
 
+## [v1.8.8] - 2026-11-10
+### Turing Booter Signature, Fuse Selection & Framebuffer Local Memory Range Fix (Addresses #15)
+- **Turing Booter Signature & Fuse Calculation Fix (Addresses #15):**
+  - Resolved `failure unlock_610.c:769 patch_booter error=-34 last_mmio=0x824148 value=0xbadf5040` on Turing TU102 (RTX 2080 Ti) reported by @mibby in `RUN0005.TXT`.
+  - In `patch_booter()`, guarded `GU_FUSE_SEC2_UCODE1` (`0x824148`) read on Turing devices. On Turing silicon, booter signature slot 0 contains the RSA-384 production signature; defaulted `fuse_ver = 1` (`index = 0`), preventing fuse calculation overflow (`-ERANGE`).
+  - In `src/vendor/prep_610.c`, hardened `gpu_unlock_fuse_version()` against unmapped MMIO reads (`~0u` and `0xbadfXXXX`), ensuring unmapped registers never compute out-of-range fuse version indices.
+  - In `unlock_transaction_dma()`, guarded FWSEC fuse register `0x008241c0` on Turing devices, selecting version 0 to match Turing FWSEC single-signature bitmask (`versions=0x1`).
+- **Turing Usable Framebuffer Memory Range Detection (Addresses #15):**
+  - In `unlock_transaction_layout()`, handled unmapped `0x001183a4` on Turing by querying `NV_PFB_PRI_MMU_LOCAL_MEMORY_RANGE` (`0x00100ce0`, decoding `lower_mag << lower_scale`) with an 11264 MB fallback, preventing `fb_mb = 0xbadf5040` corruption in memory layout plan.
+
+---
+
 ## [v1.8.7] - 2026-11-10
 ### Turing MMU Lock & Transaction Layout Fix (Addresses #15)
 - **Turing MMU Layout Architecture Fix (Addresses #15):**

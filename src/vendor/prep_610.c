@@ -62,6 +62,8 @@ u32 gpu_unlock_fuse_version(u32 raw)
 	u32 index = 0;
 	u32 value = raw & 0xffffu;
 
+	if (raw == ~0u || (raw & 0xffff0000u) == 0xbadf0000u)
+		return 0;
 	if (!value)
 		return 0;
 	while (value > 1) {
