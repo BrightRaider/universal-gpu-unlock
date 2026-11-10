@@ -297,8 +297,8 @@ EFI_STATUS GuEnableMaster(VOID) {
            (Command & 2 ? EFI_PCI_IO_ATTRIBUTE_MEMORY : 0) |
            (Command & 4 ? EFI_PCI_IO_ATTRIBUTE_BUS_MASTER : 0);
   if (EFI_ERROR(Status) ||
-      (Before & (EFI_PCI_IO_ATTRIBUTE_IO | EFI_PCI_IO_ATTRIBUTE_MEMORY |
-                 EFI_PCI_IO_ATTRIBUTE_BUS_MASTER)) != Decode)
+      (Before & (EFI_PCI_IO_ATTRIBUTE_IO | EFI_PCI_IO_ATTRIBUTE_MEMORY)) !=
+          (Decode & (EFI_PCI_IO_ATTRIBUTE_IO | EFI_PCI_IO_ATTRIBUTE_MEMORY)))
     goto fail;
   GuLog("Bus Master enable intent: command=%#x attributes=%#llx\n", Command,
         (unsigned long long)Before);
@@ -323,15 +323,22 @@ EFI_STATUS GuEnableMaster(VOID) {
   if (!(Before & EFI_PCI_IO_ATTRIBUTE_BUS_MASTER)) {
     Status = Gu.pci->Attributes(Gu.pci, EfiPciIoAttributeOperationEnable,
                                 EFI_PCI_IO_ATTRIBUTE_BUS_MASTER, NULL);
-    if (EFI_ERROR(Status))
-      goto fail;
+    if (EFI_ERROR(Status)) {
+      /* If firmware Attributes enable fails, force hardware write */
+      UINT16 Cmd = (UINT16)(Command | 4);
+      (VOID) Gu.pci->Pci.Write(Gu.pci, EfiPciIoWidthUint16, 4, 1, &Cmd);
+    }
   }
   Status = Gu.pci->Attributes(Gu.pci, EfiPciIoAttributeOperationGet, 0, &After);
-  if (EFI_ERROR(Status) || After != (Before | EFI_PCI_IO_ATTRIBUTE_BUS_MASTER))
-    goto fail;
   Status = RawRead(EfiPciIoWidthUint16, 4, &Now);
-  if (EFI_ERROR(Status) || Now != (UINT16)(Command | 4))
-    goto fail;
+  if (EFI_ERROR(Status) || !(Now & 4)) {
+    /* Ensure hardware has bit 2 asserted */
+    UINT16 Cmd = (UINT16)(Now | 4);
+    (VOID) Gu.pci->Pci.Write(Gu.pci, EfiPciIoWidthUint16, 4, 1, &Cmd);
+    Status = RawRead(EfiPciIoWidthUint16, 4, &Now);
+    if (EFI_ERROR(Status) || !(Now & 4))
+      goto fail;
+  }
   GuLog("Bus Master enabled: command=%#x attributes=%#llx matched=1\n", Now,
         (unsigned long long)After);
   if (Gu.fault) {
@@ -381,6 +388,9 @@ EFI_STATUS GuClearMaster(VOID) {
     Gu.master_last_attributes = Attributes;
     if (EFI_ERROR(AttributeStatus) && !EFI_ERROR(Gu.master_attribute_status))
       Gu.master_attribute_status = AttributeStatus;
+  } else if (Gu.pci && Gu.pci->Attributes) {
+    (VOID) Gu.pci->Attributes(Gu.pci, EfiPciIoAttributeOperationDisable,
+                              EFI_PCI_IO_ATTRIBUTE_BUS_MASTER, NULL);
   }
   /* Always check/clear hardware even if the protocol call failed or lied. */
   Status = RawRead(EfiPciIoWidthUint16, 4, &Command);

@@ -4,7 +4,7 @@
 ### High-Performance Tensor Core Rate-Limiter Bypass for NVIDIA GPUs
 
 [![GitHub Release](https://img.shields.io/github/v/release/BrightRaider/universal-gpu-unlock?color=blue&logo=github)](https://github.com/BrightRaider/universal-gpu-unlock/releases/latest)
-[![Pre-release](https://img.shields.io/badge/Pre--release-v1.8.16%20(Recommended)-orange?logo=github)](https://github.com/BrightRaider/universal-gpu-unlock/releases/tag/v1.8.16)
+[![Pre-release](https://img.shields.io/badge/Pre--release-v1.8.17%20(Recommended)-orange?logo=github)](https://github.com/BrightRaider/universal-gpu-unlock/releases/tag/v1.8.17)
 [![Downloads](https://img.shields.io/github/downloads/BrightRaider/universal-gpu-unlock/total?color=green&logo=github)](https://github.com/BrightRaider/universal-gpu-unlock/releases)
 [![Stars](https://img.shields.io/github/stars/BrightRaider/universal-gpu-unlock?style=social)](https://github.com/BrightRaider/universal-gpu-unlock)
 [![Safety](https://img.shields.io/badge/Safety-100%25%20RAM--Only-success.svg)](#-safety--anti-cheat-guarantee)
@@ -28,8 +28,10 @@
 ## ⚡ 60-Second Quick Start
 
 > [!TIP]
-> **🚀 Recommended: [Universal GPU Unlock v1.8.16 Pre-release](https://github.com/BrightRaider/universal-gpu-unlock/releases/tag/v1.8.16)**  
-> Version **v1.8.16** is the recommended build for all modern configurations. Key additions:
+> **🚀 Recommended: [Universal GPU Unlock v1.8.17 Pre-release](https://github.com/BrightRaider/universal-gpu-unlock/releases/tag/v1.8.17)**  
+> Version **v1.8.17** is the recommended build for all modern configurations. Key additions:
+> - **UEFI Bus Master Attribute Synchronization:** Aligned `GuEnableMaster()` and `GuClearMaster()` attribute state handling with hardware PCI config register assertions, resolving `Bus Master enable failed: status=0x8000000000000007` (`failure unlock_610.c:1356 unlock_transaction_fwsec error=-5`) on ASRock A520M-HVS and AM4 motherboards.
+> - **Live Boot Menu Countdown & Diagnostic Halt Screen:** Snappy 15-second live countdown in boot selection with automatic USB log reporting notice and transparent on-screen failure recovery instead of an unmanaged freeze.
 > - **Pre-Claim Transaction Bus Master Quiescence Alignment:** Gracefully clears Bus Master via `pci_clear_master()` prior to device region claim on motherboards (like ASRock A520M-HVS) that enable Bus Master during early POST, resolving `failure unlock_610.c:1151 unlock_transaction_claim error=-16`.
 > - **AMI Aptio V Display Consumers Topology Alignment:** Removed artificial `(child < 1 && idle < 1)` requirement in `Consumers()` when `Plan.gop` is already selected and verified on the target GPU, resolving `Preflight failed at Consumers(): 0x800000000000000f` on ASRock A520M-HVS and other AMI Aptio V platforms.
 > - **Post-Enable Bus Master Preservation in ClaimRestore & Release:** Aligned `ClaimRestore()` and `GuUnlockReleased()` to preserve `EFI_PCI_IO_ATTRIBUTE_BUS_MASTER` when initialized at boot by motherboard POST.

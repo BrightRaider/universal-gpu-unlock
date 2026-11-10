@@ -6,6 +6,19 @@ For packaged binaries and downloads, visit [GitHub Releases](https://github.com/
 
 ---
 
+## [v1.8.17] - 2026-11-10
+### UEFI Bus Master Attribute Synchronization & Live Boot Menu Countdown (Addresses #17)
+- **UEFI Bus Master Attribute Synchronization (Addresses #17):**
+  * Resolved `Bus Master enable failed: status=0x8000000000000007 command=0x3 readback=0xffff managed=0` (`failure unlock_610.c:1356 unlock_transaction_fwsec error=-5`) reported by @KaengiSchmaengi on ASRock A520M-HVS with Gainward RTX 3080.
+  * In `GuEnableMaster()` (`src/port.c`), decoupled the verification of active IO/Memory decoding from the cached Bus Master attribute state. On platforms where Bus Master was cleared prior to region claiming, `GuEnableMaster()` now cleanly re-enables Bus Master via both UEFI `Attributes()` and direct PCI config assertions without failing on cached attribute desync.
+  * In `GuClearMaster()` (`src/port.c`), added proactive `EfiPciIoAttributeOperationDisable` attribute calls even when invoked outside a managed block, ensuring the UEFI protocol driver's cached state stays in exact synchronization with hardware PCI config space.
+- **Boot Menu Live Countdown & Transparent Halt Diagnostic Banner:**
+  * Replaced the static 30-second timeout in `GuBootChoose()` (`src/boot_io.c`) with a snappy 15-second live countdown ticking down visibly every second (`15s` → `00s`).
+  * On timeout or preflight refusal, automatically prints the exact diagnostic log filename on the USB drive (`\GPU-UNLOCK\RUNxxxx.TXT`) and the GitHub Issues URL before booting stock Windows.
+  * In `GuBootHalt()`, replaced the silent black-screen hang with a structured on-screen diagnostic box confirming the safe stock state of the hardware, pointing to the USB log file, and running an automatic 15-second reboot countdown (press any key to reboot immediately).
+
+---
+
 ## [v1.8.16] - 2026-11-10
 ### Pre-Claim Transaction Bus Master Quiescence Alignment (Addresses #17)
 - **Pre-Claim Transaction Bus Master Quiescence Alignment (Addresses #17):**
