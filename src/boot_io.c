@@ -167,10 +167,16 @@ EFI_STATUS GuBootOpen(EFI_HANDLE image, EFI_SYSTEM_TABLE *t) {
 
   EFI_FILE_PROTOCOL *dir = NULL;
 
-  s = Root->Open(Root, &dir, L"\\AD102-UNLOCK",
+  s = Root->Open(Root, &dir, L"\\GPU-UNLOCK",
                  EFI_FILE_MODE_READ | EFI_FILE_MODE_WRITE |
                      EFI_FILE_MODE_CREATE,
                  EFI_FILE_DIRECTORY);
+  if (s != EFI_SUCCESS || !dir) {
+    s = Root->Open(Root, &dir, L"\\AD102-UNLOCK",
+                   EFI_FILE_MODE_READ | EFI_FILE_MODE_WRITE |
+                       EFI_FILE_MODE_CREATE,
+                   EFI_FILE_DIRECTORY);
+  }
 
   if (s != EFI_SUCCESS || !dir) {
     if (usb)

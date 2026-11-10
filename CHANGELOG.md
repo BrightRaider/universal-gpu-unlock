@@ -6,6 +6,23 @@ For packaged binaries and downloads, visit [GitHub Releases](https://github.com/
 
 ---
 
+## [v1.8.13] - 2026-11-10
+### ASRock AMD Motherboard Discovery Alignment & Ampere Device ID Expansion (Addresses #17)
+- **ASRock / AMD AM4 Discovery Filter Relaxation (Addresses #17):**
+  - Resolved `STOP: stage=discover status=0x8000000000000003` reported by @KaengiSchmaengi on ASRock A520M-HVS with Gainward GeForce RTX 3080 Phoenix.
+  - In `GuCheckConfig()` (`src/checks.c`), eliminated the restrictive boot-time check demanding `(Command & BUS_MASTER) == 0` and `Expansion_ROM == 0`. Motherboard firmwares that initialize the primary GPU with Bus Master or active Option ROM decoding during early POST are now cleanly discovered.
+- **Ampere Device ID Expansion:**
+  - Added RTX 3080 GA103 (`0x2414`), RTX 3090 Ti (`0x2203`), RTX 3080 Ti OEM (`0x2205`), and `0x220b` to `GU_AMPERE_DEVICE_IDS`.
+- **Diagnostic Discovery Telemetry:**
+  - Added verbose logging in `GuDiscoverAllGpus()` (`src/gpu_discovery.c`) to trace scanned PCI handles, candidate Device IDs, locations, and explicit rejection reasons.
+- **Universal Log Directory Structure:**
+  - Updated default pre-boot log folder to `\GPU-UNLOCK` with seamless fallback for legacy `\AD102-UNLOCK`.
+- **Turing Rate-Limiter Benchmark Threshold Calibration (Addresses #15):**
+  - Calibrated real-world PyTorch matrix multiplication bounds for Turing GPUs (RTX 2080 Ti, TITAN RTX, RTX 2080/2070/2060) in `tools/quick_check.py`.
+  - Replaced uncalibrated theoretical marketing ceilings with realistic PyTorch GEMM bounds (`threshold: 40.0 TFLOPS` for RTX 2080 Ti), ensuring verified unlocked runs correctly report `[OK] FULLY UNLOCKED!`.
+
+---
+
 ## [v1.8.12] - 2026-11-10
 ### ASUS AMI Aptio V 2-Agent Console Topology & Turing Post-FLR Status Drift Alignment (Addresses #15, #16)
 - **ASUS / AMI Aptio V 2-Agent Console Topology Support (Addresses #16):**

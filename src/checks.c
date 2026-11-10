@@ -35,8 +35,6 @@ BOOLEAN GuCheckConfig(const UINT32 Config[64], UINTN Segment, UINTN Bus,
 
   Command = ConfigWord(Config, PCI_COMMAND_OFFSET);
   if ((Command & EFI_PCI_COMMAND_MEMORY_SPACE) == 0 ||
-      (Command & EFI_PCI_COMMAND_BUS_MASTER) != 0 ||
-      (Config[PCI_EXPANSION_ROM_BASE / 4] & 1U) != 0 ||
       (ConfigWord(Config, PCI_PRIMARY_STATUS_OFFSET) & EFI_PCI_STATUS_CAPABILITY) == 0)
     return FALSE;
 

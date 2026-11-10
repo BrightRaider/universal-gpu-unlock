@@ -349,7 +349,7 @@ function Get-GpuUnlockStatus {
         $drives = Get-Volume | Where-Object { $_.DriveLetter } | ForEach-Object { "$($_.DriveLetter):\" }
         $candidateReports = @()
         foreach ($d in $drives) {
-            foreach ($folder in @("AD102-UNLOCK", "GA102-UNLOCK", "RTX3090-UNLOCK")) {
+            foreach ($folder in @("GPU-UNLOCK", "AD102-UNLOCK", "GA102-UNLOCK", "RTX3090-UNLOCK")) {
                 $unlockDir = Join-Path $d $folder
                 if (Test-Path -LiteralPath $unlockDir) {
                     $reports = Get-ChildItem -Path (Join-Path $unlockDir "*.TXT") -ErrorAction SilentlyContinue

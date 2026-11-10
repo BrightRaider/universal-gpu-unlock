@@ -15,11 +15,15 @@
   X(0x2882U) /* RTX 4060 (AD107) */
 
 #define GU_AMPERE_DEVICE_IDS(X) \
+  X(0x2203U) /* RTX 3090 Ti */ \
   X(0x2204U) /* RTX 3090 */ \
-  X(0x2208U) /* RTX 3090 Ti */ \
-  X(0x2206U) /* RTX 3080 Ti */ \
+  X(0x2205U) /* RTX 3080 Ti OEM */ \
+  X(0x2206U) /* RTX 3080 (10GB) */ \
+  X(0x2208U) /* RTX 3080 Ti */ \
   X(0x220aU) /* RTX 3080 (10GB) */ \
+  X(0x220bU) /* RTX 3080 */ \
   X(0x2216U) /* RTX 3080 12GB */ \
+  X(0x2414U) /* RTX 3080 (GA103) */ \
   X(0x2207U) /* CMP 90HX */ \
   X(0x2482U) /* RTX 3070 Ti (GA104) */ \
   X(0x2484U) /* RTX 3070 (GA104) */ \

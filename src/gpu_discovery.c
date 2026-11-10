@@ -82,28 +82,49 @@ EFI_STATUS GuDiscoverAllGpus(EFI_HANDLE image, EFI_SYSTEM_TABLE *table,
     return EFI_UNSUPPORTED;
   }
 
+  GuLog("Discovery: scan evaluated %zu PCI handles, %zu NVIDIA candidate(s)\n",
+        (size_t)count, inventory.count);
+
   for (i = 0; i < inventory.count && discovered < max_devices; i++) {
     const GU_GPU_RECORD *p = &inventory.nvidia[i];
     EFI_PCI_IO_PROTOCOL *io = NULL;
     UINT32 config[64];
     GU_CAPS caps;
 
-    if (!GuIsSupportedPciId(p->pci_id)) continue;
+    GuLog("Discovery candidate [%zu]: DevID=0x%04x (0x%08x) loc=%u:%u:%u:%u\n",
+          i + 1, (unsigned)(p->pci_id >> 16), p->pci_id,
+          (unsigned)p->segment, (unsigned)p->bus, (unsigned)p->device, (unsigned)p->function);
+
+    if (!GuIsSupportedPciId(p->pci_id)) {
+      GuLog("Discovery candidate [%zu] rejected: unsupported DevID 0x%04x\n",
+            i + 1, (unsigned)(p->pci_id >> 16));
+      continue;
+    }
 
     s = table->BootServices->HandleProtocol((EFI_HANDLE)p->handle,
                                             &PciGuid, (VOID **)&io);
     if (EFI_ERROR(s) || io != p->pci || !io ||
-        !io->GetLocation || !io->Pci.Read) continue;
+        !io->GetLocation || !io->Pci.Read) {
+      GuLog("Discovery candidate [%zu] rejected: PciIo protocol error\n", i + 1);
+      continue;
+    }
 
     s = io->GetLocation(io, &seg, &bus, &dev, &fun);
     if (EFI_ERROR(s) || seg != p->segment || bus != p->bus ||
-        dev != p->device || fun != p->function) continue;
+        dev != p->device || fun != p->function) {
+      GuLog("Discovery candidate [%zu] rejected: location mismatch\n", i + 1);
+      continue;
+    }
 
     s = io->Pci.Read(io, EfiPciIoWidthUint32, 0, 64, config);
     if (EFI_ERROR(s) || config[0] != p->pci_id ||
         config[0x2c / 4] != p->subsystem_id ||
         (config[2] >> 16) != p->class_code ||
-        !GuCheckConfig(config, seg, bus, dev, fun, &caps)) continue;
+        !GuCheckConfig(config, seg, bus, dev, fun, &caps)) {
+      GuLog("Discovery candidate [%zu] rejected: config check failed (cmd=0x%x rom=0x%x)\n",
+            i + 1, (unsigned)(config[1] & 0xffff), config[0x30 / 4]);
+      continue;
+    }
 
     GU_DISCOVERED_DEVICE *d = &devices[discovered];
     d->handle = (EFI_HANDLE)p->handle;

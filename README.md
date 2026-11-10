@@ -4,7 +4,7 @@
 ### High-Performance Tensor Core Rate-Limiter Bypass for NVIDIA GPUs
 
 [![GitHub Release](https://img.shields.io/github/v/release/BrightRaider/universal-gpu-unlock?color=blue&logo=github)](https://github.com/BrightRaider/universal-gpu-unlock/releases/latest)
-[![Pre-release](https://img.shields.io/badge/Pre--release-v1.8.12%20(Recommended)-orange?logo=github)](https://github.com/BrightRaider/universal-gpu-unlock/releases/tag/v1.8.12)
+[![Pre-release](https://img.shields.io/badge/Pre--release-v1.8.13%20(Recommended)-orange?logo=github)](https://github.com/BrightRaider/universal-gpu-unlock/releases/tag/v1.8.13)
 [![Downloads](https://img.shields.io/github/downloads/BrightRaider/universal-gpu-unlock/total?color=green&logo=github)](https://github.com/BrightRaider/universal-gpu-unlock/releases)
 [![Stars](https://img.shields.io/github/stars/BrightRaider/universal-gpu-unlock?style=social)](https://github.com/BrightRaider/universal-gpu-unlock)
 [![Safety](https://img.shields.io/badge/Safety-100%25%20RAM--Only-success.svg)](#-safety--anti-cheat-guarantee)
@@ -28,8 +28,10 @@
 ## ⚡ 60-Second Quick Start
 
 > [!TIP]
-> **🚀 Recommended: [Universal GPU Unlock v1.8.12 Pre-release](https://github.com/BrightRaider/universal-gpu-unlock/releases/tag/v1.8.12)**  
-> Version **v1.8.12** is the recommended build for all modern configurations. Key additions:
+> **🚀 Recommended: [Universal GPU Unlock v1.8.13 Pre-release](https://github.com/BrightRaider/universal-gpu-unlock/releases/tag/v1.8.13)**  
+> Version **v1.8.13** is the recommended build for all modern configurations. Key additions:
+> - **ASRock & AMD AM4 Discovery Filter Alignment:** Removed restrictive boot-time Bus Master and Expansion ROM checks, resolving `STOP: stage=discover status=0x8000000000000003` on ASRock A520M-HVS and AMD platforms.
+> - **Ampere Device ID Additions:** Added RTX 3080 GA103 (`0x2414`), RTX 3090 Ti (`0x2203`), RTX 3080 Ti OEM (`0x2205`), and `0x220b`.
 > - **ASUS / AMI Aptio V 2-Agent Console Topology Support:** Resolves `Preflight failed at Consumers(): 0x800000000000000f` on ASUS PRIME and other AMI Aptio V motherboards with dual or single displays.
 > - **Turing Post-FLR Device Status Drift Tolerance:** Resolves `Release check failed: config-drift` on Turing TU102 (RTX 2080 Ti), allowing full handover to Windows Boot Manager.
 > - **Turing PCIe FLR Pre-Reset Validation Guard:** Bypassed Ada/Ampere-specific selector checks in `GuFlr()`, resolving `failure unlock_610.c:1764 unlock_transaction_reset error=-5` on RTX 2080 Ti.
@@ -44,9 +46,9 @@
 > - **Headless & Dedicated Compute Accelerators:** Full support for dGPUs with all displays routed via AMD Ryzen (7000/9000 Raphael) or Intel UHD iGPUs.
 > - **Expanded Device IDs:** Added RTX 3060 Ti GA104 (`0x2486`), RTX 3050 GA106 (`0x2582`), and Ada AD104/AD106/AD107 variants.
 > 
-> 📦 **Download Pre-release:** **[Universal_GPU_Unlock_v1.8.12.zip](https://github.com/BrightRaider/universal-gpu-unlock/releases/tag/v1.8.12)** *(or previous stable: [v1.7.9](https://github.com/BrightRaider/universal-gpu-unlock/releases/tag/v1.7.9))*.
+> 📦 **Download Pre-release:** **[Universal_GPU_Unlock_v1.8.13.zip](https://github.com/BrightRaider/universal-gpu-unlock/releases/tag/v1.8.13)** *(or previous stable: [v1.7.9](https://github.com/BrightRaider/universal-gpu-unlock/releases/tag/v1.7.9))*.
 
-1. **Download:** Get the recommended build: **[Universal_GPU_Unlock_v1.8.12.zip](https://github.com/BrightRaider/universal-gpu-unlock/releases/tag/v1.8.12)** *(or [v1.7.9](https://github.com/BrightRaider/universal-gpu-unlock/releases/latest))*.
+1. **Download:** Get the recommended build: **[Universal_GPU_Unlock_v1.8.13.zip](https://github.com/BrightRaider/universal-gpu-unlock/releases/tag/v1.8.13)** *(or [v1.7.9](https://github.com/BrightRaider/universal-gpu-unlock/releases/latest))*.
 2. **Provision:** Extract the ZIP, insert a USB flash drive, and run **`Setup.bat`** (formats & sets up all boot files automatically).
 3. **Boot & Unlock (or Install Permanently):** Restart your PC, boot from the USB drive (`F8`/`F11`/`F12`):
    - Press **`[U]`** for Standard RAM-Only Unlock (temporary, reverts if USB removed).
@@ -81,6 +83,8 @@ The following GPU models, system motherboards, and compute readbacks have been i
 | Verified GPU | Architecture & Silicon | Motherboard & Platform | Real-World Throughput | Verification Issue |
 | :--- | :--- | :--- | :--- | :--- |
 | **Palit GeForce RTX 3060 12GB** | Ampere (GA106 LHR) | MSI MPG Z390 GAMING PLUS | **46.08 TFLOPS** (~45% ComfyUI speedup) | [#11](https://github.com/BrightRaider/universal-gpu-unlock/issues/11) |
+| **MSI GeForce RTX 2080 Ti 11GB** | Turing (TU102) | Intel Z390 / UEFI Platform | **45.13 TFLOPS** (Full Unrestricted Tensor Compute) | [#15](https://github.com/BrightRaider/universal-gpu-unlock/issues/15) |
+| **EVGA GeForce RTX 3080 Ti 12GB** | Ampere (GA102) | ASUS PRIME Z690-A | **127.61 TFLOPS** (100% Unrestricted Compute) | [#16](https://github.com/BrightRaider/universal-gpu-unlock/issues/16) |
 | **EVGA GeForce RTX 3080 Ti 12GB** | Ampere (GA102) | MSI X570-A PRO | **119.0 TFLOPS** (+84.5% boost, Unrestricted Compute) | [#12](https://github.com/BrightRaider/universal-gpu-unlock/issues/12) |
 | **NVIDIA GeForce RTX 3090 24GB** | Ampere (GA102) | Gigabyte TRX40 AORUS MASTER (AMD Threadripper 3960X) | **117.24 TFLOPS** (100% Unrestricted Tensor Compute) | [#13](https://github.com/BrightRaider/universal-gpu-unlock/issues/13) |
 | **ZOTAC GeForce RTX 4080 Trinity OC** | Ada Lovelace (AD103) | GIGABYTE X870 AORUS ELITE WIFI7 (AMD 9800X3D) | **174.29 TFLOPS** (Full Unrestricted GEMM) | [#9](https://github.com/BrightRaider/universal-gpu-unlock/issues/9) |

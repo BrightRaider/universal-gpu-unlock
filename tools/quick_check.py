@@ -45,15 +45,15 @@ CARD_PROFILES = {
     "3060 ti": {"min_unlocked": 55.0, "threshold": 46.0, "stock_typical": 34.0},
     "3060": {"min_unlocked": 40.0, "threshold": 32.0, "stock_typical": 24.0},
     "3050": {"min_unlocked": 28.0, "threshold": 22.0, "stock_typical": 15.0},
-    "titan rtx": {"min_unlocked": 115.0, "threshold": 95.0, "stock_typical": 65.0},
-    "2080 ti": {"min_unlocked": 105.0, "threshold": 85.0, "stock_typical": 54.0},
-    "2080 super": {"min_unlocked": 80.0, "threshold": 65.0, "stock_typical": 42.0},
-    "2080": {"min_unlocked": 72.0, "threshold": 60.0, "stock_typical": 38.0},
-    "2070 super": {"min_unlocked": 65.0, "threshold": 52.0, "stock_typical": 34.0},
-    "2070": {"min_unlocked": 55.0, "threshold": 45.0, "stock_typical": 29.0},
-    "2060 super": {"min_unlocked": 50.0, "threshold": 42.0, "stock_typical": 27.0},
-    "2060": {"min_unlocked": 42.0, "threshold": 35.0, "stock_typical": 22.0},
-    "cmp 50hx": {"min_unlocked": 105.0, "threshold": 85.0, "stock_typical": 54.0},
+    "titan rtx": {"min_unlocked": 50.0, "threshold": 43.0, "stock_typical": 26.0},
+    "2080 ti": {"min_unlocked": 45.0, "threshold": 40.0, "stock_typical": 24.0},
+    "2080 super": {"min_unlocked": 35.0, "threshold": 30.0, "stock_typical": 18.0},
+    "2080": {"min_unlocked": 33.0, "threshold": 28.0, "stock_typical": 17.0},
+    "2070 super": {"min_unlocked": 30.0, "threshold": 25.0, "stock_typical": 15.0},
+    "2070": {"min_unlocked": 26.0, "threshold": 22.0, "stock_typical": 13.0},
+    "2060 super": {"min_unlocked": 25.0, "threshold": 21.0, "stock_typical": 12.5},
+    "2060": {"min_unlocked": 22.0, "threshold": 18.0, "stock_typical": 11.0},
+    "cmp 50hx": {"min_unlocked": 45.0, "threshold": 40.0, "stock_typical": 24.0},
 }
 
 def main():
@@ -70,7 +70,7 @@ def main():
         elif props.major == 8 and props.minor == 6:
             threshold = sm_count * 1.15
         elif props.major == 7 and props.minor == 5:
-            threshold = sm_count * 1.15
+            threshold = sm_count * 0.60
         else:
             threshold = sm_count * 1.0
         profile = {"min_unlocked": threshold * 1.15, "threshold": threshold, "stock_typical": threshold * 0.75}
