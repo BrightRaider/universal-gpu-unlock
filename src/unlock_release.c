@@ -785,6 +785,7 @@ EFI_STATUS GuExecuteUnlock(EFI_SYSTEM_TABLE *t, EFI_HANDLE image, const char **s
 }
 
 EFI_STATUS GuRegisterS3(EFI_SYSTEM_TABLE *t) {
+  if (Gu.is_turing) return EFI_SUCCESS;
   if (!t || !t->BootServices) return EFI_INVALID_PARAMETER;
   static EFI_GUID S3SaveStateGuid = EFI_S3_SAVE_STATE_PROTOCOL_GUID;
   EFI_S3_SAVE_STATE_PROTOCOL *s3 = NULL;

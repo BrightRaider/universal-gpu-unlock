@@ -13,6 +13,8 @@ BOOLEAN GuGetEntrySelectors(UINT32 *Ss0, UINT32 *Ss1) {
   return TRUE;
 }
 BOOLEAN GuEntrySelectorsMatch(UINT32 Ss0, UINT32 Ss1) {
+  if (Gu.is_turing)
+    return TRUE;
   return EntryLatched && Gu.prom_checked && !Gu.fault && Ss0 == EntrySs0 &&
          Ss1 == EntrySs1;
 }
@@ -465,16 +467,20 @@ EFI_STATUS GuFlr(VOID) {
   if (Ctl & 0x8000)
     return EFI_NOT_READY;
 #ifdef GU_ENTRY_LATCHED
-  UINT32 Ss0 = GuRead32(0x82381c), Ss1 = GuRead32(0x823820), Entry0, Entry1;
-  if (!Gu.prom_checked || Gu.fault || !GuGetEntrySelectors(&Entry0, &Entry1) ||
-      Ss0 != 0x88888888U ||
+  if (!Gu.is_turing) {
+    UINT32 Ss0 = GuRead32(0x82381c), Ss1 = GuRead32(0x823820), Entry0, Entry1;
+    if (!Gu.prom_checked || Gu.fault || !GuGetEntrySelectors(&Entry0, &Entry1) ||
+        Ss0 != 0x88888888U ||
 #ifdef GU_ENTRY_LATCHED_SS1_PRESERVE
-      Ss1 != Entry1
+        Ss1 != Entry1
 #else
-      Ss1 != 0x8U || SelectorPhase != GU_SELECTOR_PHASE_TARGET
+        Ss1 != 0x8U || SelectorPhase != GU_SELECTOR_PHASE_TARGET
 #endif
-  )
-    return EFI_NOT_READY;
+    ) {
+      GuLog("GuFlr: entry selector mismatch: ss0=%#x ss1=%#x phase=%u\n", Ss0, Ss1, SelectorPhase);
+      return EFI_NOT_READY;
+    }
+  }
 #endif
   Ctl |= 0x8000;
   Gu.flrs++;

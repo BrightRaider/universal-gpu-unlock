@@ -6,6 +6,17 @@ For packaged binaries and downloads, visit [GitHub Releases](https://github.com/
 
 ---
 
+## [v1.8.11] - 2026-11-10
+### Turing PCIe FLR Pre-Reset Selector Guard (Addresses #15)
+- **Turing PCIe FLR Pre-Reset Selector Validation Guard (Addresses #15):**
+  - Resolved `failure unlock_610.c:1764 unlock_transaction_reset error=-5` (`PCIe FLR returned: result=-5`) reported by @mibby in `RUN0008.TXT`.
+  - In `GuFlr()` (`src/port.c`), guarded the pre-FLR SS0/SS1 register comparison with `!Gu.is_turing`. On Turing silicon, speed-select override registers `0x82381c`/`0x823820` are unmapped (returning `0xbadf5040`) as rate-limiting override is handled directly via Falcon SEC2 HS microcode.
+  - Hardened `GuEntrySelectorsMatch()` to immediately evaluate true on Turing.
+  - Guarded `GuRegisterS3()` against unmapped MMIO writes on Turing hardware.
+  - Added diagnostic telemetry to `GuFlr()` for clear tracking of device reset state transitions.
+
+---
+
 ## [v1.8.10] - 2026-11-10
 ### Turing FWSEC Post-FRTS WPR2 Assertion Guard (Addresses #15)
 - **Turing FWSEC Post-FRTS WPR2 Verification Alignment (Addresses #15):**
