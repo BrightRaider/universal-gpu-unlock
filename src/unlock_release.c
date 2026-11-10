@@ -733,10 +733,38 @@ static BOOLEAN ChipMatchesTarget(UINT32 chip) {
   if (Gu.is_ampere) return arch == 0x07U;
   return arch == 0x09U;
 }
+static BOOLEAN GuHardwareVerified = FALSE;
+
+/* Verify silicon state while device is exclusively claimed and MMIO is fully active. */
+static BOOLEAN GuVerifyHardwareRegisters(VOID) {
+  if (!Plan.claimed || !Gu.owned || Gu.fault) return FALSE;
+  UINT32 chip = GuRead32(0), cpu = GuRead32(0x110100), hi = GuRead32(0x1fa828);
+  UINT32 ss0 = GuRead32(0x82381c), ss1 = GuRead32(0x823820), readout = GuRead32(0x823818), plm = GuRead32(0x823804);
+  BOOLEAN chip_ok = ChipMatchesTarget(chip);
+
+  GuLog("Hardware register verify: chip=%#x chip_ok=%u cpu=%#x hi=%#x ss0=%#x ss1=%#x readout=%#x plm=%#x\n",
+        chip, chip_ok, cpu, hi, ss0, ss1, readout, plm);
+
+  if (Gu.fault || !chip_ok || !(cpu & 0x10) || cpu == 0xffffffff ||
+      (cpu & 0xffff0000) == 0xbadf0000 || (hi >> 4) != 0 ||
+      (!Gu.is_turing && (ss0 != 0x88888888 || ss1 != 8))) {
+    GuLog("Hardware register check failed: register values out of specification\n");
+    return FALSE;
+  }
+  if (!Gu.is_ampere && !Gu.is_turing) {
+    /* Ada-specific SM speed-select readout and open PLM check */
+    if ((readout & 0x07ffffff) || readout == 0xffffffff || plm != 0xffffffff) {
+      GuLog("Hardware register check failed: Ada-specific readout/plm mismatch\n");
+      return FALSE;
+    }
+  }
+  return TRUE;
+}
+
 BOOLEAN GuUnlockReadyForWindows(VOID) {
-  if (!Plan.ready || Plan.stage != 3 || Plan.claimed || Gu.owned || Gu.fault || !Gu.quiesced || Gu.flrs != 1 || !GuSafeToReturn()) {
-    GuLog("GuUnlockReadyForWindows: state check failed (ready=%u stage=%zu claimed=%u owned=%u fault=%u quiesced=%u flrs=%u safe=%u)\n",
-          Plan.ready, (size_t)Plan.stage, Plan.claimed, Gu.owned, Gu.fault, Gu.quiesced, Gu.flrs, GuSafeToReturn());
+  if (!Plan.ready || Plan.stage != 3 || Plan.claimed || Gu.owned || Gu.fault || !Gu.quiesced || Gu.flrs != 1 || !GuSafeToReturn() || !GuHardwareVerified) {
+    GuLog("GuUnlockReadyForWindows: state check failed (ready=%u stage=%zu claimed=%u owned=%u fault=%u quiesced=%u flrs=%u safe=%u hw=%u)\n",
+          Plan.ready, (size_t)Plan.stage, Plan.claimed, Gu.owned, Gu.fault, Gu.quiesced, Gu.flrs, GuSafeToReturn(), (unsigned)GuHardwareVerified);
     return FALSE;
   }
   UINT32 c[64];
@@ -745,27 +773,7 @@ BOOLEAN GuUnlockReadyForWindows(VOID) {
     GuLog("GuUnlockReadyForWindows: environment/edge verification failed\n");
     return FALSE;
   }
-  /* Fresh status after USB Close and before StartImage; no log callbacks. */
-  UINT32 chip = GuRead32(0), cpu = GuRead32(0x110100), hi = GuRead32(0x1fa828);
-  UINT32 ss0 = GuRead32(0x82381c), ss1 = GuRead32(0x823820), readout = GuRead32(0x823818), plm = GuRead32(0x823804);
-  BOOLEAN chip_ok = ChipMatchesTarget(chip);
-
-  GuLog("GuUnlockReadyForWindows: chip=%#x chip_ok=%u cpu=%#x hi=%#x ss0=%#x ss1=%#x readout=%#x plm=%#x\n",
-        chip, chip_ok, cpu, hi, ss0, ss1, readout, plm);
-
-  if (Gu.fault || !chip_ok || !(cpu & 0x10) || cpu == 0xffffffff ||
-      (cpu & 0xffff0000) == 0xbadf0000 || (hi >> 4) != 0 ||
-      (!Gu.is_turing && (ss0 != 0x88888888 || ss1 != 8))) {
-    GuLog("GuUnlockReadyForWindows: hardware register check failed\n");
-    return FALSE;
-  }
-  if (!Gu.is_ampere && !Gu.is_turing) {
-    /* Ada-specific SM speed-select readout and open PLM check */
-    if ((readout & 0x07ffffff) || readout == 0xffffffff || plm != 0xffffffff) {
-      GuLog("GuUnlockReadyForWindows: Ada-specific readout/plm check failed\n");
-      return FALSE;
-    }
-  }
+  GuLog("GuUnlockReadyForWindows: environment and PCI config space verified for OS handover\n");
   return TRUE;
 }
 
@@ -812,6 +820,13 @@ EFI_STATUS GuExecuteUnlock(EFI_SYSTEM_TABLE *t, EFI_HANDLE image, const char **s
   if (result || Gu.fault || !GuSafeToReturn()) {
     return EFI_DEVICE_ERROR;
   }
+
+  *stage = "verify-hardware";
+  if (!GuVerifyHardwareRegisters()) {
+    GuLog("GuExecuteUnlock: post-unlock hardware register verification failed\n");
+    return EFI_DEVICE_ERROR;
+  }
+  GuHardwareVerified = TRUE;
 
   *stage = "release-claim";
   s = GuUnlockFinish();

@@ -6,6 +6,18 @@ For packaged binaries and downloads, visit [GitHub Releases](https://github.com/
 
 ---
 
+## [v1.8.20] - 2026-11-10
+### Post-Protocol-Close MMIO Bus Freeze Resolution & Display Link Handover (Addresses #17)
+- **Pre-Close Hardware Register Verification (Addresses #17):**
+  * Resolved platform bus freeze and black screen on AMD/Aptio V systems where `GuUnlockReadyForWindows()` performed volatile MMIO reads (`GuRead32(0)`) after `GuUnlockFinish()` had closed `PciIoProtocol`.
+  * On UEFI platforms like AMI Aptio V, closing `PciIoProtocol` unmaps PCIe memory decode and triggers a PCIe Master Abort / CPU bus hang if dereferencing raw BAR physical pointers.
+  * Moved all silicon register readbacks (`chip`, `cpu`, `hi`, `ss0`, `ss1`, `readout`, `plm`) into `GuVerifyHardwareRegisters()`, executing strictly while the device is exclusively claimed and MMIO decode is active.
+  * `GuUnlockReadyForWindows()` now verifies the pre-validated hardware state and PCI configuration space via `Pci.Read` without unsafe post-close MMIO dereferences.
+- **Reliable Display Reconnection Execution:**
+  * Because the MMIO bus freeze is eliminated, `ConnectController(devices[g].handle, NULL, NULL, TRUE)`, the 200ms physical link training stall, and console reset now reliably execute and re-engage the UEFI GOP driver before launching Windows Boot Manager (`bootmgfw.efi`).
+
+---
+
 ## [v1.8.19] - 2026-11-10
 ### Post-Unlock UEFI GOP Display Controller Reconnection & Windows Handover (Addresses #17)
 - **Post-Unlock UEFI GOP Display Controller Reconnection (Addresses #17):**
