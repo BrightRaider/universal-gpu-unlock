@@ -108,3 +108,9 @@ By default, Windows 10/11 "Shut Down" does not actually power off the system cle
 ### 2. Standby / Sleep (ACPI S3 / Modern Standby)
 Entering S3 Sleep cuts power to the GPU execution clusters. Upon waking, `nvlddmkm.sys` resets the graphics card from the physical onboard VBIOS, restoring factory rate-limiters.
 * **Best Practice:** Use the included **`Toggle-Sleep-Button.bat`** tool in the repository root to conveniently hide the "Sleep" option from your Windows Start menu, preventing accidental loss of the unlocked volatile state during the day.
+
+### 3. Compatibility Support Module (CSM) & Resizable BAR
+On budget or older motherboard firmware (e.g., AMD AM4 platforms), factory default BIOS settings may have **CSM (Compatibility Support Module)** enabled.
+* **Legacy VGA Conflicts (Code 43):** When CSM is active, the chipset routes legacy VGA memory (`0xA0000–0xBFFFF`) and VGA I/O ports (`0x3B0–0x3DF`, reported as `attrs=0x718` in diagnostic logs) to the primary PCIe slot. When a post-FLR GPU binds the native UEFI Option ROM GOP driver, the Windows display subsystem encounters a conflict between legacy VGA routing and pure UEFI GOP, resulting in **Error Code 43** and fallback to the Microsoft Basic Display Adapter.
+* **Resizable BAR Blocking:** NVIDIA drivers forcefully disable Resizable BAR (ReBAR) whenever CSM is detected, preventing the CPU from mapping the full VRAM address space.
+* **Best Practice:** Keep CSM **Disabled** (pure UEFI mode) in BIOS Setup, and enable **Above 4G Decoding** + **Re-Size BAR Support**. This ensures clean OS handover at full native resolution and unlocks maximum PCIe memory throughput for both gaming and PyTorch matrix operations.
