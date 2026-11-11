@@ -4,7 +4,7 @@
 ### High-Performance Tensor Core Rate-Limiter Bypass for NVIDIA GPUs
 
 [![GitHub Release](https://img.shields.io/github/v/release/BrightRaider/universal-gpu-unlock?color=blue&logo=github)](https://github.com/BrightRaider/universal-gpu-unlock/releases/latest)
-[![Pre-release](https://img.shields.io/badge/Pre--release-v1.8.22%20(Recommended)-orange?logo=github)](https://github.com/BrightRaider/universal-gpu-unlock/releases/tag/v1.8.22)
+[![Release Version](https://img.shields.io/badge/Release-v1.8.22%20(Latest)-blue?logo=github)](https://github.com/BrightRaider/universal-gpu-unlock/releases/tag/v1.8.22)
 [![Downloads](https://img.shields.io/github/downloads/BrightRaider/universal-gpu-unlock/total?color=green&logo=github)](https://github.com/BrightRaider/universal-gpu-unlock/releases)
 [![Stars](https://img.shields.io/github/stars/BrightRaider/universal-gpu-unlock?style=social)](https://github.com/BrightRaider/universal-gpu-unlock)
 [![Safety](https://img.shields.io/badge/Safety-100%25%20RAM--Only-success.svg)](#-safety--anti-cheat-guarantee)
@@ -27,52 +27,15 @@
 
 ## ⚡ 60-Second Quick Start
 
-> [!TIP]
-> **🚀 Recommended: [Universal GPU Unlock v1.8.22 Pre-release](https://github.com/BrightRaider/universal-gpu-unlock/releases/tag/v1.8.22)**  
-> Version **v1.8.22** is the recommended build for all modern configurations. Key additions:
-> - **Extended 30-Second Boot Selection Countdown:** Extended the countdown from 15 to 30 seconds to allow DisplayPort/HDMI monitors to synchronize pixel clocks and give users ample time to read options and select their desired mode.
-> - **Redundant Handle-Graph Scan Elimination:** Removed the redundant second handle-table walk in `GuUnlockReadyForWindows()`, resolving firmware stalls on ASRock AM4 / AMD platforms and transitioning directly into display reconnection and Windows Boot Manager handover.
-> - **Direct Console Splitter Reconnection:** Proactively reconnects `SystemTable->ConsoleOutHandle` alongside the GPU controller, ensuring monitor sync and display pipeline stability.
-> - **Pre-Close Hardware Register Verification:** Moves all silicon register readbacks (`chip`, `cpu`, `hi`, `ss0`, `ss1`, `readout`, `plm`) strictly before `CloseProtocol()`, preventing post-close volatile MMIO reads (`GuRead32(0)`) that triggered a PCIe Master Abort / bus freeze on AMI Aptio V / AMD platforms.
-> - **Post-Unlock UEFI GOP Display Controller Reconnection:** Proactively reconnects primary display controllers via `ConnectController(devices[g].handle, ...)` and stabilizes TMDS/DP link training prior to handing over control to Windows Boot Manager (`bootmgfw.efi`), resolving monitor signal loss on systems without integrated graphics.
-> - **Universal Control Center UTF-8 Mojibake Fix:** Standardized XML numeric character entities across `Universal-Control-Center.xaml` and native character escapes in `Universal-Control-Center.ps1`, resolving `âœ”` rendering artifacts on all Windows system locales.
-> - **Pre-FLR Bus Master Quiescence Drift Tolerance:** Aligned `ConfigStable()` to tolerate bit 2 (`PCI_COMMAND_MASTER`) of Command Register Dword 1 (offset 0x4) during pre-FLR quiescence, resolving `PCI config drift refused: offset=0x4 captured=0x100007 now=0x100003 bits=0x4 flrs=0` (`Release check failed: config-drift`, `unlock_610.c:1764 error=-16`) on ASRock A520M-HVS and Ampere RTX 3080.
-> - **Halt Console Output & Keystroke Drain Fix:** Proactively reconnects the display controller via `ConnectController()` and resets `ConOut` prior to calling `GuBootHalt()`, ensuring the diagnostic box and 15-second reboot countdown are visibly rendered on physical displays instead of a frozen underscore cursor. Drains queued keystrokes from `ConIn` to prevent accidental premature reboots.
-> - **UEFI Bus Master Attribute Synchronization:** Aligned `GuEnableMaster()` and `GuClearMaster()` attribute state handling with hardware PCI config register assertions, resolving `Bus Master enable failed: status=0x8000000000000007` (`failure unlock_610.c:1356 unlock_transaction_fwsec error=-5`) on ASRock A520M-HVS and AM4 motherboards.
-> - **Live Boot Menu Countdown & Diagnostic Halt Screen:** Snappy 15-second live countdown in boot selection with automatic USB log reporting notice and transparent on-screen failure recovery instead of an unmanaged freeze.
-> - **Pre-Claim Transaction Bus Master Quiescence Alignment:** Gracefully clears Bus Master via `pci_clear_master()` prior to device region claim on motherboards (like ASRock A520M-HVS) that enable Bus Master during early POST, resolving `failure unlock_610.c:1151 unlock_transaction_claim error=-16`.
-> - **AMI Aptio V Display Consumers Topology Alignment:** Removed artificial `(child < 1 && idle < 1)` requirement in `Consumers()` when `Plan.gop` is already selected and verified on the target GPU, resolving `Preflight failed at Consumers(): 0x800000000000000f` on ASRock A520M-HVS and other AMI Aptio V platforms.
-> - **Post-Enable Bus Master Preservation in ClaimRestore & Release:** Aligned `ClaimRestore()` and `GuUnlockReleased()` to preserve `EFI_PCI_IO_ATTRIBUTE_BUS_MASTER` when initialized at boot by motherboard POST.
-> - **ASRock & AMD AM4 Preflight ReadConfig Bus Master Alignment:** Removed restrictive `|| (c[1] & 4)` assertions and aligned decode attribute checking, resolving `Preflight failed at ReadConfig(): 0x8000000000000003` on ASRock A520M-HVS and AMD AM4 motherboards.
-> - **Turing GSP Firmware Mode 1-Click Utility:** Includes `Toggle-Turing-GSP.bat` for seamless configuration of `EnableGpuFirmware = 1` in Windows Registry, allowing Turing (RTX 2080 Ti / TITAN RTX) to activate full enterprise compute.
-> - **Enhanced Multi-Precision Hardware Verification:** `Check-GPU-Unlock.bat` tests FP16, BF16, TF32, and pure FP32 CUDA cores as physical negative controls.
-> - **ASRock & AMD AM4 Discovery Filter Alignment:** Removed restrictive boot-time Bus Master and Expansion ROM checks, resolving `STOP: stage=discover status=0x8000000000000003` on ASRock A520M-HVS and AMD platforms.
-> - **Ampere Device ID Additions:** Added RTX 3080 GA103 (`0x2414`), RTX 3090 Ti (`0x2203`), RTX 3080 Ti OEM (`0x2205`), and `0x220b`.
-> - **ASUS / AMI Aptio V 2-Agent Console Topology Support:** Resolves `Preflight failed at Consumers(): 0x800000000000000f` on ASUS PRIME and other AMI Aptio V motherboards with dual or single displays.
-> - **Turing Post-FLR Device Status Drift Tolerance:** Resolves `Release check failed: config-drift` on Turing TU102 (RTX 2080 Ti), allowing full handover to Windows Boot Manager.
-> - **Turing PCIe FLR Pre-Reset Validation Guard:** Bypassed Ada/Ampere-specific selector checks in `GuFlr()`, resolving `failure unlock_610.c:1764 unlock_transaction_reset error=-5` on RTX 2080 Ti.
-> - **Turing TU102 FWSEC Post-FRTS WPR2 Alignment:** Bypassed Ampere-specific post-FWSEC WPR2 assertion (`wpr_hi >> 4`), resolving `unlock_transaction_fwsec error=-5` on RTX 2080 Ti and TITAN RTX.
-> - **Turing GFW Readiness & Dynamic Register Alignment:** Bypassed Ampere-specific GFW register assertions (`sample.plm != 0x8b8f`).
-> - **Turing Booter Signature & Fuse Hardening:** Resolves `patch_booter error=-34` on Turing silicon with dedicated production RSA-384 signature selection and FWSEC version 0 alignment.
-> - **Turing Framebuffer Local Memory Range Detection:** Resolves unmapped MMIO layout halts via `NV_PFB_PRI_MMU_LOCAL_MEMORY_RANGE` (`0x00100ce0`) hardware query.
-> - **Internal NVMe-ESP Persistence Installer (`[I]`):** 1-Click persistent installation directly onto the internal NVMe EFI System Partition (ESP) with UEFI NVRAM `DriverOrder` registration — USB flash drive never needed again after setup.
-> - **Multi-Display GOP Console Auto-Selection:** Resolves dual-monitor preflight halts on ASUS and other motherboards by automatically selecting the primary console GOP handle.
-> - **Turing FWSEC vDesc v2 Geometry Parser:** Full support for Turing VBIOS descriptor v2 layout on RTX 20-series (TU102 / RTX 2080 Ti / 2080 Super), mapping DMEM boundaries and signature layouts.
-> - **Ampere GA102 FWSEC Timing Hardening:** Eliminates false-halt `error=-5` during WPR2 programming on RTX 3080, 3080 Ti, and 3090.
-> - **Headless & Dedicated Compute Accelerators:** Full support for dGPUs with all displays routed via AMD Ryzen (7000/9000 Raphael) or Intel UHD iGPUs.
-> - **Expanded Device IDs:** Added RTX 3060 Ti GA104 (`0x2486`), RTX 3050 GA106 (`0x2582`), and Ada AD104/AD106/AD107 variants.
-> 
-> 📦 **Download Pre-release:** **[Universal_GPU_Unlock_v1.8.16.zip](https://github.com/BrightRaider/universal-gpu-unlock/releases/tag/v1.8.16)** *(or previous stable: [v1.7.9](https://github.com/BrightRaider/universal-gpu-unlock/releases/tag/v1.7.9))*.
-
-1. **Download:** Get the recommended build: **[Universal_GPU_Unlock_v1.8.16.zip](https://github.com/BrightRaider/universal-gpu-unlock/releases/tag/v1.8.16)** *(or [v1.7.9](https://github.com/BrightRaider/universal-gpu-unlock/releases/latest))*.
-2. **Provision:** Extract the ZIP, insert a USB flash drive, and run **`Setup.bat`** (formats & sets up all boot files automatically).
-3. **Boot & Unlock (or Install Permanently):** Restart your PC, boot from the USB drive (`F8`/`F11`/`F12`):
-   - Press **`[U]`** for Standard RAM-Only Unlock (temporary, reverts if USB removed).
-   - Press **`[I]`** to Install Permanently to your internal NVMe SSD ESP (`\EFI\Drivers\AdaUnlockDxe.efi`) and UEFI NVRAM `DriverOrder`. Once installed, **unplug the USB drive permanently** — your system auto-unlocks on every boot!
-   - Press **`[R]`** at any time to cleanly uninstall from NVRAM and remove the internal ESP driver files.
-4. **Verify:** In Windows, run **`Check-GPU-Unlock.bat`** to verify your unlocked TFLOPS throughput (>200 TFLOPS).  
-   *(Note for RTX 20 / Turing users: Run **`Toggle-Turing-GSP.bat`** once in Windows as Administrator to bind the official NVIDIA driver to GSP firmware mode).*  
-   *(Optional: If you wish to inspect detailed hardware telemetry, SMI sensor readbacks, and differential diagnostics, launch **`Universal-Control-Center.cmd`**).*
+1. **Download:** Get the latest release package: **[Universal_GPU_Unlock_v1.8.22.zip](https://github.com/BrightRaider/universal-gpu-unlock/releases/latest)**.
+2. **Provision:** Extract the ZIP, insert a USB flash drive (FAT32), and run **`Setup.bat`** (formats & copies all required UEFI files automatically).
+3. **Boot & Unlock:** Restart your PC, open your motherboard boot menu (`F8` / `F11` / `F12`), and boot from the USB drive:
+   - **`[U]` Standard Unlock:** RAM-only, temporary unlock (reverts cleanly on complete power off).
+   - **`[I]` Install to NVRAM:** Registers the UEFI DXE driver into motherboard NVRAM and internal ESP for automatic, stickless boot on every cold start.
+   - *(Tip: The boot menu features a 30-second countdown. Press `[Space]` at any time to pause and read in peace).*
+4. **Verify:** In Windows, run **`Check-GPU-Unlock.bat`** to verify your unlocked Tensor Core throughput (>200 TFLOPS on RTX 4090).
+   - *(RTX 20 / Turing users: Run `Toggle-Turing-GSP.bat` once as Administrator to bind NVIDIA drivers to GSP firmware mode).*
+   - *(Optional: Launch `Universal-Control-Center.cmd` for detailed hardware telemetry, SMI sensor readbacks, and diagnostics).*
 
 ---
 
