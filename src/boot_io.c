@@ -722,6 +722,30 @@ EFI_STATUS GuBootChoose(CHAR16 *choice) {
   return EFI_SUCCESS;
 }
 
+EFI_STATUS GuBootSyncLog(VOID) {
+  if (!Log || !Root)
+    return EFI_SUCCESS;
+
+  EFI_STATUS s = Log->Flush(Log);
+  EFI_STATUS closed = Log->Close(Log);
+  Log = NULL;
+  if (s == EFI_SUCCESS)
+    s = closed;
+
+  EFI_FILE_PROTOCOL *reopened = NULL;
+  EFI_STATUS rs = Root->Open(
+      Root, &reopened, ActiveLogName,
+      EFI_FILE_MODE_READ | EFI_FILE_MODE_WRITE, 0);
+  if (rs == EFI_SUCCESS && reopened) {
+    (VOID)reopened->SetPosition(reopened, ~(UINT64)0);
+    Log = reopened;
+  } else if (s == EFI_SUCCESS) {
+    s = rs;
+  }
+
+  return s;
+}
+
 EFI_STATUS GuBootClose(VOID) {
 
   EFI_STATUS s = EFI_SUCCESS;

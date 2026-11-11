@@ -7,6 +7,7 @@
 #include "profile.h"
 #include "unlock_release.h"
 #include "boot_io.h"
+#include "driver_nvram.h"
 #include "compat/compat.h"
 #include "vendor/unlock_610.h"
 #include "s3_save.h"
@@ -85,12 +86,23 @@ finish:
     GuLog("DXE-DRIVER: STOP at stage=%s status=%#llx mutated=%u retained=%u fault=%u\n",
           stage, (unsigned long long)s, GuUnlockMutated(), Gu.retained, Gu.fault);
     if (Gu.started || Gu.master_attributes_pending) (VOID)GuClearMaster();
+    GuReleaseStagedVbiosEfiImage();
+    (VOID)GuBootSyncLog();
     if (GuUnlockMutated() || Gu.started || Gu.retained) {
-      /* The GPU may still own DMA buffers: the OS must never inherit that memory.
-       * Only a full power-off ends it. Removing the USB drive skips this driver. */
+      /* The GPU may still own DMA buffers: the OS must never inherit that memory,
+       * and only a full power-off ends it. Leave DriverOrder first, so the next
+       * boot runs stock instead of failing and shutting down again. This matters
+       * for an install on the internal ESP, where removing the USB drive does not help. */
+      EFI_STATUS disabled = GuDisableDriverOption(mDxeTable);
+      GuLog("DXE-DRIVER: self-disable for next boot: status=%#llx\n", (unsigned long long)disabled);
       (VOID)GuBootClose();
-      GuBootSay(L"\r\n[ERROR] GPU unlock failed. Shutting down in 10 seconds.\r\n"
-                L"Remove the USB drive to boot without the unlock.\r\n");
+      GuBootSay(disabled == EFI_SUCCESS
+                    ? L"\r\n[ERROR] GPU unlock failed. Shutting down in 10 seconds.\r\n"
+                      L"The AdaUnlock driver is disabled, so the next boot runs without the unlock.\r\n"
+                      L"To enable it again, boot the USB drive and press [I]. Press [R] to remove it.\r\n"
+                    : L"\r\n[ERROR] GPU unlock failed. Shutting down in 10 seconds.\r\n"
+                      L"The AdaUnlock driver could not disable itself.\r\n"
+                      L"Remove the USB drive to boot without the unlock.\r\n");
       if (mDxeTable->BootServices->Stall) mDxeTable->BootServices->Stall(10000000);
       if (mDxeTable->RuntimeServices && mDxeTable->RuntimeServices->ResetSystem)
         mDxeTable->RuntimeServices->ResetSystem(EfiResetShutdown, EFI_ABORTED, 0, NULL);
@@ -101,16 +113,10 @@ finish:
     GuLog("DXE-DRIVER: Succeeded for GPU [1/%u]. Handing over to OS loader.\n",
           (unsigned)device_count);
 
-    for (UINTN g = 0; g < device_count; g++) {
-      if (mDxeTable && mDxeTable->BootServices && mDxeTable->BootServices->ConnectController && devices[g].handle) {
-        (VOID) mDxeTable->BootServices->ConnectController(devices[g].handle, NULL, NULL, TRUE);
-      }
-    }
-    if (mDxeTable && mDxeTable->BootServices && mDxeTable->BootServices->Stall) {
-      mDxeTable->BootServices->Stall(200000);
-    }
-    if (mDxeTable && mDxeTable->ConOut && mDxeTable->ConOut->Reset) {
-      (VOID) mDxeTable->ConOut->Reset(mDxeTable->ConOut, FALSE);
+    (VOID)GuBootSyncLog();
+
+    if (device_count > 0 && devices[0].handle) {
+      (VOID)GuReconnectDisplayAfterUnlock(mDxeTable, mDxeImage, devices[0].handle, TRUE);
     }
   }
   (VOID)GuBootClose();

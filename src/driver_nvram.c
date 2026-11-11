@@ -177,12 +177,26 @@ static EFI_STATUS CopyFileBetweenVolumes(EFI_BOOT_SERVICES *bs,
     dst_dir_proto = dst_root;
   }
 
-  s = dst_dir_proto->Open(dst_dir_proto, &dst_file_proto, (CHAR16 *)dst_file,
-                          EFI_FILE_MODE_READ | EFI_FILE_MODE_WRITE | EFI_FILE_MODE_CREATE, 0);
+  /* Delete an existing copy first: opening an existing file with CREATE keeps
+   * its old length, so a smaller new file would leave stale bytes at the end. */
+  EFI_FILE_PROTOCOL *old_file = NULL;
+  s = EFI_SUCCESS;
+  if (dst_dir_proto->Open(dst_dir_proto, &old_file, (CHAR16 *)dst_file,
+                          EFI_FILE_MODE_READ | EFI_FILE_MODE_WRITE, 0) == EFI_SUCCESS && old_file) {
+    s = old_file->Delete(old_file); /* Delete also closes the handle. */
+  }
+
+  if (s == EFI_SUCCESS)
+    s = dst_dir_proto->Open(dst_dir_proto, &dst_file_proto, (CHAR16 *)dst_file,
+                            EFI_FILE_MODE_READ | EFI_FILE_MODE_WRITE | EFI_FILE_MODE_CREATE, 0);
   if (s == EFI_SUCCESS && dst_file_proto) {
     UINTN write_bytes = file_sz;
     s = dst_file_proto->Write(dst_file_proto, &write_bytes, buf);
-    dst_file_proto->Close(dst_file_proto);
+    if (s == EFI_SUCCESS && write_bytes != file_sz) s = EFI_DEVICE_ERROR;
+    EFI_STATUS closed = dst_file_proto->Close(dst_file_proto);
+    if (s == EFI_SUCCESS) s = closed;
+  } else if (s == EFI_SUCCESS) {
+    s = EFI_DEVICE_ERROR;
   }
 
   if (dst_dir_proto != dst_root) dst_dir_proto->Close(dst_dir_proto);
@@ -275,6 +289,18 @@ EFI_STATUS GuInstallDriverOption(EFI_HANDLE image, EFI_SYSTEM_TABLE *t) {
     if (s != EFI_SUCCESS) return s;
   }
 
+  // Read NVRAM first: if it cannot be read, nothing is copied and nothing is registered.
+  UINT16 order[GU_DRIVER_ORDER_MAX];
+  UINTN count = 0, first_own = 0, first_free = 0;
+  BOOLEAN own[GU_DRIVER_SCAN_SLOTS];
+  s = ReadDriverOrder(rs, order, &count);
+  if (s != EFI_SUCCESS) return s;
+  s = ScanDriverOptions(rs, own, &first_own, &first_free);
+  if (s != EFI_SUCCESS) return s;
+  BOOLEAN reinstall = first_own != GU_DRIVER_SCAN_SLOTS;
+  UINTN slot = reinstall ? first_own : first_free;
+  if (slot == GU_DRIVER_SCAN_SLOTS) return EFI_OUT_OF_RESOURCES;
+
   EFI_HANDLE install_vol = loaded->DeviceHandle;
   EFI_HANDLE esp_vol = LocateInternalEspVolume(bs);
   BOOLEAN is_internal = FALSE;
@@ -302,18 +328,6 @@ EFI_STATUS GuInstallDriverOption(EFI_HANDLE image, EFI_SYSTEM_TABLE *t) {
   UINTN vol_size = GetDevicePathSize(vol_path);
   if (vol_size < 4) return EFI_UNSUPPORTED;
   UINTN vol_nodes_size = vol_size - 4; // exclude end node
-
-  // Read everything first so a failure leaves NVRAM untouched.
-  UINT16 order[GU_DRIVER_ORDER_MAX];
-  UINTN count = 0, first_own = 0, first_free = 0;
-  BOOLEAN own[GU_DRIVER_SCAN_SLOTS];
-  s = ReadDriverOrder(rs, order, &count);
-  if (s != EFI_SUCCESS) return s;
-  s = ScanDriverOptions(rs, own, &first_own, &first_free);
-  if (s != EFI_SUCCESS) return s;
-  BOOLEAN reinstall = first_own != GU_DRIVER_SCAN_SLOTS;
-  UINTN slot = reinstall ? first_own : first_free;
-  if (slot == GU_DRIVER_SCAN_SLOTS) return EFI_OUT_OF_RESOURCES;
 
   UINTN path_bytes = sizeof(DriverFile);
   UINTN file_node_len = 4 + path_bytes;
@@ -373,12 +387,43 @@ EFI_STATUS GuInstallDriverOption(EFI_HANDLE image, EFI_SYSTEM_TABLE *t) {
   return s;
 }
 
+/* Removes every AdaUnlock slot from DriverOrder. The Driver#### entries stay. */
+static EFI_STATUS DropOwnFromOrder(EFI_RUNTIME_SERVICES *rs, const UINT16 *order, UINTN count,
+                                   const BOOLEAN own[GU_DRIVER_SCAN_SLOTS]) {
+  UINT16 kept[GU_DRIVER_ORDER_MAX];
+  UINTN kept_count = 0;
+  for (UINTN i = 0; i < count; i++) {
+    if (order[i] >= GU_DRIVER_SCAN_SLOTS || !own[order[i]]) kept[kept_count++] = order[i];
+  }
+  if (kept_count == count) return EFI_SUCCESS;
+  return rs->SetVariable(L"DriverOrder", &GlobalGuid, GU_DRIVER_VAR_ATTRS,
+                         kept_count * sizeof(UINT16), kept_count ? kept : NULL);
+}
+
+/* Called by the DXE driver after a failed unlock. The entry and its files stay,
+ * but the entry leaves DriverOrder, so the next boot runs without the unlock
+ * instead of failing and shutting down again. [I] adds it back, [R] removes it. */
+EFI_STATUS GuDisableDriverOption(EFI_SYSTEM_TABLE *t) {
+  if (!t || !t->RuntimeServices) return EFI_INVALID_PARAMETER;
+  EFI_RUNTIME_SERVICES *rs = t->RuntimeServices;
+
+  UINT16 order[GU_DRIVER_ORDER_MAX];
+  UINTN count = 0, first_own = 0, first_free = 0;
+  BOOLEAN own[GU_DRIVER_SCAN_SLOTS];
+  EFI_STATUS s = ReadDriverOrder(rs, order, &count);
+  if (s != EFI_SUCCESS) return s;
+  s = ScanDriverOptions(rs, own, &first_own, &first_free);
+  if (s != EFI_SUCCESS) return s;
+  if (first_own == GU_DRIVER_SCAN_SLOTS) return EFI_NOT_FOUND;
+  return DropOwnFromOrder(rs, order, count, own);
+}
+
 EFI_STATUS GuRemoveDriverOption(EFI_SYSTEM_TABLE *t) {
   if (!t || !t->RuntimeServices) return EFI_INVALID_PARAMETER;
   EFI_RUNTIME_SERVICES *rs = t->RuntimeServices;
 
-  UINT16 order[GU_DRIVER_ORDER_MAX], kept[GU_DRIVER_ORDER_MAX];
-  UINTN count = 0, kept_count = 0, first_own = 0, first_free = 0;
+  UINT16 order[GU_DRIVER_ORDER_MAX];
+  UINTN count = 0, first_own = 0, first_free = 0;
   BOOLEAN own[GU_DRIVER_SCAN_SLOTS];
   EFI_STATUS s = ReadDriverOrder(rs, order, &count);
   if (s != EFI_SUCCESS) return s;
@@ -386,14 +431,8 @@ EFI_STATUS GuRemoveDriverOption(EFI_SYSTEM_TABLE *t) {
   if (s != EFI_SUCCESS) return s;
   if (first_own == GU_DRIVER_SCAN_SLOTS) return EFI_NOT_FOUND;
 
-  for (UINTN i = 0; i < count; i++) {
-    if (order[i] >= GU_DRIVER_SCAN_SLOTS || !own[order[i]]) kept[kept_count++] = order[i];
-  }
-  if (kept_count != count) {
-    s = rs->SetVariable(L"DriverOrder", &GlobalGuid, GU_DRIVER_VAR_ATTRS,
-                        kept_count * sizeof(UINT16), kept_count ? kept : NULL);
-    if (s != EFI_SUCCESS) return s;
-  }
+  s = DropOwnFromOrder(rs, order, count, own);
+  if (s != EFI_SUCCESS) return s;
 
   EFI_STATUS result = EFI_SUCCESS;
   for (UINTN slot = first_own; slot < GU_DRIVER_SCAN_SLOTS; slot++) {

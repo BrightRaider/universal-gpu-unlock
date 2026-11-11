@@ -7,7 +7,7 @@
 [![Release Version](https://img.shields.io/badge/Release-v1.8.22%20(Latest)-blue?logo=github)](https://github.com/BrightRaider/universal-gpu-unlock/releases/tag/v1.8.22)
 [![Downloads](https://img.shields.io/github/downloads/BrightRaider/universal-gpu-unlock/total?color=green&logo=github)](https://github.com/BrightRaider/universal-gpu-unlock/releases)
 [![Stars](https://img.shields.io/github/stars/BrightRaider/universal-gpu-unlock?style=social)](https://github.com/BrightRaider/universal-gpu-unlock)
-[![Safety](https://img.shields.io/badge/Safety-100%25%20RAM--Only-success.svg)](#-safety--anti-cheat-guarantee)
+[![Safety](https://img.shields.io/badge/Safety-RAM--Only-success.svg)](#-safety--anti-cheat)
 [![Support on Ko-fi](https://img.shields.io/badge/Ko--fi-Buy%20Me%20A%20Coffee-ff5e5b?style=flat&logo=kofi&logoColor=white)](https://ko-fi.com/brightraider)
 
 <br>
@@ -45,15 +45,15 @@
 | :--- | :--- | :--- | :--- |
 | **RTX 40 Series** | **Ada Lovelace** | RTX 4090, RTX 4090D, RTX 4080, RTX 4080 SUPER, RTX 4070 Ti SUPER | `0x2684`, `0x2685`, `0x2702`, `0x2703`, `0x2704`, `0x2705` |
 | **RTX 30 Series** | **Ampere** | RTX 3090, RTX 3090 Ti, RTX 3080 Ti, RTX 3080 (10/12GB), RTX 3070 Ti, RTX 3070, RTX 3060 Ti, RTX 3060, CMP 90HX | `0x2204`, `0x2208`, `0x2206`, `0x220a`, `0x2216`, `0x2207`, `0x2482`, `0x2484`, `0x2487`, `0x2488`, `0x2489`, `0x2503`, `0x2504`, `0x2507`, `0x2508`, `0x2520`, `0x2560` |
-| **RTX 20 Series** | **Turing** (TU102 Full Unlock / Diagnostics) | RTX 2080 Ti, TITAN RTX, RTX 2080 / SUPER, RTX 2070 / SUPER, RTX 2060 / SUPER, CMP 50HX, Quadro RTX | `0x1E04`, `0x1E07`, `0x1E02`, `0x1E81`, `0x1E82`, `0x1E87`, `0x1E84`, `0x1F02`, `0x1F07`, `0x1F06`, `0x1F47`, `0x1F03`, `0x1F08`, `0x1F12`, `0x1E09`, `0x1EB0`, `0x1EB1`, `0x1E30`, `0x1E35` |
+| **RTX 20 Series** | **Turing** (TU102, in testing: [#15](https://github.com/BrightRaider/universal-gpu-unlock/issues/15)) | RTX 2080 Ti, TITAN RTX, RTX 2080 / SUPER, RTX 2070 / SUPER, RTX 2060 / SUPER, CMP 50HX, Quadro RTX | `0x1E04`, `0x1E07`, `0x1E02`, `0x1E81`, `0x1E82`, `0x1E87`, `0x1E84`, `0x1F02`, `0x1F07`, `0x1F06`, `0x1F47`, `0x1F03`, `0x1F08`, `0x1F12`, `0x1E09`, `0x1EB0`, `0x1EB1`, `0x1E30`, `0x1E35` |
 
 - **Any Vendor:** Compatible with Founders Edition, ASUS, MSI, Gigabyte, ZOTAC, PNY, Palit, Gainward, etc.
 - **Any Platform:** Intel (Z690, Z790, Z890, B760, Z390) and AMD (AM4/AM5, X570, B550, B650, X670E, X870E).
 - **Multi-Drive:** Prefers `bootmgfw.efi` and follows your firmware's boot order when several Windows volumes exist.
 - **Multi-GPU & Headless Compute:** Unlocks primary or dedicated compute GPUs. Discrete cards can operate completely headless as dedicated AI/compute accelerators with all monitors connected to integrated graphics (e.g. AMD Ryzen Raphael iGPU or Intel UHD) — resolving [#14](https://github.com/BrightRaider/universal-gpu-unlock/issues/14).
 - **ASUS & AMI Console Topology Verified:** Multi-display console detachment verified on ASUS PRIME Z690-A at **127.61 TFLOPS** (100% unrestricted compute) on EVGA GeForce RTX 3080 Ti — resolving [#16](https://github.com/BrightRaider/universal-gpu-unlock/issues/16).
-- **Ampere & Turing Silicon Verified:** GA106 (RTX 3060), GA104, GA102 (RTX 3080/3090), and TU102 (RTX 2080 Ti / TITAN RTX) supported with full rate-limiter bypass and zero Windows VRAM loss.
-- **Stickless Internal NVMe-ESP Persistence (`[I]` Mode):** Option to install `AdaUnlockDxe.efi` and microcode directly to your internal NVMe SSD's EFI System Partition (`\EFI\Drivers\`) with UEFI NVRAM `DriverOrder` auto-boot. Once installed, the USB stick is completely optional and never needed for booting.
+- **Ampere Verified, Turing in Testing:** GA106 (RTX 3060) and GA102 (RTX 3080 Ti, RTX 3090) are confirmed in the community table below. GA104 is supported but not yet confirmed in an issue. On TU102 (RTX 2080 Ti) the unlock transaction completes, and the throughput gain is still being confirmed in [#15](https://github.com/BrightRaider/universal-gpu-unlock/issues/15).
+- **Stickless Internal NVMe-ESP Persistence (`[I]` Mode):** Installs `AdaUnlockDxe.efi` and the firmware assets to your internal EFI System Partition (`\EFI\Drivers\`) and registers it in the UEFI `DriverOrder`, so the USB stick is no longer needed. If the copy to the ESP fails, `[I]` registers the driver on the USB drive instead, which then has to stay connected. If an unlock fails, the driver disables itself for the next boot, and `[I]` enables it again.
 
 <details>
 <summary><b>🔍 Community-Verified Hardware & Live Benchmarks (Click to expand)</b></summary>
@@ -82,7 +82,7 @@ The following GPU models, system motherboards, and compute readbacks have been i
 
 ## 📊 Real-World Performance Gains
 
-The unlock removes artificial firmware restrictions on the **Tensor Cores (GEMM matrix engines)** while maintaining 100% factory stability on standard shader pipelines:
+The unlock removes artificial firmware restrictions on the **Tensor Cores (GEMM matrix engines)**. FP32 shader and memory throughput stay at stock. Measured on an RTX 4090:
 
 | Workload / Model | Factory Stock | Unlocked UEFI | Real-World Improvement | Operational Impact |
 | :--- | :--- | :--- | :--- | :--- |
@@ -95,13 +95,13 @@ The unlock removes artificial firmware restrictions on the **Tensor Cores (GEMM 
 
 ---
 
-## 🛡️ Safety & Anti-Cheat Guarantee
+## 🛡️ Safety & Anti-Cheat
 
-- **100% Volatile RAM-Only:** Zero EEPROM writes. Powering off or booting without the USB drive returns the GPU permanently to 100% factory stock.
+- **Volatile (RAM-only):** The unlock lives in GPU registers and is gone after a full power-off. Without the `[I]` driver installed, the next boot is stock. On the test bench, the card always booted stock again after a power-off.
 - **Official NVIDIA Drivers:** Runs seamlessly with standard, unmodified NVIDIA Game Ready and Studio drivers (`nvlddmkm.sys`).
-- **Anti-Cheat Safe:** Zero driver patches, kernel hooks, or runtime memory injectors. Competitive anti-cheats (Riot Vanguard, Easy Anti-Cheat, BattlEye, Ricochet) operate with zero detection risk (`UEFISecureBootEnabled: 1` remains active).
+- **Anti-Cheat:** No driver patches, kernel hooks or runtime memory injection. With the image or certificate enrolled in `db`, `UEFISecureBootEnabled` stays `1`. Individual anti-cheat engines (Riot Vanguard, Easy Anti-Cheat, BattlEye, Ricochet) were not tested systematically.
 - **S3 Sleep Protection:** Includes **`Toggle-Sleep-Button.bat`** in the root directory to hide the "Sleep" button from the Windows Start menu, preventing accidental loss of volatile RAM state.
-- **44-Cycle Testbench Proven:** 44 supervised hardware test cycles verified on my primary RTX 4090 platform with a 100% pass rate.
+- **44-Cycle Testbench:** 44 supervised runs on my primary RTX 4090 platform. The last 18 (RUN0027 – RUN0044) all passed. The earlier runs were prototyping.
 - **Operational Deep-Dive:** Read the comprehensive telemetry and persistence whitepaper:  
   👉 **[Operational Architecture, Persistence & Secure Boot Telemetry](docs/OPERATIONS_AND_PERSISTENCE.md)**
 
@@ -124,6 +124,21 @@ The included EFI binaries are pre-signed with my custom Authenticode key. To boo
 
 ---
 
+## 🧪 Build & Tests
+
+Requires the Visual Studio 2022 C++ Build Tools (x64).
+
+| Command | What it does |
+| :--- | :--- |
+| `src\Build-Experimental-MSVC.ps1` | Builds `BOOTX64.EFI` and **overwrites `bin\BOOTX64.EFI`**. Signs it only if the maintainer certificate is installed. |
+| `src\Build-Dxe-Driver.ps1` | Builds `AdaUnlockDxe.efi` and **overwrites `bin\AdaUnlockDxe.efi`**, with the same signing rule. |
+| `src\Build-Gpu-Topology-Diagnostic.ps1` | Builds the read-only topology diagnostic EFI. |
+| `tests\Run-MsvcHostTests.ps1` | Runs the MSVC host tests for `driver_nvram.c` (`[I]`/`[R]`) and the Windows volume selection in `boot_io.c`. |
+
+The gcc/clang host tests for topology, inventory and discovery are in `tests/`. The CI workflow (`.github/workflows/gpu-topology-diagnostic.yml`) runs on every push and pull request that touches `src/` or `tests/`. It runs all host tests, builds the diagnostic EFI, `BOOTX64.EFI` and `AdaUnlockDxe.efi`, and uploads the unsigned builds as workflow artifacts. All tests mock the firmware services; none of them runs on a GPU.
+
+---
+
 ## 📜 Changelog & Version History
 
 All version releases, bug fixes, and device expansions are maintained in the separate changelog file:  
@@ -141,6 +156,7 @@ All version releases, bug fixes, and device expansions are maintained in the sep
 ├── GA102-ASSETS/                <- Ampere microcode payloads (3090, 3080, 3070, 3060)
 ├── TU102-ASSETS/                <- Turing microcode staging payloads (2080Ti, 2080, 2070, 2060)
 ├── src/                         <- Full C source code for the universal UEFI application
+├── tests/                       <- Host tests with mocked UEFI services (no GPU required)
 ├── Setup.bat                    <- The 1-Click Provisioner Launcher (Primary tool)
 ├── Setup-AdaUnlock.ps1          <- Automated PowerShell deployment engine
 ├── Check-GPU-Unlock.bat         <- Standalone Windows verification benchmark (>200 TFLOPS)

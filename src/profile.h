@@ -28,6 +28,20 @@ typedef struct {
 
 const GU_ARCH_ASSETS *GuGetArchAssets(VOID);
 
+typedef struct {
+  UINTN   rom_offset;
+  UINTN   rom_bytes;
+  UINTN   payload_offset;
+  UINTN   payload_bytes;
+  UINT16  machine_type;
+  UINT16  subsystem;
+  BOOLEAN compressed;
+} GU_VBIOS_EFI_IMAGE;
+
+BOOLEAN GuFindVbiosEfiOptionRom(const UINT8 *rom, UINTN length, GU_VBIOS_EFI_IMAGE *out);
+BOOLEAN GuGetStagedVbiosEfiImage(const UINT8 **payload, UINTN *bytes, UINT16 *machine_type, BOOLEAN *compressed);
+VOID GuReleaseStagedVbiosEfiImage(VOID);
+
 /* Legacy compatibility wrappers for vendor/ code */
 BOOLEAN GuAd104AssetsValid(VOID);
 BOOLEAN GuAd104PromPlausible(const VOID *rom, UINTN sz);

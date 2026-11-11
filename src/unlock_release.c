@@ -32,7 +32,8 @@ typedef struct {
   EFI_GRAPHICS_OUTPUT_PROTOCOL_MODE mode;
   EFI_GRAPHICS_OUTPUT_MODE_INFORMATION info;
   UINT32 config[64];UINT64 attributes;
-  UINTN stage,reported_additions,reported_removals;BOOLEAN ready,mutated,claimed,headless;
+  UINT32 nv_driver_ver;UINTN nv_driver_size;
+  UINTN stage,reported_additions,reported_removals;BOOLEAN ready,mutated,claimed,headless,csm_video;
 } PLAN;
 static PLAN Plan;
 static GRAPH Original,Current;
@@ -311,6 +312,10 @@ static EFI_STATUS Driver(UINTN which) {
       (size_t)which, (unsigned long long)(UINTN)im->ImageBase, (size_t)im->ImageSize, (unsigned long long)(UINTN)d->Stop);
     return EFI_UNSUPPORTED;
   }
+  if(which==2) {
+    Plan.nv_driver_ver = d->Version;
+    Plan.nv_driver_size = (UINTN)im->ImageSize;
+  }
   GuLog("Driver(%zu) verified OK: ver=%#x size=%zu\n", (size_t)which, d->Version, (size_t)im->ImageSize);
   return EFI_SUCCESS;
 }
@@ -542,6 +547,15 @@ EFI_STATUS GuUnlockPreflight(EFI_SYSTEM_TABLE *t,EFI_HANDLE self,EFI_HANDLE pci)
   }
   if(s==EFI_SUCCESS) { s=Snapshot(&Original); if(s!=EFI_SUCCESS) GuLog("Preflight failed at Snapshot(): %#llx\n", (unsigned long long)s); }
   if(s==EFI_SUCCESS) { s=Consumers(); if(s!=EFI_SUCCESS) GuLog("Preflight failed at Consumers(): %#llx\n", (unsigned long long)s); }
+  if(s==EFI_SUCCESS) {
+    Plan.csm_video = GuDetectCsmVideoDriver(
+        Plan.attributes, Plan.nv_agent != NULL,
+        Plan.nv_driver_ver, Plan.nv_driver_size);
+    if (Plan.csm_video) {
+      GuLog("Display topology: Legacy CSM video detected (attrs=%#llx ver=%#x size=%zu); post-FLR CsmVideo reconnect disabled\n",
+            (unsigned long long)Plan.attributes, (unsigned)Plan.nv_driver_ver, Plan.nv_driver_size);
+    }
+  }
   if(s==EFI_SUCCESS) { s=PointerBaseline(); if(s!=EFI_SUCCESS) GuLog("Preflight failed at PointerBaseline(): %#llx\n", (unsigned long long)s); }
   if(s==EFI_SUCCESS) { s=UsbBaseline(); if(s!=EFI_SUCCESS) GuLog("Preflight failed at UsbBaseline(): %#llx\n", (unsigned long long)s); }
   GuLog("Preflight: status=%#llx graph=%zu code_profiles=%u%s\n",
@@ -852,3 +866,550 @@ EFI_STATUS GuRegisterS3(EFI_SYSTEM_TABLE *t) {
   }
   return s3_status;
 }
+
+BOOLEAN GuDetectCsmVideoDriver(UINT64 pci_attributes, BOOLEAN has_nv_agent,
+                               UINT32 driver_ver, UINTN driver_size) {
+  if (pci_attributes & (EFI_PCI_IO_ATTRIBUTE_VGA_MEMORY | EFI_PCI_IO_ATTRIBUTE_VGA_IO)) {
+    return TRUE;
+  }
+  if (has_nv_agent && (driver_size < 65536U || driver_ver < 0x1000U)) {
+    return TRUE;
+  }
+  return FALSE;
+}
+
+BOOLEAN GuUnlockIsCsmVideo(VOID) {
+  return Plan.csm_video;
+}
+
+BOOLEAN GuFindVbiosEfiOptionRom(const UINT8 *rom, UINTN length, GU_VBIOS_EFI_IMAGE *out) {
+  if (!rom || length < 0x200 || !out) return FALSE;
+  memset(out, 0, sizeof(*out));
+
+  UINTN pos = 0;
+  for (UINTN img = 0; img < 16 && pos + 0x1a <= length; img++) {
+    UINT16 rom_sig = (UINT16)rom[pos] | ((UINT16)rom[pos + 1] << 8);
+    if (rom_sig != 0xaa55 && rom_sig != 0x4e56 && rom_sig != 0xbb77) break;
+
+    UINTN pcir_off = (UINTN)rom[pos + 0x18] | ((UINTN)rom[pos + 0x19] << 8);
+    UINTN pcir = pos + pcir_off;
+    if (pcir + 0x18 > length) break;
+
+    UINT32 pcir_sig = (UINT32)rom[pcir] | ((UINT32)rom[pcir + 1] << 8) |
+                      ((UINT32)rom[pcir + 2] << 16) | ((UINT32)rom[pcir + 3] << 24);
+    if (pcir_sig != 0x52494350 && pcir_sig != 0x5344504e && pcir_sig != 0x53494752) break;
+
+    UINTN img_len = ((UINTN)rom[pcir + 0x10] | ((UINTN)rom[pcir + 0x11] << 8)) * 512U;
+    UINT8 code_type = rom[pcir + 0x14];
+    UINT8 indicator = rom[pcir + 0x15];
+    BOOLEAN last = (indicator & 0x80) != 0;
+
+    /* Check for NPDE (NVIDIA PCI Data Extension) */
+    UINTN npde_off = (UINTN)rom[pcir + 0x0a] | ((UINTN)rom[pcir + 0x0b] << 8);
+    UINTN npde = (pcir + npde_off + 15U) & ~(UINTN)15U;
+    if (npde + 10U <= length) {
+      UINT32 npde_sig = (UINT32)rom[npde] | ((UINT32)rom[npde + 1] << 8) |
+                        ((UINT32)rom[npde + 2] << 16) | ((UINT32)rom[npde + 3] << 24);
+      if (npde_sig == 0x4544504e) { /* 'NPDE' */
+        UINT16 ext_rev = (UINT16)rom[npde + 4] | ((UINT16)rom[npde + 5] << 8);
+        UINT16 ext_len = (UINT16)rom[npde + 6] | ((UINT16)rom[npde + 7] << 8);
+        if (ext_rev == 0x100 || ext_rev == 0x101) {
+          UINTN sub = ((UINTN)rom[npde + 8] | ((UINTN)rom[npde + 9] << 8)) * 512U;
+          if (ext_len > 10 && npde + 11U <= length) {
+            last = (rom[npde + 10] & 0x80) != 0;
+          } else if (sub < img_len) {
+            last = FALSE;
+          }
+          if (sub != 0) img_len = sub;
+        }
+      }
+    }
+
+    if (!img_len || pos + img_len > length) break;
+
+    /* EFI Expansion ROM: code_type 0x03 or EFI signature 0x0EF1 */
+    UINT16 efi_sig = 0;
+    if (pos + 8 <= length) {
+      efi_sig = (UINT16)rom[pos + 4] | ((UINT16)rom[pos + 5] << 8);
+    }
+    if (code_type == 0x03 || efi_sig == 0x0ef1) {
+      UINTN img_hdr_off = (UINTN)rom[pos + 0x16] | ((UINTN)rom[pos + 0x17] << 8);
+      if (img_hdr_off >= 0x1a && img_hdr_off < img_len) {
+        out->rom_offset = pos;
+        out->rom_bytes = img_len;
+        out->payload_offset = pos + img_hdr_off;
+        out->payload_bytes = img_len - img_hdr_off;
+        out->subsystem = (UINT16)rom[pos + 8] | ((UINT16)rom[pos + 9] << 8);
+        out->machine_type = (UINT16)rom[pos + 10] | ((UINT16)rom[pos + 11] << 8);
+        out->compressed = ((UINT16)rom[pos + 12] | ((UINT16)rom[pos + 13] << 8)) != 0;
+        return TRUE;
+      }
+    }
+
+    if (last) break;
+    pos += img_len;
+  }
+  return FALSE;
+}
+
+typedef struct _EFI_DECOMPRESS_PROTOCOL EFI_DECOMPRESS_PROTOCOL;
+typedef EFI_STATUS (EFIAPI *EFI_DECOMPRESS_GET_INFO)(
+  IN EFI_DECOMPRESS_PROTOCOL *This,
+  IN VOID *Source,
+  IN UINT32 SourceSize,
+  OUT UINT32 *DestinationSize,
+  OUT UINT32 *ScratchSize
+  );
+typedef EFI_STATUS (EFIAPI *EFI_DECOMPRESS_DECOMPRESS)(
+  IN EFI_DECOMPRESS_PROTOCOL *This,
+  IN VOID *Source,
+  IN UINT32 SourceSize,
+  IN OUT VOID *Destination,
+  IN UINT32 DestinationSize,
+  IN OUT VOID *Scratch,
+  IN UINT32 ScratchSize
+  );
+struct _EFI_DECOMPRESS_PROTOCOL {
+  EFI_DECOMPRESS_GET_INFO GetInfo;
+  EFI_DECOMPRESS_DECOMPRESS Decompress;
+};
+
+#pragma pack(1)
+typedef struct {
+  MEMMAP_DEVICE_PATH Mem;
+  EFI_DEVICE_PATH_PROTOCOL End;
+} GU_IN_MEMORY_DEVICE_PATH;
+
+typedef struct {
+  VENDOR_DEVICE_PATH Vendor;
+  EFI_DEVICE_PATH_PROTOCOL End;
+} GU_FALLBACK_GOP_DEVICE_PATH;
+#pragma pack()
+
+static BOOLEAN ValidatePeImage(const UINT8 *pe, UINTN size) {
+  if (!pe || size < 0x200) return FALSE;
+  if (pe[0] != 'M' || pe[1] != 'Z') return FALSE;
+  UINT32 lfanew = (UINT32)pe[0x3c] | ((UINT32)pe[0x3d] << 8) |
+                  ((UINT32)pe[0x3e] << 16) | ((UINT32)pe[0x3f] << 24);
+  if (lfanew > size || size - lfanew < 0x18) return FALSE;
+  if (pe[lfanew] != 'P' || pe[lfanew + 1] != 'E' ||
+      pe[lfanew + 2] != 0 || pe[lfanew + 3] != 0) return FALSE;
+  UINT16 machine = (UINT16)pe[lfanew + 4] | ((UINT16)pe[lfanew + 5] << 8);
+  if (machine != 0x8664 && machine != 0x0ebc) return FALSE;
+  return TRUE;
+}
+
+static EFI_STATUS DecompressVbiosEfiPayload(EFI_SYSTEM_TABLE *t,
+                                            const UINT8 *src, UINTN src_len,
+                                            UINT8 **dst, UINTN *dst_len) {
+  if (!t || !t->BootServices || !src || !src_len || !dst || !dst_len)
+    return EFI_INVALID_PARAMETER;
+  *dst = NULL;
+  *dst_len = 0;
+
+  static EFI_GUID DecompressGuid = { 0xd8117cfeU, 0x94a6U, 0x11d4U, { 0x9a, 0x3a, 0x00, 0x90, 0x27, 0x3f, 0xc1, 0x4d } };
+  EFI_DECOMPRESS_PROTOCOL *decomp = NULL;
+  EFI_STATUS s = t->BootServices->LocateProtocol(&DecompressGuid, NULL, (VOID **)&decomp);
+  if (s != EFI_SUCCESS || !decomp || !decomp->GetInfo || !decomp->Decompress) {
+    GuLog("Decompress: EFI_DECOMPRESS_PROTOCOL not available (%#llx)\n", (unsigned long long)s);
+    return s != EFI_SUCCESS ? s : EFI_UNSUPPORTED;
+  }
+
+  UINT32 out_size = 0, scratch_size = 0;
+  s = decomp->GetInfo(decomp, (VOID *)src, (UINT32)src_len, &out_size, &scratch_size);
+  if (s != EFI_SUCCESS || !out_size || out_size > 2U * 1024U * 1024U || scratch_size > 2U * 1024U * 1024U) {
+    GuLog("Decompress GetInfo failed: status=%#llx out=%u scratch=%u\n",
+          (unsigned long long)s, out_size, scratch_size);
+    return s != EFI_SUCCESS ? s : EFI_BAD_BUFFER_SIZE;
+  }
+
+  VOID *out_buf = NULL, *scratch_buf = NULL;
+  s = t->BootServices->AllocatePool(EfiBootServicesData, out_size, &out_buf);
+  if (s != EFI_SUCCESS || !out_buf) return EFI_OUT_OF_RESOURCES;
+
+  if (scratch_size) {
+    s = t->BootServices->AllocatePool(EfiBootServicesData, scratch_size, &scratch_buf);
+    if (s != EFI_SUCCESS || !scratch_buf) {
+      (VOID)t->BootServices->FreePool(out_buf);
+      return EFI_OUT_OF_RESOURCES;
+    }
+  }
+
+  s = decomp->Decompress(decomp, (VOID *)src, (UINT32)src_len,
+                         out_buf, out_size, scratch_buf, scratch_size);
+  if (scratch_buf) (VOID)t->BootServices->FreePool(scratch_buf);
+
+  if (s != EFI_SUCCESS) {
+    GuLog("Decompress failed: %#llx\n", (unsigned long long)s);
+    (VOID)t->BootServices->FreePool(out_buf);
+    return s;
+  }
+
+  *dst = (UINT8 *)out_buf;
+  *dst_len = (UINTN)out_size;
+  return EFI_SUCCESS;
+}
+
+static VOID ConnectChildGopHandles(EFI_SYSTEM_TABLE *t, EFI_HANDLE pci_handle) {
+  if (!t || !t->BootServices || !t->BootServices->LocateHandleBuffer) return;
+  EFI_HANDLE *handles = NULL;
+  UINTN count = 0;
+  if (t->BootServices->LocateHandleBuffer(ByProtocol, &GopGuid, NULL, &count, &handles) != EFI_SUCCESS || !handles)
+    return;
+  for (UINTN i = 0; i < count; i++) {
+    EFI_HANDLE h = handles[i];
+    if (h == pci_handle) continue;
+    VOID *dummy = NULL;
+    if (Interface(h, &PciGuid, &dummy) == EFI_SUCCESS) continue;
+    if (!GopOnTarget(h)) continue;
+    if (t->BootServices->ConnectController) {
+      EFI_STATUS cs = t->BootServices->ConnectController(h, NULL, NULL, TRUE);
+      GuLog("Layer 1 child GOP connect: handle=%#llx status=%#llx\n",
+            (unsigned long long)(UINTN)h, (unsigned long long)cs);
+    }
+  }
+  if (t->BootServices->FreePool) (VOID)t->BootServices->FreePool(handles);
+}
+
+static BOOLEAN TryBindStagedVbiosEfiGop(EFI_SYSTEM_TABLE *t, EFI_HANDLE image, EFI_HANDLE pci_handle) {
+  const UINT8 *payload = NULL;
+  UINTN payload_bytes = 0;
+  UINT16 machine_type = 0;
+  BOOLEAN compressed = FALSE;
+  if (!GuGetStagedVbiosEfiImage(&payload, &payload_bytes, &machine_type, &compressed) ||
+      !payload || !payload_bytes) {
+    GuLog("Layer 1 VBIOS GOP: no staged image available\n");
+    return FALSE;
+  }
+
+  UINT8 *pe_buf = NULL;
+  UINTN pe_size = 0;
+  BOOLEAN decompressed_alloc = FALSE;
+
+  if (compressed) {
+    EFI_STATUS ds = DecompressVbiosEfiPayload(t, payload, payload_bytes, &pe_buf, &pe_size);
+    if (ds != EFI_SUCCESS || !pe_buf || !pe_size) {
+      GuLog("Layer 1 VBIOS GOP decompression failed: %#llx\n", (unsigned long long)ds);
+      return FALSE;
+    }
+    decompressed_alloc = TRUE;
+  } else {
+    pe_buf = (UINT8 *)payload;
+    pe_size = payload_bytes;
+  }
+
+  if (!ValidatePeImage(pe_buf, pe_size)) {
+    GuLog("Layer 1 VBIOS GOP PE validation failed (size=%zu)\n", pe_size);
+    if (decompressed_alloc && t->BootServices && t->BootServices->FreePool) {
+      (VOID)t->BootServices->FreePool(pe_buf);
+    }
+    return FALSE;
+  }
+
+  GU_IN_MEMORY_DEVICE_PATH dp;
+  memset(&dp, 0, sizeof(dp));
+  dp.Mem.Header.Type = HARDWARE_DEVICE_PATH;
+  dp.Mem.Header.SubType = HW_MEMMAP_DP;
+  dp.Mem.Header.Length[0] = (UINT8)(sizeof(MEMMAP_DEVICE_PATH) & 0xFF);
+  dp.Mem.Header.Length[1] = (UINT8)((sizeof(MEMMAP_DEVICE_PATH) >> 8) & 0xFF);
+  dp.Mem.MemoryType = EfiBootServicesCode;
+  dp.Mem.StartingAddress = (EFI_PHYSICAL_ADDRESS)(UINTN)pe_buf;
+  dp.Mem.EndingAddress = (EFI_PHYSICAL_ADDRESS)((UINTN)pe_buf + pe_size);
+  dp.End.Type = END_DEVICE_PATH_TYPE;
+  dp.End.SubType = END_ENTIRE_DEVICE_PATH_SUBTYPE;
+  dp.End.Length[0] = 4;
+  dp.End.Length[1] = 0;
+
+  EFI_HANDLE drv_image = NULL;
+  EFI_STATUS s = t->BootServices->LoadImage(
+      FALSE, image, (EFI_DEVICE_PATH_PROTOCOL *)&dp,
+      (VOID *)pe_buf, pe_size, &drv_image);
+  if (s != EFI_SUCCESS || !drv_image) {
+    GuLog("Layer 1 VBIOS GOP LoadImage failed: %#llx\n", (unsigned long long)s);
+    if (decompressed_alloc && t->BootServices && t->BootServices->FreePool) {
+      (VOID)t->BootServices->FreePool(pe_buf);
+    }
+    return FALSE;
+  }
+
+  s = t->BootServices->StartImage(drv_image, NULL, NULL);
+  GuLog("Layer 1 VBIOS GOP StartImage: %#llx\n", (unsigned long long)s);
+
+  if (decompressed_alloc && t->BootServices && t->BootServices->FreePool) {
+    (VOID)t->BootServices->FreePool(pe_buf);
+    decompressed_alloc = FALSE;
+  }
+
+  if (s != EFI_SUCCESS) {
+    return FALSE;
+  }
+
+  EFI_DRIVER_BINDING_PROTOCOL *binding = NULL;
+  (VOID)Interface(drv_image, &BindingGuid, (VOID **)&binding);
+
+  if (!binding && t->BootServices->LocateHandleBuffer) {
+    EFI_HANDLE *bhandles = NULL;
+    UINTN bcount = 0;
+    if (t->BootServices->LocateHandleBuffer(ByProtocol, &BindingGuid, NULL, &bcount, &bhandles) == EFI_SUCCESS && bhandles) {
+      for (UINTN bi = 0; bi < bcount; bi++) {
+        EFI_DRIVER_BINDING_PROTOCOL *candidate = NULL;
+        if (Interface(bhandles[bi], &BindingGuid, (VOID **)&candidate) == EFI_SUCCESS && candidate) {
+          if (candidate->ImageHandle == drv_image) {
+            binding = candidate;
+            break;
+          }
+        }
+      }
+      if (t->BootServices->FreePool) (VOID)t->BootServices->FreePool(bhandles);
+    }
+  }
+
+  if (binding && binding->Supported && binding->Start) {
+    s = binding->Supported(binding, pci_handle, NULL);
+    GuLog("Layer 1 DriverBinding Supported: %#llx\n", (unsigned long long)s);
+    if (s == EFI_SUCCESS) {
+      s = binding->Start(binding, pci_handle, NULL);
+      GuLog("Layer 1 DriverBinding Start: %#llx\n", (unsigned long long)s);
+      if (s == EFI_SUCCESS) {
+        ConnectChildGopHandles(t, pci_handle);
+        return TRUE;
+      }
+    }
+  }
+
+  return FALSE;
+}
+
+static UINTN CountLinearGops(VOID) {
+  EFI_BOOT_SERVICES *b = Plan.table ? Plan.table->BootServices : NULL;
+  if (!b || !b->LocateHandleBuffer) return 0;
+  EFI_HANDLE *handles = NULL;
+  UINTN count = 0, linear = 0;
+  if (b->LocateHandleBuffer(ByProtocol, &GopGuid, NULL, &count, &handles) != EFI_SUCCESS || !handles)
+    return 0;
+  for (UINTN i = 0; i < count; i++) {
+    EFI_GRAPHICS_OUTPUT_PROTOCOL *gop = NULL;
+    if (Interface(handles[i], &GopGuid, (VOID **)&gop) == EFI_SUCCESS && gop && gop->Mode && gop->Mode->Info) {
+      if (gop->Mode->FrameBufferBase != 0 && gop->Mode->FrameBufferSize != 0 &&
+          gop->Mode->Info->PixelFormat != PixelBltOnly) {
+        linear++;
+      }
+    }
+  }
+  if (b->FreePool) (VOID)b->FreePool(handles);
+  return linear;
+}
+
+static EFI_GRAPHICS_OUTPUT_MODE_INFORMATION FallbackInfo = {
+  0,
+  1024,
+  768,
+  PixelBlueGreenRedReserved8BitPerColor,
+  { 0, 0, 0, 0 },
+  1024
+};
+
+static EFI_GRAPHICS_OUTPUT_PROTOCOL_MODE FallbackMode = {
+  1,
+  0,
+  &FallbackInfo,
+  sizeof(FallbackInfo),
+  0,
+  0
+};
+
+static EFI_STATUS EFIAPI FallbackGopQueryMode(
+    EFI_GRAPHICS_OUTPUT_PROTOCOL *This,
+    UINT32 ModeNumber,
+    UINTN *SizeOfInfo,
+    EFI_GRAPHICS_OUTPUT_MODE_INFORMATION **Info) {
+  if (!This || !SizeOfInfo || !Info || ModeNumber != 0) return EFI_INVALID_PARAMETER;
+  if (!Plan.table || !Plan.table->BootServices || !Plan.table->BootServices->AllocatePool) return EFI_UNSUPPORTED;
+  VOID *copy = NULL;
+  EFI_STATUS s = Plan.table->BootServices->AllocatePool(EfiBootServicesData, sizeof(FallbackInfo), &copy);
+  if (s != EFI_SUCCESS || !copy) return EFI_OUT_OF_RESOURCES;
+  memcpy(copy, &FallbackInfo, sizeof(FallbackInfo));
+  *SizeOfInfo = sizeof(FallbackInfo);
+  *Info = (EFI_GRAPHICS_OUTPUT_MODE_INFORMATION *)copy;
+  return EFI_SUCCESS;
+}
+
+static EFI_STATUS EFIAPI FallbackGopSetMode(
+    EFI_GRAPHICS_OUTPUT_PROTOCOL *This,
+    UINT32 ModeNumber) {
+  if (!This || ModeNumber != 0) return EFI_UNSUPPORTED;
+  if (FallbackMode.FrameBufferBase && FallbackMode.FrameBufferSize) {
+    memset((VOID *)(UINTN)FallbackMode.FrameBufferBase, 0, FallbackMode.FrameBufferSize);
+  }
+  return EFI_SUCCESS;
+}
+
+static EFI_STATUS EFIAPI FallbackGopBlt(
+    EFI_GRAPHICS_OUTPUT_PROTOCOL *This,
+    EFI_GRAPHICS_OUTPUT_BLT_PIXEL *BltBuffer,
+    EFI_GRAPHICS_OUTPUT_BLT_OPERATION BltOperation,
+    UINTN SourceX, UINTN SourceY,
+    UINTN DestinationX, UINTN DestinationY,
+    UINTN Width, UINTN Height, UINTN Delta) {
+  if (!This || !FallbackMode.FrameBufferBase) return EFI_DEVICE_ERROR;
+  if (Width == 0 || Height == 0) return EFI_INVALID_PARAMETER;
+  UINTN fb_w = FallbackInfo.HorizontalResolution;
+  UINTN fb_h = FallbackInfo.VerticalResolution;
+  UINT32 *fb = (UINT32 *)(UINTN)FallbackMode.FrameBufferBase;
+
+  if (BltOperation == EfiBltVideoFill) {
+    if (!BltBuffer) return EFI_INVALID_PARAMETER;
+    if (DestinationX + Width > fb_w || DestinationY + Height > fb_h) return EFI_INVALID_PARAMETER;
+    UINT32 pixel = *(UINT32 *)BltBuffer;
+    for (UINTN y = 0; y < Height; y++) {
+      UINT32 *dst_line = fb + (DestinationY + y) * fb_w + DestinationX;
+      for (UINTN x = 0; x < Width; x++) dst_line[x] = pixel;
+    }
+    return EFI_SUCCESS;
+  }
+  if (BltOperation == EfiBltBufferToVideo) {
+    if (!BltBuffer) return EFI_INVALID_PARAMETER;
+    if (DestinationX + Width > fb_w || DestinationY + Height > fb_h) return EFI_INVALID_PARAMETER;
+    UINTN src_stride = Delta ? Delta / sizeof(UINT32) : Width;
+    for (UINTN y = 0; y < Height; y++) {
+      UINT32 *dst_line = fb + (DestinationY + y) * fb_w + DestinationX;
+      const UINT32 *src_line = (const UINT32 *)BltBuffer + (SourceY + y) * src_stride + SourceX;
+      for (UINTN x = 0; x < Width; x++) dst_line[x] = src_line[x];
+    }
+    return EFI_SUCCESS;
+  }
+  if (BltOperation == EfiBltVideoToBltBuffer) {
+    if (!BltBuffer) return EFI_INVALID_PARAMETER;
+    if (SourceX + Width > fb_w || SourceY + Height > fb_h) return EFI_INVALID_PARAMETER;
+    UINTN dst_stride = Delta ? Delta / sizeof(UINT32) : Width;
+    for (UINTN y = 0; y < Height; y++) {
+      const UINT32 *src_line = fb + (SourceY + y) * fb_w + SourceX;
+      UINT32 *dst_line = (UINT32 *)BltBuffer + (DestinationY + y) * dst_stride + DestinationX;
+      for (UINTN x = 0; x < Width; x++) dst_line[x] = src_line[x];
+    }
+    return EFI_SUCCESS;
+  }
+  if (BltOperation == EfiBltVideoToVideo) {
+    if (SourceX + Width > fb_w || SourceY + Height > fb_h ||
+        DestinationX + Width > fb_w || DestinationY + Height > fb_h) return EFI_INVALID_PARAMETER;
+    for (UINTN y_idx = 0; y_idx < Height; y_idx++) {
+      UINTN y = (DestinationY <= SourceY) ? y_idx : (Height - 1 - y_idx);
+      UINT32 *dst_line = fb + (DestinationY + y) * fb_w + DestinationX;
+      const UINT32 *src_line = fb + (SourceY + y) * fb_w + SourceX;
+      if (dst_line == src_line) continue;
+      if (DestinationX <= SourceX) {
+        for (UINTN x = 0; x < Width; x++) dst_line[x] = src_line[x];
+      } else {
+        for (UINTN x = Width; x > 0; x--) dst_line[x - 1] = src_line[x - 1];
+      }
+    }
+    return EFI_SUCCESS;
+  }
+  return EFI_INVALID_PARAMETER;
+}
+
+static EFI_GRAPHICS_OUTPUT_PROTOCOL FallbackGop = {
+  FallbackGopQueryMode,
+  FallbackGopSetMode,
+  FallbackGopBlt,
+  &FallbackMode
+};
+
+static EFI_HANDLE FallbackHandle = NULL;
+
+static EFI_STATUS InstallFallbackGop(EFI_SYSTEM_TABLE *t) {
+  if (FallbackHandle) return EFI_SUCCESS;
+  if (!t || !t->BootServices || !t->BootServices->AllocatePages ||
+      !t->BootServices->InstallMultipleProtocolInterfaces) {
+    return EFI_UNSUPPORTED;
+  }
+
+  UINTN pages = (1024U * 768U * 4U + 4095U) / 4096U;
+  EFI_PHYSICAL_ADDRESS fb_addr = 0xFFFFFFFFULL;
+  EFI_STATUS s = t->BootServices->AllocatePages(AllocateMaxAddress, EfiReservedMemoryType, pages, &fb_addr);
+  if (s != EFI_SUCCESS) {
+    s = t->BootServices->AllocatePages(AllocateAnyPages, EfiReservedMemoryType, pages, &fb_addr);
+  }
+  if (s != EFI_SUCCESS || fb_addr == 0) {
+    GuLog("Fallback GOP: AllocatePages failed (%#llx)\n", (unsigned long long)s);
+    return s != EFI_SUCCESS ? s : EFI_OUT_OF_RESOURCES;
+  }
+
+  memset((VOID *)(UINTN)fb_addr, 0, pages * 4096U);
+  FallbackMode.FrameBufferBase = fb_addr;
+  FallbackMode.FrameBufferSize = 1024U * 768U * 4U;
+  FallbackMode.Info = &FallbackInfo;
+  FallbackMode.SizeOfInfo = sizeof(FallbackInfo);
+  FallbackMode.MaxMode = 1;
+  FallbackMode.Mode = 0;
+
+  static EFI_GUID FallbackGuid = { 0x9f5c4b1a, 0x738d, 0x4e6b, { 0x8a, 0x12, 0xd0, 0x3f, 0x7a, 0x5b, 0x9c, 0x11 } };
+  static GU_FALLBACK_GOP_DEVICE_PATH FallbackDp;
+  FallbackDp.Vendor.Header.Type = HARDWARE_DEVICE_PATH;
+  FallbackDp.Vendor.Header.SubType = HW_VENDOR_DP;
+  FallbackDp.Vendor.Header.Length[0] = (UINT8)(sizeof(VENDOR_DEVICE_PATH) & 0xFF);
+  FallbackDp.Vendor.Header.Length[1] = (UINT8)((sizeof(VENDOR_DEVICE_PATH) >> 8) & 0xFF);
+  FallbackDp.Vendor.Guid = FallbackGuid;
+  FallbackDp.End.Type = END_DEVICE_PATH_TYPE;
+  FallbackDp.End.SubType = END_ENTIRE_DEVICE_PATH_SUBTYPE;
+  FallbackDp.End.Length[0] = 4;
+  FallbackDp.End.Length[1] = 0;
+
+  s = t->BootServices->InstallMultipleProtocolInterfaces(
+      &FallbackHandle,
+      &GopGuid, &FallbackGop,
+      &PathGuid, &FallbackDp,
+      NULL);
+  if (s == EFI_SUCCESS && FallbackHandle && t->BootServices->ConnectController) {
+    (VOID)t->BootServices->ConnectController(FallbackHandle, NULL, NULL, TRUE);
+  }
+  return s;
+}
+
+EFI_STATUS GuReconnectDisplayAfterUnlock(EFI_SYSTEM_TABLE *t, EFI_HANDLE image,
+                                         EFI_HANDLE pci_handle, BOOLEAN allow_fallback_gop) {
+  if (!Plan.csm_video) {
+    if (t && t->BootServices && t->BootServices->ConnectController && pci_handle) {
+      (VOID)t->BootServices->ConnectController(pci_handle, NULL, NULL, TRUE);
+    }
+    if (t && t->BootServices && t->BootServices->ConnectController && t->ConsoleOutHandle) {
+      (VOID)t->BootServices->ConnectController(t->ConsoleOutHandle, NULL, NULL, TRUE);
+    }
+    if (t && t->BootServices && t->BootServices->Stall) {
+      t->BootServices->Stall(200000);
+    }
+    if (t && t->ConOut && t->ConOut->Reset) {
+      (VOID)t->ConOut->Reset(t->ConOut, FALSE);
+    }
+    GuReleaseStagedVbiosEfiImage();
+    return EFI_SUCCESS;
+  }
+
+  GuLog("CSM display reconnect: bypassing legacy CsmVideo connect on PCI handle %#llx\n",
+        (unsigned long long)(UINTN)pci_handle);
+
+  BOOLEAN layer1_ok = TryBindStagedVbiosEfiGop(t, image, pci_handle);
+  GuLog("CSM display reconnect: Layer 1 VBIOS Option ROM GOP bind result=%u\n", (unsigned)layer1_ok);
+
+  UINTN linear_gops = CountLinearGops();
+  GuLog("CSM display reconnect: linear GOP count=%zu\n", (size_t)linear_gops);
+
+  if (linear_gops == 0 && allow_fallback_gop) {
+    EFI_STATUS fb_status = InstallFallbackGop(t);
+    GuLog("CSM display reconnect: Layer 2 fallback GOP installation result=%#llx\n",
+          (unsigned long long)fb_status);
+  }
+
+  if (t && t->BootServices && t->BootServices->ConnectController && t->ConsoleOutHandle) {
+    (VOID)t->BootServices->ConnectController(t->ConsoleOutHandle, NULL, NULL, TRUE);
+  }
+  if (t && t->BootServices && t->BootServices->Stall) {
+    t->BootServices->Stall(200000);
+  }
+  if (t && t->ConOut && t->ConOut->Reset) {
+    (VOID)t->ConOut->Reset(t->ConOut, FALSE);
+  }
+  GuReleaseStagedVbiosEfiImage();
+  return EFI_SUCCESS;
+}
+

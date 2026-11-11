@@ -23,7 +23,7 @@ try {
         $commands += 'if errorlevel 1 exit /b 1'
     }
     $joined = ($objects | ForEach-Object { '"' + $_ + '"' }) -join ' '
-    $commands += "link /nologo /subsystem:efi_application /entry:UefiMain /machine:x64 /nodefaultlib /incremental:no /fixed:no /fixed:no /dynamicbase:no /nxcompat:no /out:build_diagnostic\GPU-TOPOLOGY-DIAGNOSTIC.EFI $joined"
+    $commands += "link /nologo /subsystem:efi_application /entry:UefiMain /machine:x64 /nodefaultlib /incremental:no /fixed:no /dynamicbase:no /nxcompat:no /out:build_diagnostic\GPU-TOPOLOGY-DIAGNOSTIC.EFI $joined"
     $commands += 'if errorlevel 1 exit /b 1'
     $batch = Join-Path $output 'build-diagnostic.cmd'
     Set-Content -LiteralPath $batch -Encoding ascii -Value $commands

@@ -200,26 +200,12 @@ EFI_STATUS EFIAPI UefiMain(EFI_HANDLE image, EFI_SYSTEM_TABLE *t) {
     goto failed;
   }
 
+  stage = "sync-USB-log";
+  (VOID) GuBootSyncLog();
+
   stage = "reconnect-display";
-  for (UINTN g = 0; g < device_count; g++) {
-    if (t && t->BootServices && t->BootServices->ConnectController && devices[g].handle) {
-      EFI_STATUS cs = t->BootServices->ConnectController(devices[g].handle, NULL, NULL, TRUE);
-      GuLog("Display reconnect: GPU [%u/%u] handle=%#llx status=%#llx\n",
-            (unsigned)(g + 1), (unsigned)device_count,
-            (unsigned long long)(UINTN)devices[g].handle, (unsigned long long)cs);
-    }
-  }
-
-  if (t && t->BootServices && t->BootServices->ConnectController && t->ConsoleOutHandle) {
-    (VOID) t->BootServices->ConnectController(t->ConsoleOutHandle, NULL, NULL, TRUE);
-  }
-
-  if (t && t->BootServices && t->BootServices->Stall) {
-    t->BootServices->Stall(200000); /* 200ms for DP/HDMI physical link training */
-  }
-
-  if (t && t->ConOut && t->ConOut->Reset) {
-    (VOID) t->ConOut->Reset(t->ConOut, FALSE);
+  if (device_count > 0 && devices[0].handle) {
+    (VOID) GuReconnectDisplayAfterUnlock(t, image, devices[0].handle, TRUE);
   }
 
   GuBootUnsilence();
@@ -253,20 +239,25 @@ failed:
 
   if (GuUnlockMutated() || Gu.started || Gu.retained) {
 
-    if (t && t->BootServices && t->BootServices->ConnectController && device_count > 0) {
-      (VOID) t->BootServices->ConnectController(devices[0].handle, NULL, NULL, TRUE);
-    }
-    if (t && t->ConOut && t->ConOut->Reset) {
-      (VOID) t->ConOut->Reset(t->ConOut, FALSE);
-    }
-
     if (Gu.started || Gu.master_attributes_pending)
       (VOID) GuClearMaster();
+
+    (VOID) GuBootSyncLog();
+
+    if (device_count > 0 && devices[0].handle && !Gu.retained) {
+      if (!GuUnlockIsCsmVideo() || Gu.flrs == 1) {
+        (VOID) GuReconnectDisplayAfterUnlock(t, image, devices[0].handle, FALSE);
+      }
+    }
+
+    GuReleaseStagedVbiosEfiImage();
 
     (VOID) GuBootClose();
     GuBootHalt();
     return EFI_ABORTED;
   }
+
+  GuReleaseStagedVbiosEfiImage();
 
   GuBootSay(L"\r\n=======================================================\r\n"
             L" UNIVERSAL GPU UNLOCK - PREFLIGHT REFUSED\r\n"

@@ -1,12 +1,15 @@
-name: Read-only GPU topology verification
+name: Build and host tests
 on:
   push:
     branches: [main]
     paths:
-      - 'src/gpu_topology*'
-      - 'src/gpu_inventory*'
-      - 'src/Build-Gpu-Topology-Diagnostic.ps1'
-      - 'tests/test_gpu_topology.c'
+      - 'src/**'
+      - 'tests/**'
+      - '.github/workflows/gpu-topology-diagnostic.yml'
+  pull_request:
+    paths:
+      - 'src/**'
+      - 'tests/**'
       - '.github/workflows/gpu-topology-diagnostic.yml'
   workflow_dispatch:
 permissions:
@@ -97,4 +100,29 @@ jobs:
         with:
           name: gpu-topology-diagnostic-unsigned-${{ github.sha }}
           path: src/build_diagnostic/GPU-TOPOLOGY-DIAGNOSTIC.EFI
+          if-no-files-found: error
+  firmware:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build BOOTX64.EFI and AdaUnlockDxe.efi with MSVC
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          & .\src\Build-Experimental-MSVC.ps1
+          & .\src\Build-Dxe-Driver.ps1
+          foreach ($file in '.\src\build\AD102-EXPERIMENTAL.EFI', '.\src\build_dxe\AdaUnlockDxe.efi') {
+            if (-not (Test-Path -LiteralPath $file)) { throw "Build output missing: $file" }
+            Get-FileHash -LiteralPath $file -Algorithm SHA256 | Format-List | Out-String
+          }
+      - name: Run MSVC host tests (driver_nvram, boot selection)
+        shell: pwsh
+        run: '& .\tests\Run-MsvcHostTests.ps1 -OutDir "$env:RUNNER_TEMP\msvc-host-tests"'
+      - uses: actions/upload-artifact@v4
+        if: success()
+        with:
+          name: firmware-unsigned-${{ github.sha }}
+          path: |
+            src/build/AD102-EXPERIMENTAL.EFI
+            src/build_dxe/AdaUnlockDxe.efi
           if-no-files-found: error

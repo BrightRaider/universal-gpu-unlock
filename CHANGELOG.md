@@ -6,6 +6,43 @@ For packaged binaries and downloads, visit [GitHub Releases](https://github.com/
 
 ---
 
+## [v1.8.23] - 2026-11-11
+### Legacy CSM Video Handover & Two-Layer Display Recovery (addresses #17)
+- **Automatic Legacy CSM (`CsmVideo`) Detection:**
+  * Detects CSM legacy video environments during preflight via VGA decoding attributes (`EFI_PCI_IO_ATTRIBUTE_VGA_MEMORY | EFI_PCI_IO_ATTRIBUTE_VGA_IO`, e.g. `0x718` on ASRock A520M-HVS) and compact legacy video thunks before `ClaimRestore` touches PCI attributes.
+  * Disables post-FLR `ConnectController(pci_handle)` calls on CSM platforms in both `BOOTX64.EFI` and `AdaUnlockDxe.efi`, preventing UEFI firmware hangs inside legacy `CsmVideo->Start()`.
+- **Layer 1: Native VBIOS Option ROM GOP Binding:**
+  * Stages GPU VBIOS UEFI GOP driver (`type=0x3` PCI Expansion ROM, e.g. `pos=0xfe00 bytes=92672` on RTX 3080) from PROM during `GuPrepare()`.
+  * Decompresses via `EFI_DECOMPRESS_PROTOCOL` when compressed, validates PE image format, loads and starts the driver via UEFI Boot Services, and selectively invokes `DriverBinding->Start()` specifically on the target GPU.
+  * Reconnects only pure child GOP handles (never `pci_handle` with `PciIo`), ensuring display output is recovered directly on native hardware.
+- **Layer 2: Safe Headless Fallback GOP:**
+  * If physical Option ROM GOP is unavailable or cannot produce a linear GOP, installs a synthetic 1024x768 32-bit BGRA `EFI_GRAPHICS_OUTPUT_PROTOCOL` allocated in `EfiReservedMemoryType` (`<= 0xFFFFFFFF`).
+  * Prevents Windows Boot Manager (`bootmgfw.efi`) and OS loader (`winload.efi`) from falling back to broken Legacy `INT 10h` BIOS interrupts, allowing Windows to boot cleanly straight to `nvlddmkm.sys`.
+- **USB Log Sync Guarantee:**
+  * Added `GuBootSyncLog()` to flush and reopen active USB log files immediately before risky firmware and handover transitions.
+- **Unified Display Handover & Host Unit Tests:**
+  * Consolidated display reconnect routines between `app.c` and `dxe_main.c` into `GuReconnectDisplayAfterUnlock()`.
+  * Added `tests/test_csm_handover.c` to MSVC host test runner (`tests/Run-MsvcHostTests.ps1`) verifying CSM detection, Option ROM parsing, Layer 1 binding, and Layer 2 fallback GOP.
+
+### Tests & CI
+- **New MSVC host tests:** `tests/test_driver_nvram.c` covers `[I]`, `[R]` and the self-disable after a failed DXE unlock: free slot, foreign entries, unreadable `DriverOrder`, internal ESP copy and USB fallback. `tests/test_boot_select.c` covers the Windows volume ranking and the `BootOrder` preference. `tests/test_csm_handover.c` covers CSM video detection, Option ROM parsing, Layer 1 binding, and Layer 2 synthetic fallback GOP. Run them with `tests/Run-MsvcHostTests.ps1`.
+- **CI:** The workflow now runs on every push and pull request that touches `src/` or `tests/`. It also builds `BOOTX64.EFI` and `AdaUnlockDxe.efi` (unsigned) and runs the MSVC host tests.
+
+### Fixed
+- **No shutdown loop after a failed DXE unlock:** After a failure that touched the GPU, `AdaUnlockDxe.efi` now takes its own entry out of `DriverOrder` (`GuDisableDriverOption`) before it shuts down. The next boot runs without the unlock instead of failing again, which matters for an install on the internal ESP. `[I]` enables the driver again, `[R]` removes it. `driver_nvram.c` is now part of the DXE build.
+- **ESP copy replaces old files:** An existing copy on the ESP is deleted before the new one is written, so a smaller new driver no longer leaves stale bytes at the end. An incomplete write now counts as a failed copy and falls back to the USB drive. This also applies to the firmware assets.
+- **NVRAM checked before copying:** `[I]` reads `DriverOrder` and the `Driver####` slots before it copies anything to the ESP, so a failure no longer leaves a driver file without an entry.
+
+### Hardening
+- `DMA_BIT_MASK(64)` no longer shifts by 64, which is undefined behavior. All current callers use 32, so behavior is unchanged.
+- Removed a duplicate `/fixed:no` from `src/Build-Gpu-Topology-Diagnostic.ps1`.
+
+### Documentation
+- `docs/OPERATIONS_AND_PERSISTENCE.md`: Claims reduced to observed results. `[I]` now describes the internal ESP install and the USB fallback. Verification status for Ampere and Turing follows the issues.
+- `README.md`: New "Build & Tests" section. Turing marked as in testing ([#15](https://github.com/BrightRaider/universal-gpu-unlock/issues/15)), and the safety, anti-cheat and test-bench claims reduced to what was observed. The `[I]` description now covers the USB fallback and the self-disable.
+
+---
+
 ## [v1.8.22] - 2026-11-10
 ### Boot Selection Timeout Extension to 30 Seconds
 - **Boot Countdown Timeout Extended:**

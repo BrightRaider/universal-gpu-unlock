@@ -156,8 +156,55 @@ BOOLEAN GuColdEntry(VOID) {
   return !Gu.started && !Gu.fault && !Gu.retained && Config() &&
     Registers(&ss0,&ss1) && GuEntrySelectorsMatch(ss0,ss1);
 }
+static UINT8 *StagedVbiosEfiPayload = NULL;
+static GU_VBIOS_EFI_IMAGE StagedVbiosEfiInfo;
+static BOOLEAN StagedVbiosEfiValid = FALSE;
+
+VOID GuReleaseStagedVbiosEfiImage(VOID) {
+  if (StagedVbiosEfiPayload && Gu.bs && Gu.bs->FreePool) {
+    (VOID)Gu.bs->FreePool(StagedVbiosEfiPayload);
+  }
+  StagedVbiosEfiPayload = NULL;
+  memset(&StagedVbiosEfiInfo, 0, sizeof(StagedVbiosEfiInfo));
+  StagedVbiosEfiValid = FALSE;
+}
+
+BOOLEAN GuGetStagedVbiosEfiImage(const UINT8 **payload, UINTN *bytes,
+                                 UINT16 *machine_type, BOOLEAN *compressed) {
+  if (!StagedVbiosEfiValid || !StagedVbiosEfiPayload || !StagedVbiosEfiInfo.payload_bytes)
+    return FALSE;
+  if (payload) *payload = StagedVbiosEfiPayload;
+  if (bytes) *bytes = StagedVbiosEfiInfo.payload_bytes;
+  if (machine_type) *machine_type = StagedVbiosEfiInfo.machine_type;
+  if (compressed) *compressed = StagedVbiosEfiInfo.compressed;
+  return TRUE;
+}
+
+static VOID StageVbiosEfiImage(const UINT8 *prom, UINTN prom_len) {
+  GU_VBIOS_EFI_IMAGE info;
+  GuReleaseStagedVbiosEfiImage();
+  if (!prom || !Gu.bs || !Gu.bs->AllocatePool)
+    return;
+  if (!GuFindVbiosEfiOptionRom(prom, prom_len, &info))
+    return;
+  if (!info.payload_bytes || info.payload_bytes > 512U * 1024U)
+    return;
+  VOID *copy = NULL;
+  if (Gu.bs->AllocatePool(EfiBootServicesData, info.payload_bytes, &copy) != EFI_SUCCESS || !copy)
+    return;
+  memcpy(copy, prom + info.payload_offset, info.payload_bytes);
+  StagedVbiosEfiPayload = (UINT8 *)copy;
+  StagedVbiosEfiInfo = info;
+  StagedVbiosEfiValid = TRUE;
+  GuLog("VBIOS EFI GOP staged: pos=%#x rom_bytes=%zu payload=%zu machine=%#x compressed=%u\n",
+        (unsigned)info.rom_offset, (size_t)info.rom_bytes,
+        (size_t)info.payload_bytes, (unsigned)info.machine_type,
+        (unsigned)info.compressed);
+}
+
 EFI_STATUS GuPrepare(VOID) {
   UINT32 ss0,ss1,after0,after1;VOID *prom=NULL;struct gpu_unlock_fwsec fw;
+  GuReleaseStagedVbiosEfiImage();
   GuLog("GuPrepare: start\n");
   if(Gu.started || Gu.fault || Gu.retained || Gu.allocations || Gu.profile_verified || Gu.prom_checked) {
     GuLog("GuPrepare: state invalid (started=%u fault=%u retained=%u alloc=%p prof=%u prom=%u)\n",
@@ -190,11 +237,13 @@ EFI_STATUS GuPrepare(VOID) {
   BOOLEAN valid = !Gu.fault && prom_ok && fwsec_match && cfg2 && reg2 && ss0==after0 && ss1==after1;
   GuLog("GuPrepare: prom_ok=%u fwsec_res=%d fwsec_match=%u cfg2=%u reg2=%u ss0_stable=%u\n",
         prom_ok, fwsec_res, fwsec_match, cfg2, reg2, (ss0==after0 && ss1==after1));
+  if(valid) StageVbiosEfiImage((const UINT8 *)prom, 1048576);
   GuFree(prom);
   if(!valid) return EFI_COMPROMISED_DATA;
   Gu.prom_checked=TRUE;
   if(!GuLatchEntrySelectors(ss0,ss1)) {
     Gu.prom_checked=FALSE;
+    GuReleaseStagedVbiosEfiImage();
     GuLog("GuPrepare: GuLatchEntrySelectors failed\n");
     return EFI_NOT_READY;
   }
