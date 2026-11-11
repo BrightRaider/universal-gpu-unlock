@@ -17,7 +17,20 @@ except ImportError:
 
 if not torch.cuda.is_available():
     print("=" * 72)
-    print("  [ERROR] CUDA is not available. Please verify NVIDIA driver is installed.")
+    print("  [ERROR] CUDA is not available. NVIDIA driver could not be contacted.")
+    print("=" * 72)
+    print("  DIAGNOSIS & TROUBLESHOOTING:")
+    print("  1. Check Windows Device Manager (Win + X -> Device Manager -> Display adapters):")
+    print("     - If your GPU shows Error Code 43 or 'Microsoft Basic Display Adapter':")
+    print("       Your motherboard firmware has CSM (Compatibility Support Module) active!")
+    print("       -> Quick Verification: Press Win + R, type msinfo32, confirm 'BIOS Mode: UEFI'.")
+    print("       -> Solution: Restart PC into BIOS, navigate to Boot -> CSM, and set")
+    print("          CSM to [Disabled] (pure UEFI mode). This eliminates legacy VGA")
+    print("          driver conflicts, restores native resolution, and enables Resizable BAR.")
+    print("  2. If your NVIDIA GeForce GPU is working normally in Device Manager:")
+    print("     - PyTorch in this Python environment is running on a CPU-only wheel.")
+    print("     - Reinstall PyTorch with native CUDA 12.1/12.4 support:")
+    print("       pip install --force-reinstall torch --index-url https://download.pytorch.org/whl/cu121")
     print("=" * 72)
     sys.exit(2)
 
