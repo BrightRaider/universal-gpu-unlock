@@ -210,8 +210,18 @@ EFI_STATUS EFIAPI UefiMain(EFI_HANDLE image, EFI_SYSTEM_TABLE *t) {
 
   GuBootUnsilence();
   GuBootSay(L" [3/4] Display Handover .................... [ OK ]\r\n"
-            L" [4/4] Hardware SEC2 and MSR Unlock ........ [ OK ]\r\n"
-            L" Handing over control to Windows Boot Manager...\r\n\r\n");
+            L" [4/4] Hardware SEC2 and MSR Unlock ........ [ OK ]\r\n");
+
+  if (GuUnlockIsCsmVideo()) {
+    GuBootSay(
+        L"\r\n"
+        L"  [!] BIOS WARNING: Legacy CSM Video Mode Detected!\r\n"
+        L"      If Windows boots with low resolution or Code 43 in Device Manager,\r\n"
+        L"      restart into BIOS and set CSM to [Disabled] (pure UEFI mode).\r\n"
+        L"\r\n");
+  }
+
+  GuBootSay(L" Handing over control to Windows Boot Manager...\r\n\r\n");
 
   GuLog("TRANSACTION OK: GPU [1/%u] unlocked, hardware readbacks passed!\n",
         (unsigned)device_count);

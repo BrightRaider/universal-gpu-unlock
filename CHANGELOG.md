@@ -6,6 +6,16 @@ For packaged binaries and downloads, visit [GitHub Releases](https://github.com/
 
 ---
 
+## [v1.8.24] - 2026-11-11
+### Pre-Boot CSM Detection Warning & Comprehensive Diagnostics (refs #17)
+- **On-Screen UEFI Warning for Legacy CSM:**
+  * When `GuUnlockIsCsmVideo()` detects legacy CSM video routing (`attrs & (VGA_MEMORY | VGA_IO)`), `BOOTX64.EFI` now displays an explicit on-screen warning prior to handing over control to Windows Boot Manager.
+  * Directs users whose systems boot with low resolution or Code 43 to disable CSM in BIOS Setup to establish pure native UEFI and enable Resizable BAR.
+- **Python Status Checker Diagnostics (`tools/quick_check.py`):**
+  * When CUDA initialization fails, displays a structured troubleshooting checklist explaining Device Manager Code 43, `msinfo32` UEFI verification, and the CSM BIOS toggle.
+- **Setup & Documentation Alignment:**
+  * Added mandatory CSM-disabled requirement and Resizable BAR pro-tip to `Setup-AdaUnlock.ps1`, `README.md`, and `docs/OPERATIONS_AND_PERSISTENCE.md`.
+
 ## [v1.8.23] - 2026-11-11
 ### Legacy CSM Video Handover & Two-Layer Display Recovery (addresses #17)
 - **Automatic Legacy CSM (`CsmVideo`) Detection:**
