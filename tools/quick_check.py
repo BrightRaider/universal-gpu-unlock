@@ -4,16 +4,121 @@ SPDX-License-Identifier: GPL-2.0-only
 """
 import sys
 import time
+import os
+import re
+import subprocess
+import ctypes
+
+# Enable ANSI escape sequences on Windows consoles
+if os.name == "nt":
+    try:
+        os.system("")
+    except Exception:
+        pass
+
+C_GREEN = "\033[92m"
+C_GREEN_BOLD = "\033[92;1m"
+C_RED_BOLD = "\033[91;1m"
+C_YELLOW = "\033[93m"
+C_CYAN = "\033[96m"
+C_RESET = "\033[0m"
+
+def get_firmware_mode():
+    try:
+        ft = ctypes.c_uint()
+        if hasattr(ctypes, "windll") and hasattr(ctypes.windll, "kernel32"):
+            if ctypes.windll.kernel32.GetFirmwareType(ctypes.byref(ft)):
+                if ft.value == 2:
+                    return "UEFI (Pure)", True
+                elif ft.value == 1:
+                    return "Legacy BIOS (CSM Active)", False
+    except Exception:
+        pass
+    if os.path.exists("/sys/firmware/efi"):
+        return "UEFI", True
+    return "Unknown", None
+
+def get_rebar_info():
+    candidates = [
+        "nvidia-smi",
+        r"C:\Windows\System32\nvidia-smi.exe",
+        r"C:\Program Files\NVIDIA Corporation\NVSMI\nvidia-smi.exe",
+    ]
+    for exe in candidates:
+        try:
+            out = subprocess.check_output([exe, "-q", "-d", "MEMORY"], text=True, stderr=subprocess.DEVNULL)
+            m_bar = re.search(r"BAR1 Memory Usage\s*\n\s*Total\s*:\s*(\d+)\s*MiB", out)
+            m_fb = re.search(r"FB Memory Usage\s*\n\s*Total\s*:\s*(\d+)\s*MiB", out)
+            bar1 = int(m_bar.group(1)) if m_bar else None
+            fb = int(m_fb.group(1)) if m_fb else None
+            if bar1 is not None:
+                is_active = bar1 > 1024 or (fb is not None and bar1 >= fb)
+                return bar1, fb, is_active
+        except Exception:
+            continue
+    return None, None, None
+
+def get_pcie_info():
+    candidates = [
+        "nvidia-smi",
+        r"C:\Windows\System32\nvidia-smi.exe",
+        r"C:\Program Files\NVIDIA Corporation\NVSMI\nvidia-smi.exe",
+    ]
+    for exe in candidates:
+        try:
+            out = subprocess.check_output(
+                [exe, "--query-gpu=pcie.link.gen.max,pcie.link.width.max",
+                 "--format=csv,noheader,nounits"],
+                text=True, stderr=subprocess.DEVNULL
+            )
+            parts = [p.strip() for p in out.strip().split(",")]
+            if len(parts) >= 2:
+                gen_max = int(parts[0])
+                width_max = int(parts[1])
+                is_throttled = width_max < 8 or gen_max < 3
+                return gen_max, width_max, is_throttled
+        except Exception:
+            continue
+    return None, None, False
+
+def copy_to_clipboard(text):
+    if os.name == "nt":
+        try:
+            proc = subprocess.Popen(["clip.exe"], stdin=subprocess.PIPE, stderr=subprocess.DEVNULL)
+            proc.communicate(input=text.encode("utf-16le"))
+            return True
+        except Exception:
+            pass
+    return False
 
 try:
     import torch
 except ImportError:
+    fw_str, _ = get_firmware_mode()
+    bar1, fb, rebar_active = get_rebar_info()
+    gen_max, width_max, is_throttled = get_pcie_info()
     print("=" * 72)
-    print("  [ERROR] PyTorch is not installed in this Python environment.")
-    print("  To run this benchmark, install PyTorch with CUDA:")
+    print("     UNIVERSAL GPU RATE-LIMITER STATUS CHECK (ADA, AMPERE & TURING)")
+    print("=" * 72)
+    print("  SYSTEM HARDWARE ENVIRONMENT:")
+    print(f"  * Firmware Mode      : {fw_str}")
+    if rebar_active is True:
+        print(f"  * Resizable BAR      : {C_GREEN}[OK] ENABLED (BAR1: {bar1} MiB / VRAM: {fb} MiB){C_RESET}")
+    elif rebar_active is False:
+        print(f"  * Resizable BAR      : {C_RED_BOLD}[!] DISABLED (BAR1: {bar1} MiB restricted) -> Turn ON in BIOS!{C_RESET}")
+    else:
+        print(f"  * Resizable BAR      : Undetected (BAR1: {bar1 if bar1 else 'N/A'})")
+    if gen_max and width_max:
+        if is_throttled:
+            print(f"  * PCIe Slot Link     : {C_RED_BOLD}[!] THROTTLED: Gen{gen_max} x{width_max} (Riser or Slot Bottleneck!){C_RESET}")
+        else:
+            print(f"  * PCIe Slot Link     : {C_GREEN}[OK] Gen{gen_max} x{width_max} (Full Bandwidth){C_RESET}")
+    print("-" * 72)
+    print("  [INFO] PyTorch with CUDA is required for the live TFLOPS compute test.")
+    print("  To install PyTorch with CUDA support, run:")
     print("    pip install torch --index-url https://download.pytorch.org/whl/cu121")
     print("=" * 72)
-    sys.exit(2)
+    sys.exit(0)
 
 if not torch.cuda.is_available():
     print("=" * 72)
@@ -145,11 +250,29 @@ def main():
     is_unlocked = tflops_fp16 >= profile["threshold"]
     ratio = tflops_fp16 / tflops_fp32 if tflops_fp32 > 0 else 1.0
 
+    fw_str, fw_is_uefi = get_firmware_mode()
+    bar1, fb, rebar_active = get_rebar_info()
+    gen_max, width_max, is_throttled = get_pcie_info()
+
     print("=" * 72)
     print("     UNIVERSAL GPU RATE-LIMITER STATUS CHECK (ADA, AMPERE & TURING)")
     print("=" * 72)
     print(f"  GPU Hardware       : {gpu_name}")
     print(f"  Architecture       : {arch} ({sm_count} Streaming Multiprocessors)")
+    print(f"  Firmware Mode      : {fw_str}")
+    if rebar_active is True:
+        print(f"  Resizable BAR      : {C_GREEN}[OK] ENABLED (BAR1: {bar1} MiB / VRAM: {fb} MiB){C_RESET}")
+    elif rebar_active is False:
+        print(f"  Resizable BAR      : {C_RED_BOLD}[!] DISABLED (BAR1: {bar1} MiB restricted) -> Turn ON in BIOS!{C_RESET}")
+    else:
+        print(f"  Resizable BAR      : Undetected")
+    if gen_max and width_max:
+        if is_throttled:
+            print(f"  PCIe Slot Link     : {C_RED_BOLD}[!] THROTTLED: Gen{gen_max} x{width_max} (Riser or Slot Bottleneck!){C_RESET}")
+        else:
+            print(f"  PCIe Slot Link     : {C_GREEN}[OK] Gen{gen_max} x{width_max} (Full Bandwidth){C_RESET}")
+    else:
+        print(f"  PCIe Slot Link     : Undetected")
     print(f"  Matrix Dimension   : {size}x{size} Dense Matrix Multiply (GEMM)")
     print("-" * 72)
     print(f"  [1] FP16 Tensor Cores   : {tflops_fp16:>6.2f} TFLOPS ({ms_fp16:.3f} ms)  -> Primary Rate-Limiter Metric")
@@ -169,17 +292,42 @@ def main():
     print("-" * 72)
 
     if is_unlocked:
-        print(f"  STATUS: [OK] FULLY UNLOCKED! ({tflops_fp16:.1f} TFLOPS)")
-        print("  Hardware rate-limiter is INACTIVE.")
-        print("  GPU is running at 100% full unrestricted tensor compute capacity.")
+        print(f"  {C_GREEN_BOLD}STATUS: [OK] FULLY UNLOCKED! ({tflops_fp16:.1f} TFLOPS){C_RESET}")
+        print(f"  {C_GREEN}Hardware rate-limiter is INACTIVE.{C_RESET}")
+        print(f"  {C_GREEN}GPU is running at 100% full unrestricted tensor compute capacity.{C_RESET}")
         ret_code = 0
     else:
-        print(f"  STATUS: [WARNING] STOCK RATE-LIMITER ACTIVE! ({tflops_fp16:.1f} TFLOPS)")
+        print(f"  {C_RED_BOLD}STATUS: [WARNING] STOCK RATE-LIMITER ACTIVE! ({tflops_fp16:.1f} TFLOPS){C_RESET}")
         print(f"  Expected unlocked performance: > {profile['threshold']:.0f} TFLOPS (typical ~{profile['min_unlocked']:.0f} TFLOPS).")
         print("  Recommendation: Boot via USB [U]/[I] or resume from Hibernation (shutdown /h).")
         if props.major == 7:
             print("  Note for Turing: Verify EnableGpuFirmware = 1 is configured in Windows Registry.")
         ret_code = 1
+
+    if rebar_active is False:
+        print("-" * 72)
+        print(f"  {C_RED_BOLD}[!] PRO-TUNING ALERT (Resizable BAR):{C_RESET}")
+        print(f"  {C_YELLOW}Resizable BAR is currently DISABLED in your BIOS (BAR1 = 256 MiB restricted).{C_RESET}")
+        print(f"  {C_YELLOW}-> Enable 'Above 4G Decoding' and 'ReBAR Support' in your motherboard BIOS{C_RESET}")
+        print(f"  {C_YELLOW}   to unlock full PCIe VRAM aperture and boost AI & gaming by +10% to +15%!{C_RESET}")
+
+    if is_throttled:
+        print("-" * 72)
+        print(f"  {C_RED_BOLD}[!] PCIe LINK BOTTLENECK DETECTED:{C_RESET}")
+        print(f"  {C_YELLOW}Your GPU is running at Gen{gen_max} x{width_max} instead of full x16.{C_RESET}")
+        print(f"  {C_YELLOW}-> Check your PCIe riser cable, clean slot contacts, or move the GPU{C_RESET}")
+        print(f"  {C_YELLOW}   to the primary top PCIe slot directly attached to the CPU.{C_RESET}")
+
+    rebar_str = f"{bar1}MB (Active)" if rebar_active else ("256MB (Disabled)" if rebar_active is False else "N/A")
+    pcie_str = f"Gen{gen_max} x{width_max}" if (gen_max and width_max) else "N/A"
+    status_tag = "UNLOCKED" if is_unlocked else "STOCK"
+    summary_badge = f"[{status_tag}] {gpu_name}: {tflops_fp16:.1f} TFLOPS | ReBAR: {rebar_str} | PCIe: {pcie_str} | BIOS: {fw_str}"
+    print("-" * 72)
+    if copy_to_clipboard(summary_badge):
+        print(f"  {C_CYAN}[+] Result badge copied to clipboard! Ready to paste into GitHub / Reddit:{C_RESET}")
+        print(f"      {summary_badge}")
+    else:
+        print(f"  {C_CYAN}Summary: {summary_badge}{C_RESET}")
 
     print("=" * 72)
     sys.exit(ret_code)

@@ -28,7 +28,9 @@
 ## ⚡ 60-Second Quick Start
 
 > [!IMPORTANT]
-> **BIOS Prerequisite:** Ensure **CSM (Compatibility Support Module)** is set to **Disabled** (pure UEFI mode) in your motherboard BIOS. Modern GeForce RTX 30 & 40 GPUs require native UEFI to avoid legacy VGA conflicts (Code 43) and to unlock Resizable BAR.
+> **BIOS Prerequisites:**
+> 1. **CSM (Compatibility Support Module):** Must be set to **Disabled** (pure UEFI mode) in your BIOS. Modern GeForce RTX 30 & 40 GPUs require native UEFI to avoid legacy VGA conflicts (Code 43).
+> 2. **Resizable BAR (ReBAR):** Ensure **Above 4G Decoding** and **ReBAR Support** are set to **Enabled** in your BIOS. This eliminates the legacy 256 MB PCIe VRAM bottleneck and provides an extra **+10% to +15%** throughput boost for AI inference and gaming.
 
 1. **Download:** Get the latest release package: **[Universal_GPU_Unlock_v1.8.24.zip](https://github.com/BrightRaider/universal-gpu-unlock/releases/latest)**.
 2. **Provision:** Extract the ZIP, insert a USB flash drive (FAT32), and run **`Setup.bat`** (formats & copies all required UEFI files automatically).
@@ -36,9 +38,11 @@
    - **`[U]` Standard Unlock:** RAM-only, temporary unlock (reverts cleanly on complete power off).
    - **`[I]` Install to NVRAM:** Registers the UEFI DXE driver into motherboard NVRAM and internal ESP for automatic, stickless boot on every cold start.
    - *(Tip: The boot menu features a 30-second countdown. Press `[Space]` at any time to pause and read in peace).*
-4. **Verify:** In Windows, run **`Check-GPU-Unlock.bat`** to verify your unlocked Tensor Core throughput (>200 TFLOPS on RTX 4090).
-   - *(RTX 20 / Turing users: Run `Toggle-Turing-GSP.bat` once as Administrator to bind NVIDIA drivers to GSP firmware mode).*
-   - *(Optional: Launch `Universal-Control-Center.cmd` for detailed hardware telemetry, SMI sensor readbacks, and diagnostics).*
+4. **Verify:** In Windows, run **`Check-GPU-Unlock.bat`** to verify your unlocked Tensor Core throughput (>200 TFLOPS on RTX 4090):
+   - Confirms pure **UEFI mode**, **Resizable BAR aperture (Full VRAM)**, and **PCIe Link Speed/Width (Gen4 x16)**.
+   - Automatically copies your verified result badge to the clipboard for sharing in GitHub issues or Discord!
+   - *(Prefer a GUI? Double-click `Launch-Dashboard.bat` for a sleek dark-themed 1-click benchmark dashboard).*
+5. **Instant Daily Resume (Optional):** Run **`Setup-FastResume.bat`** to enable full Windows Hibernation and create a desktop **Fast-Unlock-Sleep** shortcut. Sleeping your PC preserves the GPU unlock in RAM across sessions—waking up in ~3 seconds with full unlocked TFLOPS ready to go, without needing to reboot through UEFI!
 
 ---
 
@@ -164,9 +168,15 @@ All version releases, bug fixes, and device expansions are maintained in the sep
 ├── tests/                       <- Host tests with mocked UEFI services (no GPU required)
 ├── Setup.bat                    <- The 1-Click Provisioner Launcher (Primary tool)
 ├── Setup-AdaUnlock.ps1          <- Automated PowerShell deployment engine
-├── Check-GPU-Unlock.bat         <- Standalone Windows verification benchmark (>200 TFLOPS)
+├── Setup-FastResume.bat         <- 1-Click Windows Hibernation & Desktop Sleep shortcut (Preserve unlock)
+├── Check-GPU-Unlock.bat         <- Standalone Windows verification benchmark (TFLOPS, ReBAR, PCIe & Clipboard)
+├── Launch-Dashboard.bat         <- Modern dark-themed GUI dashboard & benchmark launcher
+├── Launch-Dashboard.pyw         <- Windowless GUI direct launcher
 ├── Universal-Control-Center.cmd <- Optional Diagnostic & Telemetry Dashboard (WPF GUI)
 ├── Toggle-Sleep-Button.bat      <- Non-invasive tool to hide/restore Start Menu Sleep button (S3 protection)
+├── tools/
+│   ├── quick_check.py           <- Core GEMM benchmark, ReBAR, UEFI & PCIe diagnostic engine
+│   └── gpu_dashboard.py         <- Modern Tkinter GUI status monitor & live benchmark
 └── CHANGELOG.md                 <- Complete release and version history
 ```
 

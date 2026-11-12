@@ -56,10 +56,10 @@ if not defined QUICK_CHECK (
 
 "%PYTHON_EXE%" "%QUICK_CHECK%"
 set "BENCH_ERR=%ERRORLEVEL%"
-if "%BENCH_ERR%"=="0" (
-    color 0A >nul 2>&1
+if %BENCH_ERR% equ 0 (
+    color 0A
 ) else (
-    color 0C >nul 2>&1
+    color 0C
 )
 echo.
 if not "%~1"=="--no-pause" pause

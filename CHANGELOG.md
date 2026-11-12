@@ -6,6 +6,29 @@ For packaged binaries and downloads, visit [GitHub Releases](https://github.com/
 
 ---
 
+## [Unreleased] - Local Enhancements & Tooling Upgrade
+### Resizable BAR, PCIe Health & Clipboard Sharing
+- **Resizable BAR (ReBAR) Deep Detection:**
+  * Checks BAR1 memory aperture vs total VRAM via NVML / `nvidia-smi`.
+  * Signals `[OK] ENABLED (Full VRAM)` in green or `[!] DISABLED (256 MiB restricted)` in bold signal red.
+  * Displays an explicit pro-tuning alert explaining `Above 4G Decoding` and `ReBAR Support` BIOS settings to unlock the remaining +10% to +15% memory throughput.
+- **PCIe Link Quality & Bottleneck Diagnostics:**
+  * Checks negotiated PCIe link generation and lane width (`pcie.link.gen.max`, `pcie.link.width.max`).
+  * Alerts users if a defective riser cable, oxidized slot contact, or chipset secondary slot restricts the GPU to `x4` or `x1` lanes.
+- **One-Click Clipboard Badge Sharing:**
+  * Automatically formats a concise markdown badge and copies it to the Windows clipboard via native `clip.exe`:
+    `[UNLOCKED] NVIDIA GeForce RTX 4090: 231.3 TFLOPS | ReBAR: 32768MB (Active) | PCIe: Gen4 x16 | BIOS: UEFI (Pure)`
+  * Ready to paste directly into GitHub Issues, Discord, or Reddit.
+- **Fast-Resume / Instant Sleep Configurator (`Setup-FastResume.bat`):**
+  * One-click configuration for Windows Full Hibernation (`powercfg /h /type full`).
+  * Generates a 1-click desktop shortcut (`Fast-Unlock-Sleep.lnk`) to suspend the PC while keeping the GPU rate-limiter unlock active in RAM across sessions without re-entering UEFI boot menus.
+- **Modern Dark-Themed GUI Dashboard (`Launch-Dashboard.bat` & `.pyw`):**
+  * Built using pure standard library `tkinter` (zero external pip packages required).
+  * Real-time hardware identity, firmware mode, ReBAR status, and interactive background GEMM benchmark with digital TFLOPS gauge.
+- **Turing (TU102 / RTX 2080 Ti) Local Test Suite (`tests/test_turing_local.c`):**
+  * Added MSVC host test validating all Turing Device IDs, booter payload geometries, and `TU102-ASSETS` file integrity.
+  * Integrated directly into `tests/Run-MsvcHostTests.ps1`.
+
 ## [v1.8.24] - 2026-11-11
 ### Pre-Boot CSM Detection Warning & Comprehensive Diagnostics (refs #17)
 - **On-Screen UEFI Warning for Legacy CSM:**

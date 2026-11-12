@@ -16,3 +16,6 @@ build_diagnostic/
 scratch/
 REDDIT_POST.md
 *.zip
+
+__pycache__/
+*.pyc
