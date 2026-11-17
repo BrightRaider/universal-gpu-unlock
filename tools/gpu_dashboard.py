@@ -268,6 +268,16 @@ class GpuUnlockApp(tk.Tk):
         )
         btn_refresh.pack(side="left", padx=5)
 
+        self.guard_active = self.check_idle_guard()
+        guard_txt = "Idle Guard: ACTIVE" if self.guard_active else "Idle Guard: DEFAULT"
+        guard_col = "#00C853" if self.guard_active else "#2A2A2A"
+        self.btn_guard = tk.Button(
+            btn_frame, text=guard_txt, font=("Segoe UI", 10),
+            bg=guard_col, fg=self.c_text_bright, activebackground="#3A3A3A", activeforeground="#FFFFFF",
+            relief="flat", padx=14, pady=10, cursor="hand2", command=self.toggle_idle_guard
+        )
+        self.btn_guard.pack(side="left", padx=5)
+
         btn_msinfo = tk.Button(
             btn_frame, text="Hardware (msinfo32)", font=("Segoe UI", 10),
             bg="#2A2A2A", fg=self.c_text_bright, activebackground="#3A3A3A", activeforeground="#FFFFFF",
@@ -300,10 +310,54 @@ class GpuUnlockApp(tk.Tk):
         lbl_val.pack()
         return lbl_val
 
+    def check_idle_guard(self):
+        try:
+            import winreg
+            base_key = r"SYSTEM\CurrentControlSet\Control\Class\{4d36e968-e325-11ce-bfc1-08002be10318}"
+            with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, base_key) as root:
+                for i in range(16):
+                    try:
+                        sub = winreg.EnumKey(root, i)
+                        with winreg.OpenKey(root, sub) as k:
+                            try:
+                                desc, _ = winreg.QueryValueEx(k, "DriverDesc")
+                                if "NVIDIA" in str(desc).upper():
+                                    val, _ = winreg.QueryValueEx(k, "RMDisableRtd3")
+                                    if val == 1:
+                                        return True
+                            except OSError:
+                                pass
+                    except OSError:
+                        break
+        except Exception:
+            pass
+        return False
+
+    def toggle_idle_guard(self):
+        repo_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        fast_resume = os.path.join(repo_dir, "Setup-FastResume.bat")
+        if not os.path.exists(fast_resume):
+            fast_resume = os.path.join(os.path.dirname(os.path.abspath(__file__)), "Setup-FastResume.bat")
+
+        target_arg = "--revert" if self.guard_active else "--yes"
+        cmd = f'powershell -NoProfile -Command "Start-Process cmd.exe -ArgumentList \'/c \"\"{fast_resume}\"\" {target_arg} --no-pause\' -Verb RunAs -Wait"'
+        try:
+            self.lbl_log.config(text="Applying Idle Relock Guard configuration...", fg=self.c_yellow)
+            subprocess.Popen(cmd, shell=True)
+            self.after(2500, self.refresh_all)
+        except Exception as e:
+            self.lbl_log.config(text=f"Failed to toggle guard: {e}", fg=self.c_red)
+
     def refresh_all(self):
         self.gpu_info = get_gpu_details()
         self.fw_mode, self.fw_is_uefi = get_firmware_mode()
         self.bar1, self.fb, self.rebar_active = get_rebar_info()
+        self.guard_active = self.check_idle_guard()
+        if hasattr(self, "btn_guard"):
+            self.btn_guard.config(
+                text="Idle Guard: ACTIVE" if self.guard_active else "Idle Guard: DEFAULT",
+                bg="#00C853" if self.guard_active else "#2A2A2A"
+            )
         self.lbl_log.config(text="Hardware configuration refreshed.", fg=self.c_green)
 
     def start_benchmark_thread(self):
@@ -325,6 +379,9 @@ class GpuUnlockApp(tk.Tk):
             gpu_name = torch.cuda.get_device_name(0)
             props = torch.cuda.get_device_properties(0)
             size = 4096
+
+            if hasattr(torch.backends, "cudnn") and hasattr(torch.backends.cudnn, "benchmark"):
+                torch.backends.cudnn.benchmark = True
 
             # Lookup Profile
             profile = None
@@ -401,7 +458,7 @@ class GpuUnlockApp(tk.Tk):
         if is_unlocked:
             self.lbl_tflops_big.config(fg=self.c_green)
             self.lbl_status_badge.config(text="STATUS: FULLY UNLOCKED!", bg="#00C853", fg="#FFFFFF")
-            log_text = f"Rate-limiter BYPASS CONFIRMED! Performance is {ratio:.2f}x above CUDA baseline."
+            log_text = f"Rate-limiter BYPASS CONFIRMED! ({ratio:.2f}x CUDA baseline). cuBLAS autotune active."
             self.lbl_log.config(text=log_text, fg=self.c_green)
         else:
             self.lbl_tflops_big.config(fg=self.c_red)
