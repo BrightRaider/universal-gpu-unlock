@@ -6,8 +6,11 @@ For packaged binaries and downloads, visit [GitHub Releases](https://github.com/
 
 ---
 
-## [Unreleased] - Local Enhancements & Tooling Upgrade
-### Resizable BAR, PCIe Health & Clipboard Sharing
+## [v1.8.25] - 2026-11-17
+### Turing TU104 Expansion & Full Diagnostics Edition (addresses #15)
+- **GeForce RTX 2060 (TU104) Support (`0x1E89`) (addresses #15):**
+  * Added PCI Device ID `0x1E89` (`TU104-150-KC-A1` harvested die variant of the GeForce RTX 2060) to `GU_TURING_DEVICE_IDS` in `src/gpu_device_ids.h`.
+  * Enables discovery, VBIOS ROM parsing, and preflight diagnostic scanning for TU104-based RTX 2060 cards in `BOOTX64.EFI` and `AdaUnlockDxe.efi`.
 - **Resizable BAR (ReBAR) Deep Detection:**
   * Checks BAR1 memory aperture vs total VRAM via NVML / `nvidia-smi`.
   * Signals `[OK] ENABLED (Full VRAM)` in green or `[!] DISABLED (256 MiB restricted)` in bold signal red.
@@ -29,8 +32,8 @@ For packaged binaries and downloads, visit [GitHub Releases](https://github.com/
 - **Modern Dark-Themed GUI Dashboard (`Launch-Dashboard.bat` & `.pyw`):**
   * Built using pure standard library `tkinter` (zero external pip packages required).
   * Real-time hardware identity, firmware mode, ReBAR status, and interactive background GEMM benchmark with digital TFLOPS gauge.
-- **Turing (TU102 / RTX 2080 Ti) Local Test Suite (`tests/test_turing_local.c`):**
-  * Added MSVC host test validating all Turing Device IDs, booter payload geometries, and `TU102-ASSETS` file integrity.
+- **Turing (TU102 / TU104) Test Suite (`tests/test_turing_local.c`):**
+  * Validates all Turing Device IDs (including `0x1E89`), booter payload geometries, and `TU102-ASSETS` file integrity.
   * Integrated directly into `tests/Run-MsvcHostTests.ps1`.
 
 ## [v1.8.24] - 2026-11-11
