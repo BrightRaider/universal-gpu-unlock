@@ -25,24 +25,20 @@
 
 ---
 
-## ⚡ Quickstart Guide
+## ⚡ 60-Second Quick Start
 
-### Step 1: Prepare the USB Drive
-1. Download the latest release package: **[Universal_GPU_Unlock_v1.8.26.zip](https://github.com/BrightRaider/universal-gpu-unlock/releases/latest)** and extract it.
-2. Insert a USB flash drive (FAT32, 1 GB or larger).
-3. Run **`Setup.bat`** (automatically formats and copies all required UEFI files and certificates).
-
-### Step 2: Boot & Unlock
-1. Restart your PC and press your motherboard's boot menu key (**F11** on MSI/ASRock, **F12** on Gigabyte, **F8** on ASUS).
-2. Select the USB flash drive (`UEFI: USB...`).
-3. Choose your unlock mode (press **`[Space]`** to pause the 30-second countdown):
-   - **`[U]` Standard Unlock:** RAM-only, temporary unlock (reverts cleanly to factory stock on power off).
-   - **`[I]` Install to NVRAM:** Permanent, stickless auto-unlock on every cold boot via internal ESP & NVRAM.
-4. The transaction executes in ~300 ms and seamlessly hands execution over to Windows!
-
-### Step 3: Verify in Windows
-1. Double-click **`Check-GPU-Unlock.bat`** (or `Launch-Dashboard.bat`) to verify your unlocked Tensor Core throughput (>200 TFLOPS on RTX 4090).
-2. *(RTX 20 / Turing / CMP users: Run `Toggle-Turing-GSP.bat` once as Administrator to bind NVIDIA drivers to GSP firmware mode).*
+1. **Download:** Get the latest release package: **[Universal_GPU_Unlock_v1.8.26.zip](https://github.com/BrightRaider/universal-gpu-unlock/releases/latest)**.
+2. **Provision:** Extract the ZIP, insert a USB flash drive (FAT32), and run **`Setup.bat`** (formats & copies all required UEFI files and certificates automatically).
+3. **Boot & Unlock:** Restart your PC, open your motherboard boot menu (**F11** on MSI/ASRock, **F12** on Gigabyte, **F8** on ASUS), and boot from the USB drive (`UEFI: USB...`). Select your mode:
+   - **`[U]` Standard Unlock:** RAM-only, temporary unlock (reverts cleanly to factory stock on complete power off).
+   - **`[I]` Install to NVRAM:** Registers the UEFI DXE driver into motherboard NVRAM and internal ESP for automatic, stickless boot on every cold start (unplug the USB drive permanently).
+   - **`[P]` S3 Persistence:** Experimental sleep-aware unlock mode.
+   - **`[R]` Remove DXE Driver:** Cleanly uninstalls and deregisters the driver from UEFI NVRAM & internal ESP.
+   - **`[S]` Stock Windows:** Skips unlock, runs hardware diagnostics, logs to USB, and boots normal Windows.
+   - *(Tip: The boot menu features a 30-second countdown. Press `[Space]` at any time to pause and read in peace).*
+4. **Verify:** In Windows, run **`Check-GPU-Unlock.bat`** (or `Launch-Dashboard.bat`) to verify your unlocked Tensor Core throughput (>200 TFLOPS on RTX 4090):
+   - *(RTX 20 / Turing / CMP users: Run `Toggle-Turing-GSP.bat` once as Administrator to bind NVIDIA drivers to GSP firmware mode).*
+   - *(Optional: Run `Setup-FastResume.bat` to enable ~3s instant wake from hibernation with Idle Relock Guard).*
 
 ---
 
