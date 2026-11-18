@@ -76,6 +76,7 @@ int main(void) {
   CHECK(GuIsTuringDeviceId(0x1f02U), "RTX 2070 (1f02) must match Turing");
   CHECK(GuIsTuringDeviceId(0x1f06U), "RTX 2060 SUPER (1f06) must match Turing");
   CHECK(GuIsTuringDeviceId(0x1f08U), "RTX 2060 (1f08) must match Turing");
+  CHECK(GuIsTuringDeviceId(0x1f0bU), "CMP 40HX (1f0b) must match Turing");
 
   /* Non-Turing negative tests */
   CHECK(!GuIsTuringDeviceId(0x2684U), "RTX 4090 must NOT match Turing");
@@ -85,6 +86,7 @@ int main(void) {
   /* Full PCI ID matching */
   CHECK(GuIsSupportedPciId(0x1e0410deU), "RTX 2080 Ti 0x1e0410de must be supported");
   CHECK(GuIsSupportedPciId(0x1e8910deU), "RTX 2060 TU104 0x1e8910de must be supported");
+  CHECK(GuIsSupportedPciId(0x1f0b10deU), "CMP 40HX 0x1f0b10de must be supported");
   CHECK(GuIsSupportedPciId(0x268410deU), "RTX 4090 0x268410de must be supported");
   CHECK(GuIsSupportedPciId(0x220610deU), "RTX 3080 0x220610de must be supported");
   CHECK(!GuIsSupportedPciId(0x1e041002U), "Non-NVIDIA vendor must be rejected");

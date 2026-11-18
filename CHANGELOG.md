@@ -6,6 +6,14 @@ For packaged binaries and downloads, visit [GitHub Releases](https://github.com/
 
 ---
 
+## [v1.8.26] - 2026-11-18
+### NVIDIA CMP 40HX (TU106) Expansion (addresses #18)
+- **NVIDIA CMP 40HX Support (`0x1F0B`) (addresses #18):**
+  * Added PCI Device ID `0x1F0B` (`TU106-100-A1` Crypto Mining Processor) to `GU_TURING_DEVICE_IDS` in `src/gpu_device_ids.h`.
+  * Enables discovery, VBIOS ROM parsing, and preflight transaction evaluation for CMP 40HX cards in `BOOTX64.EFI` and `AdaUnlockDxe.efi`.
+  * Updated companion detection engine (`tools/Universal-Control-Center-Detection.ps1`) to properly recognize CMP 40HX as Turing TU106.
+  * Extended Turing test suite (`tests/test_turing_local.c`) with positive validation checks for `0x1f0b` and full PCI ID `0x1f0b10de`.
+
 ## [v1.8.25] - 2026-11-17
 ### Turing TU104 Expansion & Full Diagnostics Edition (addresses #15)
 - **GeForce RTX 2060 (TU104) Support (`0x1E89`) (addresses #15):**

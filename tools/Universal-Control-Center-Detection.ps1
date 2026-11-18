@@ -107,6 +107,7 @@ function Get-GpuHardwareInfo {
                     '1f02' { $arch = "RTX 2070 (TU106)"; $family = "TU106"; $isTuring = $true; $isSupported = $true }
                     '1f06' { $arch = "RTX 2060 Super (TU106)"; $family = "TU106"; $isTuring = $true; $isSupported = $true }
                     '1f08' { $arch = "RTX 2060 (TU106)"; $family = "TU106"; $isTuring = $true; $isSupported = $true }
+                    '1f0b' { $arch = "CMP 40HX (TU106)"; $family = "TU106"; $isTuring = $true; $isSupported = $true }
                     default {
                         if ($vc.Name -match 'RTX 40') { $arch = "Ada Lovelace Family"; $family = "AD10x"; $isAda = $true; $isSupported = $true }
                         elseif ($vc.Name -match 'RTX 30') { $arch = "Ampere Family"; $family = "GA10x"; $isAmpere = $true; $isSupported = $true }

@@ -41,4 +41,5 @@
   X(0x1e81U) X(0x1e82U) X(0x1e87U) /* RTX 2080 SUPER, RTX 2080 (TU104) */ \
   X(0x1e84U) X(0x1e89U) X(0x1eb0U) X(0x1eb1U) /* RTX 2070 SUPER, RTX 2060 (TU104), Quadro RTX 5000/4000 */ \
   X(0x1f02U) X(0x1f07U) X(0x1f06U) /* RTX 2070, 2060 SUPER (TU106) */ \
+  X(0x1f0bU)                       /* CMP 40HX (TU106) */ \
   X(0x1f47U) X(0x1f03U) X(0x1f08U) X(0x1f12U) X(0x1f36U)
