@@ -27,43 +27,13 @@
 
 ## ⚡ 60-Second Quick Start
 
+> **Prerequisites:** In your BIOS, ensure **CSM is Disabled** (pure UEFI mode) and **Resizable BAR (Above 4G Decoding)** is **Enabled**.
+
 1. **Download & Provision:** Download **[Universal_GPU_Unlock_v1.8.25.zip](https://github.com/BrightRaider/universal-gpu-unlock/releases/latest)**, extract it, insert a USB drive (FAT32), and run **`Setup.bat`**.
 2. **Boot & Unlock:** Restart, open your boot menu (`F8` / `F11` / `F12`), boot from the USB drive, and select:
    - **`[U]` Standard Unlock:** RAM-only, temporary unlock (reverts cleanly on power off).
    - **`[I]` Install to NVRAM:** Permanent, stickless auto-unlock on every cold boot via internal ESP & NVRAM.
 3. **Verify:** In Windows, run **`Check-GPU-Unlock.bat`** (or `Launch-Dashboard.bat`) to verify your unlocked Tensor Core throughput!
-
----
-
-<details>
-<summary><b>⚙️ BIOS Prerequisites (CSM & Resizable BAR)</b></summary>
-<br>
-
-* **CSM (Compatibility Support Module):** Must be set to **Disabled** (pure UEFI mode) in your BIOS to avoid legacy VGA conflicts (Code 43).
-* **Resizable BAR (ReBAR):** Ensure **Above 4G Decoding** and **ReBAR Support** are set to **Enabled** in your BIOS. This eliminates the legacy 256 MB PCIe VRAM bottleneck and provides an extra **+10% to +15%** throughput boost for AI inference and gaming.
-
-</details>
-
-<details>
-<summary><b>⚡ Daily Workflow: Instant Resume & Idle Guard (Setup-FastResume.bat)</b></summary>
-<br>
-
-Run **`Setup-FastResume.bat`** to enable full Windows Hibernation and create a desktop **Fast-Unlock-Sleep** shortcut.
-* **Instant Resume:** Waking up takes ~3 seconds with full unlocked TFLOPS ready immediately.
-* **Idle Relock Guard:** Disables aggressive PCIe ASPM and Runtime D3cold power-gating, ensuring that laptops (Optimus) and secondary headless compute GPUs never lose their unlocked state during idle timeouts or display standby.
-
-</details>
-
-<details>
-<summary><b>🚀 Maximizing Real-World AI Throughput (cuBLASLt Heuristics)</b></summary>
-<br>
-
-NVIDIA's official `cuBLASLt` library selects matrix multiplication algorithms based on factory heuristic models calibrated for rate-limited consumer cards. To ensure your AI applications pick the true maximum-throughput kernel tiles for your unlocked GPU:
-* **PyTorch / Python Scripts:** Add `torch.backends.cudnn.benchmark = True` before your compute loop.
-* **ComfyUI / Stable Diffusion:** Launch with benchmark/autotune enabled.
-* **Result:** Yields an additional **+15% to +35%** real-world matrix throughput across dense GEMM, SDXL, and LLM prefill workloads!
-
-</details>
 
 ---
 
@@ -123,6 +93,13 @@ The unlock removes artificial firmware restrictions on the **Tensor Cores (GEMM 
 | **FP32 CUDA Shaders** | 51.3 TFLOPS | **48.7 TFLOPS** | ✅ **Stock Parity** | Standard raster rendering remains at factory stock |
 | **VRAM Copy Bandwidth** | 733.4 GB/s | **707.2 GB/s** | ✅ **Stock Parity** | Physical GDDR6X bus operation unchanged |
 
+> [!TIP]
+> **Maximizing Real-World AI Throughput (cuBLASLt Heuristics):**  
+> NVIDIA's official `cuBLASLt` library selects matrix multiplication algorithms based on factory heuristic models calibrated for rate-limited consumer cards. To ensure your AI applications pick the true maximum-throughput kernel tiles for your unlocked GPU:
+> * **PyTorch / Python Scripts:** Add `torch.backends.cudnn.benchmark = True` before your compute loop.
+> * **ComfyUI / Stable Diffusion:** Launch with benchmark/autotune enabled.
+> * **Result:** Yields an additional **+15% to +35%** real-world matrix throughput across dense GEMM, SDXL, and LLM prefill workloads!
+
 ---
 
 ## 🛡️ Safety & Anti-Cheat
@@ -130,6 +107,7 @@ The unlock removes artificial firmware restrictions on the **Tensor Cores (GEMM 
 - **Volatile (RAM-only):** The unlock lives in GPU registers and is gone after a full power-off. Without the `[I]` driver installed, the next boot is stock. On the test bench, the card always booted stock again after a power-off.
 - **Official NVIDIA Drivers:** Runs seamlessly with standard, unmodified NVIDIA Game Ready and Studio drivers (`nvlddmkm.sys`).
 - **Anti-Cheat:** No driver patches, kernel hooks or runtime memory injection. With the image or certificate enrolled in `db`, `UEFISecureBootEnabled` stays `1`. Individual anti-cheat engines (Riot Vanguard, Easy Anti-Cheat, BattlEye, Ricochet) were not tested systematically.
+- **Fast Resume & Idle Relock Guard:** Includes **`Setup-FastResume.bat`** to enable Windows Hibernation and create a desktop **Fast-Unlock-Sleep** shortcut (~3s wake-up without USB reboot). It also includes the **Idle Relock Guard** (disables aggressive PCIe ASPM and Runtime D3cold power-gating), ensuring that laptops (Optimus) and secondary headless compute GPUs never drop their unlocked state during idle timeouts or display standby.
 - **S3 Sleep Protection:** Includes **`Toggle-Sleep-Button.bat`** in the root directory to hide the "Sleep" button from the Windows Start menu, preventing accidental loss of volatile RAM state.
 - **44-Cycle Testbench:** 44 supervised runs on my primary RTX 4090 platform. The last 18 (RUN0027 – RUN0044) all passed. The earlier runs were prototyping.
 - **Operational Deep-Dive:** Read the comprehensive telemetry and persistence whitepaper:  
