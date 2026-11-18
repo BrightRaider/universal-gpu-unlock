@@ -28,7 +28,13 @@
 ## ⚡ Quickstart Guide
 
 1. **Prepare USB Drive:** Download **[Universal_GPU_Unlock_v1.8.26.zip](https://github.com/BrightRaider/universal-gpu-unlock/releases/latest)**, extract it, insert a USB drive (FAT32), and run **`Setup.bat`** (formats & sets up all boot files automatically).
-2. **Boot & Unlock:** Restart your PC, open your boot menu (`F8`/`F11`/`F12`), boot from the USB drive, and select **`[U]`** for temporary RAM unlock (or **`[I]`** for stickless NVRAM auto-boot).
+2. **Boot & Unlock:** Restart your PC, open your boot menu (`F8`/`F11`/`F12`), and boot from the USB drive. Choose your mode:
+   - **`[U]` Standard Unlock:** RAM-only, temporary unlock (reverts cleanly to stock on power off).
+   - **`[I]` Install to NVRAM:** Permanent, stickless auto-unlock on every cold boot via internal ESP & NVRAM.
+   - **`[P]` S3 Persistence:** Experimental sleep-aware unlock mode.
+   - **`[R]` Remove DXE Driver:** Uninstalls and deregisters the driver from NVRAM & ESP.
+   - **`[S]` Stock Windows:** Skips unlock, runs hardware diagnostics, logs to USB, and boots stock.
+   - *(Tip: Press `[Space]` to pause the 30-second countdown at any time).*
 3. **Verify:** In Windows, run **`Check-GPU-Unlock.bat`** (or `Launch-Dashboard.bat`) to verify your unlocked Tensor Core throughput!
 
 ### 🔒 Secure Boot & BIOS Notes
