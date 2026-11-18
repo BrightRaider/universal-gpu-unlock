@@ -27,19 +27,36 @@
 
 ## ⚡ Quickstart Guide
 
-1. **Prepare USB Drive:** Download **[Universal_GPU_Unlock_v1.8.26.zip](https://github.com/BrightRaider/universal-gpu-unlock/releases/latest)**, extract it, insert a USB drive (FAT32), and run **`Setup.bat`** (formats & sets up all boot files automatically).
-2. **Boot & Unlock:** Restart your PC, open your boot menu (`F8`/`F11`/`F12`), and boot from the USB drive. Choose your mode:
-   - **`[U]` Standard Unlock:** RAM-only, temporary unlock (reverts cleanly to stock on power off).
-   - **`[I]` Install to NVRAM:** Permanent, stickless auto-unlock on every cold boot via internal ESP & NVRAM.
-   - **`[P]` S3 Persistence:** Experimental sleep-aware unlock mode.
-   - **`[R]` Remove DXE Driver:** Uninstalls and deregisters the driver from NVRAM & ESP.
-   - **`[S]` Stock Windows:** Skips unlock, runs hardware diagnostics, logs to USB, and boots stock.
-   - *(Tip: Press `[Space]` to pause the 30-second countdown at any time).*
-3. **Verify:** In Windows, run **`Check-GPU-Unlock.bat`** (or `Launch-Dashboard.bat`) to verify your unlocked Tensor Core throughput!
+### Step 1: Prepare the USB Drive
+1. Download the latest release package: **[Universal_GPU_Unlock_v1.8.26.zip](https://github.com/BrightRaider/universal-gpu-unlock/releases/latest)** and extract it.
+2. Insert a USB flash drive (FAT32, 1 GB or larger).
+3. Run **`Setup.bat`** (automatically formats and copies all required UEFI files and certificates).
 
-### 🔒 Secure Boot & BIOS Notes
-* **Secure Boot:** If blocked on boot, temporarily set **Secure Boot to Disabled** in BIOS, or enroll **`AdaUnlock_SecureBoot.cer`** in BIOS Key Management (`db`) to keep Secure Boot active.
-* **CSM & ReBAR:** Ensure **CSM is Disabled** (pure UEFI) and **Resizable BAR (Above 4G Decoding)** is **Enabled** for full performance.
+### Step 2: Boot & Unlock
+1. Restart your PC and press your motherboard's boot menu key (**F11** on MSI/ASRock, **F12** on Gigabyte, **F8** on ASUS).
+2. Select the USB flash drive (`UEFI: USB...`).
+3. Choose your unlock mode (press **`[Space]`** to pause the 30-second countdown):
+   - **`[U]` Standard Unlock:** RAM-only, temporary unlock (reverts cleanly to factory stock on power off).
+   - **`[I]` Install to NVRAM:** Permanent, stickless auto-unlock on every cold boot via internal ESP & NVRAM.
+4. The transaction executes in ~300 ms and seamlessly hands execution over to Windows!
+
+### Step 3: Verify in Windows
+1. Double-click **`Check-GPU-Unlock.bat`** (or `Launch-Dashboard.bat`) to verify your unlocked Tensor Core throughput (>200 TFLOPS on RTX 4090).
+2. *(RTX 20 / Turing / CMP users: Run `Toggle-Turing-GSP.bat` once as Administrator to bind NVIDIA drivers to GSP firmware mode).*
+
+---
+
+## 🔒 Secure Boot Configuration
+
+The EFI binaries are Authenticode-signed. If your system has UEFI Secure Boot enabled:
+1. During boot, enter BIOS Setup (**Del** or **F2** key).
+2. Navigate to **Security ➔ Secure Boot ➔ Key Management** (or *Custom Key Management*).
+3. Select **Append Key** / **Enroll Signature** under the **Authorized Signatures (db)** menu.
+4. Browse to your USB drive and choose **`AdaUnlock_SecureBoot.cer`**.
+5. Save changes and reboot (**F10**).  
+*(Secure Boot remains 100% active and protected against malware while allowing the unlock binary to run. Alternatively, you can temporarily set Secure Boot to Disabled).*
+
+> **BIOS Note:** Ensure **CSM is set to Disabled** (pure UEFI mode) to prevent legacy VGA conflicts (Code 43), and enable **Above 4G Decoding** & **Resizable BAR** for maximum memory throughput.
 
 ---
 
