@@ -25,15 +25,25 @@
 
 ---
 
-## ⚡ 60-Second Quick Start
+## ⚡ Quickstart Guide
 
-> **Prerequisites:** In your BIOS, ensure **CSM is Disabled** (pure UEFI mode) and **Resizable BAR (Above 4G Decoding)** is **Enabled**.
-
-1. **Download & Provision:** Download **[Universal_GPU_Unlock_v1.8.26.zip](https://github.com/BrightRaider/universal-gpu-unlock/releases/latest)**, extract it, insert a USB drive (FAT32), and run **`Setup.bat`**.
-2. **Boot & Unlock:** Restart, open your boot menu (`F8` / `F11` / `F12`), boot from the USB drive, and select:
-   - **`[U]` Standard Unlock:** RAM-only, temporary unlock (reverts cleanly on power off).
+1. **Prepare USB Drive:** Download **[Universal_GPU_Unlock_v1.8.26.zip](https://github.com/BrightRaider/universal-gpu-unlock/releases/latest)**, extract it, insert a USB drive (FAT32), and run **`Setup.bat`** (formats & sets up all boot files automatically).
+2. **Boot & Unlock:** Restart your PC, open your boot menu (`F8` / `F11` / `F12`), boot from the USB drive, and select:
+   - **`[U]` Standard Unlock:** RAM-only, temporary unlock (reverts cleanly to factory stock on power off).
    - **`[I]` Install to NVRAM:** Permanent, stickless auto-unlock on every cold boot via internal ESP & NVRAM.
 3. **Verify:** In Windows, run **`Check-GPU-Unlock.bat`** (or `Launch-Dashboard.bat`) to verify your unlocked Tensor Core throughput!
+
+> [!TIP]
+> **Troubleshooting & Optimization:** If your display remains blank on boot, set **CSM to Disabled** in your BIOS. To unlock maximum memory throughput (+10% to +15%), enable **Above 4G Decoding** and **Resizable BAR**.
+
+---
+
+## 🔒 Secure Boot Configuration (If Enabled)
+
+If your motherboard blocks the USB drive with a signature verification warning:
+* **Easiest method:** Temporarily set **Secure Boot** to **Disabled** (or OS Type: *Other OS*) in your BIOS.
+* **To keep Secure Boot enabled (e.g. for Valorant / Vanguard / Windows 11):**  
+  In your BIOS under **Security ➔ Secure Boot ➔ Key Management** (or *Custom Key Management*), choose **Append / Enroll DB Key** (Authorized Signatures `db`), browse to the USB drive, and select **`AdaUnlock_SecureBoot.cer`**. Save and reboot (`F10`).
 
 ---
 
