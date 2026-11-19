@@ -119,8 +119,33 @@ EFI_STATUS GuDiscoverAllGpus(EFI_HANDLE image, EFI_SYSTEM_TABLE *table,
     s = io->Pci.Read(io, EfiPciIoWidthUint32, 0, 64, config);
     if (EFI_ERROR(s) || config[0] != p->pci_id ||
         config[0x2c / 4] != p->subsystem_id ||
-        (config[2] >> 16) != p->class_code ||
-        !GuCheckConfig(config, seg, bus, dev, fun, &caps)) {
+        (config[2] >> 16) != p->class_code) {
+      GuLog("Discovery candidate [%zu] rejected: config header mismatch (cmd=0x%x rom=0x%x)\n",
+            i + 1, (unsigned)(config[1] & 0xffff), config[0x30 / 4]);
+      continue;
+    }
+
+    /* Headless / secondary compute card activation: if the card has no display outputs
+     * or is not the primary display adapter, motherboard firmware leaves memory space decoding disabled.
+     * Activate memory space decoding via PciIo protocol so BAR0 MMIO and VBIOS registers can be read. */
+    if ((config[1] & 0x2) == 0) {
+      UINT64 supported = 0;
+      GuLog("Discovery candidate [%zu]: Memory decode unmapped (cmd=0x%x); activating PCI memory space\n",
+            i + 1, (unsigned)(config[1] & 0xffff));
+      if (io->Attributes && !EFI_ERROR(io->Attributes(io, EfiPciIoAttributeOperationSupported, 0, &supported))) {
+        if (supported & EFI_PCI_IO_ATTRIBUTE_MEMORY) {
+          (VOID)io->Attributes(io, EfiPciIoAttributeOperationEnable, EFI_PCI_IO_ATTRIBUTE_MEMORY, NULL);
+        }
+      }
+      (VOID)io->Pci.Read(io, EfiPciIoWidthUint32, 0, 64, config);
+      if ((config[1] & 0x2) == 0 && io->Pci.Write) {
+        UINT16 cmd = (UINT16)((config[1] & 0xffff) | 0x2);
+        (VOID)io->Pci.Write(io, EfiPciIoWidthUint16, 4, 1, &cmd);
+        (VOID)io->Pci.Read(io, EfiPciIoWidthUint32, 0, 64, config);
+      }
+    }
+
+    if (!GuCheckConfig(config, seg, bus, dev, fun, &caps)) {
       GuLog("Discovery candidate [%zu] rejected: config check failed (cmd=0x%x rom=0x%x)\n",
             i + 1, (unsigned)(config[1] & 0xffff), config[0x30 / 4]);
       continue;

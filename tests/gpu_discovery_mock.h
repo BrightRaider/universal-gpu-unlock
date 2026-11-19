@@ -11,6 +11,7 @@ typedef size_t UINTN;
 typedef uint8_t UINT8;
 typedef uint16_t UINT16;
 typedef uint32_t UINT32;
+typedef uint64_t UINT64;
 typedef struct { uint32_t a; uint16_t b,c; uint8_t d[8]; } EFI_GUID;
 #define EFI_PCI_IO_PROTOCOL_GUID { 1, 0, 0, {0,0,0,0,0,0,0,0} }
 #define EFI_SUCCESS 0
@@ -18,15 +19,21 @@ typedef struct { uint32_t a; uint16_t b,c; uint8_t d[8]; } EFI_GUID;
 #define EFI_INVALID_PARAMETER 2
 #define EFI_ERROR(s) ((s) != EFI_SUCCESS)
 #define ByProtocol 2
+#define EfiPciIoWidthUint16 0
 #define EfiPciIoWidthUint32 1
+#define EFI_PCI_IO_ATTRIBUTE_MEMORY 0x02ULL
+#define EfiPciIoAttributeOperationSupported 4
+#define EfiPciIoAttributeOperationEnable 2
 
 typedef struct MOCK_PCI_PROTOCOL EFI_PCI_IO_PROTOCOL;
 typedef struct {
   EFI_STATUS (*Read)(EFI_PCI_IO_PROTOCOL *, int, UINT32, UINTN, VOID *);
+  EFI_STATUS (*Write)(EFI_PCI_IO_PROTOCOL *, int, UINT32, UINTN, VOID *);
 } GU_PCI_ACCESS;
 struct MOCK_PCI_PROTOCOL {
   EFI_STATUS (*GetLocation)(EFI_PCI_IO_PROTOCOL *, UINTN *, UINTN *, UINTN *, UINTN *);
   GU_PCI_ACCESS Pci;
+  EFI_STATUS (*Attributes)(EFI_PCI_IO_PROTOCOL *, int, uint64_t, uint64_t *);
   void *context;
 };
 typedef struct MOCK_BOOT_SERVICES {

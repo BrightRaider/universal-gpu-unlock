@@ -34,8 +34,11 @@ BOOLEAN GuCheckConfig(const UINT32 Config[64], UINTN Segment, UINTN Bus,
     return FALSE;
 
   Command = ConfigWord(Config, PCI_COMMAND_OFFSET);
-  if ((Command & EFI_PCI_COMMAND_MEMORY_SPACE) == 0 ||
-      (ConfigWord(Config, PCI_PRIMARY_STATUS_OFFSET) & EFI_PCI_STATUS_CAPABILITY) == 0)
+  (VOID)Command;
+  /* Secondary and headless compute cards (e.g. CMP 40HX or secondary GPU behind iGPU)
+   * may start with Memory Space decode disabled (cmd=0x0) before OS driver bind.
+   * Only require valid PCI capabilities list support in status register. */
+  if ((ConfigWord(Config, PCI_PRIMARY_STATUS_OFFSET) & EFI_PCI_STATUS_CAPABILITY) == 0)
     return FALSE;
 
   Pointer = ConfigByte(Config, PCI_CAPABILITY_POINTER_OFFSET);

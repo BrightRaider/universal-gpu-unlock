@@ -6,6 +6,14 @@ For packaged binaries and downloads, visit [GitHub Releases](https://github.com/
 
 ---
 
+## [v1.8.27] - 2026-11-19
+### Headless & Uninitialized Compute Accelerator Activation (addresses #18)
+- **Headless & Secondary GPU PCI Memory Space Activation (addresses #18):**
+  * Relaxed PCI Command register check in `src/checks.c` (`GuCheckConfig`): Dedicated displayless compute accelerators (such as CMP 40HX or secondary GPUs booted behind AMD/Intel iGPUs) that start with `cmd=0x0` / `rom=0x0` are no longer rejected during discovery.
+  * Added automated PCI Memory Space decode activation (`EFI_PCI_IO_ATTRIBUTE_MEMORY`) in `src/gpu_discovery.c`: When a candidate GPU starts with unmapped memory decoding (`cmd=0x0`), memory decoding is dynamically enabled via the `PciIo` protocol so BAR0 MMIO and VBIOS firmware reads succeed.
+  * Added discovery mock unit test in `tests/test_gpu_discovery.c` verifying automated memory decode activation on headless cards.
+  * Restructured README Quickstart Guide with all bootloader modes (`[U]`, `[P]`, `[I]`, `[R]`, `[S]`, `[Space]`), clean troubleshooting tip, and dedicated Secure Boot instructions.
+
 ## [v1.8.26] - 2026-11-18
 ### NVIDIA CMP 40HX (TU106) Expansion (addresses #18)
 - **NVIDIA CMP 40HX Support (`0x1F0B`) (addresses #18):**

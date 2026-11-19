@@ -4,7 +4,7 @@
 ### High-Performance Tensor Core Rate-Limiter Bypass for NVIDIA GPUs
 
 [![GitHub Release](https://img.shields.io/github/v/release/BrightRaider/universal-gpu-unlock?color=blue&logo=github)](https://github.com/BrightRaider/universal-gpu-unlock/releases/latest)
-[![Release Version](https://img.shields.io/badge/Release-v1.8.26%20(Latest)-blue?logo=github)](https://github.com/BrightRaider/universal-gpu-unlock/releases/tag/v1.8.26)
+[![Release Version](https://img.shields.io/badge/Release-v1.8.27%20(Latest)-blue?logo=github)](https://github.com/BrightRaider/universal-gpu-unlock/releases/tag/v1.8.27)
 [![Downloads](https://img.shields.io/github/downloads/BrightRaider/universal-gpu-unlock/total?color=green&logo=github)](https://github.com/BrightRaider/universal-gpu-unlock/releases)
 [![Stars](https://img.shields.io/github/stars/BrightRaider/universal-gpu-unlock?style=social)](https://github.com/BrightRaider/universal-gpu-unlock)
 [![Safety](https://img.shields.io/badge/Safety-RAM--Only-success.svg)](#-safety--anti-cheat)
@@ -27,32 +27,29 @@
 
 ## ⚡ 60-Second Quick Start
 
-1. **Download:** Get the latest release package: **[Universal_GPU_Unlock_v1.8.26.zip](https://github.com/BrightRaider/universal-gpu-unlock/releases/latest)**.
-2. **Provision:** Extract the ZIP, insert a USB flash drive (FAT32), and run **`Setup.bat`** (formats & copies all required UEFI files and certificates automatically).
-3. **Boot & Unlock:** Restart your PC, open your motherboard boot menu (**F11** on MSI/ASRock, **F12** on Gigabyte, **F8** on ASUS), and boot from the USB drive (`UEFI: USB...`). Select your mode:
-   - **`[U]` Standard Unlock:** RAM-only, temporary unlock (reverts cleanly to factory stock on complete power off).
-   - **`[I]` Install to NVRAM:** Registers the UEFI DXE driver into motherboard NVRAM and internal ESP for automatic, stickless boot on every cold start (unplug the USB drive permanently).
-   - **`[P]` S3 Persistence:** Experimental sleep-aware unlock mode.
-   - **`[R]` Remove DXE Driver:** Cleanly uninstalls and deregisters the driver from UEFI NVRAM & internal ESP.
-   - **`[S]` Stock Windows:** Skips unlock, runs hardware diagnostics, logs to USB, and boots normal Windows.
-   - *(Tip: The boot menu features a 30-second countdown. Press `[Space]` at any time to pause and read in peace).*
-4. **Verify:** In Windows, run **`Check-GPU-Unlock.bat`** (or `Launch-Dashboard.bat`) to verify your unlocked Tensor Core throughput (>200 TFLOPS on RTX 4090):
+1. **Prepare USB Drive:** Download **[Universal_GPU_Unlock_v1.8.27.zip](https://github.com/BrightRaider/universal-gpu-unlock/releases/latest)**, extract it, insert a USB drive (FAT32), and run `Setup.bat` (formats & sets up all boot files automatically).
+2. **Boot & Unlock:** Restart your PC, open your boot menu (`F8` / `F11` / `F12`), boot from the USB drive, and select:
+   - `[U]` **Standard Unlock:** RAM-only, temporary unlock (reverts cleanly to factory stock on power off).
+   - `[P]` **S3 Persistence:** Experimental sleep-aware unlock mode (Boot-Script).
+   - `[I]` **Install to NVRAM:** Permanent, stickless auto-unlock on every cold boot via internal ESP & NVRAM.
+   - `[R]` **Remove DXE Driver:** Cleanly uninstalls and deregisters the driver from UEFI NVRAM & internal ESP.
+   - `[S]` **Stock Windows:** Diagnostic hardware scan, logs to USB, normal boot without unlock.  
+   *(Tip: The boot menu features a 30-second countdown. Press `[Space]` at any time to pause and read in peace).*
+3. **Verify:** In Windows, run `Check-GPU-Unlock.bat` (or `Launch-Dashboard.bat`) to verify your unlocked Tensor Core throughput!
    - *(RTX 20 / Turing / CMP users: Run `Toggle-Turing-GSP.bat` once as Administrator to bind NVIDIA drivers to GSP firmware mode).*
-   - *(Optional: Run `Setup-FastResume.bat` to enable ~3s instant wake from hibernation with Idle Relock Guard).*
+
+> [!TIP]
+> **Troubleshooting & Optimization:** If your display remains blank on boot, set **CSM to Disabled** in your BIOS. To unlock maximum memory throughput (+10% to +15%), enable **Above 4G Decoding** and **Resizable BAR**.
 
 ---
 
-## 🔒 Secure Boot Configuration
+## 🔒 Secure Boot Configuration (If Enabled)
 
-The EFI binaries are Authenticode-signed. If your system has UEFI Secure Boot enabled:
-1. During boot, enter BIOS Setup (**Del** or **F2** key).
-2. Navigate to **Security ➔ Secure Boot ➔ Key Management** (or *Custom Key Management*).
-3. Select **Append Key** / **Enroll Signature** under the **Authorized Signatures (db)** menu.
-4. Browse to your USB drive and choose **`AdaUnlock_SecureBoot.cer`**.
-5. Save changes and reboot (**F10**).  
-*(Secure Boot remains 100% active and protected against malware while allowing the unlock binary to run. Alternatively, you can temporarily set Secure Boot to Disabled).*
+If your motherboard blocks the USB drive with a signature verification warning:
 
-> **BIOS Note:** Ensure **CSM is set to Disabled** (pure UEFI mode) to prevent legacy VGA conflicts (Code 43), and enable **Above 4G Decoding** & **Resizable BAR** for maximum memory throughput.
+- **Easiest method:** Temporarily set **Secure Boot** to **Disabled** (or OS Type: *Other OS*) in your BIOS.
+- **To keep Secure Boot enabled** (e.g. for Valorant / Vanguard / Windows 11):  
+  In your BIOS under **Security ➔ Secure Boot ➔ Key Management** (or *Custom Key Management*), choose **Append / Enroll DB Key** (Authorized Signatures `db`), browse to the USB drive, and select `AdaUnlock_SecureBoot.cer`. Save and reboot (`F10`).
 
 ---
 

@@ -67,11 +67,36 @@ static EFI_STATUS Free(VOID *p) {
 }
 static EFI_BOOT_SERVICES services = { Locate, Resolve, Free };
 static EFI_SYSTEM_TABLE system_table = { &services };
+static EFI_STATUS Write(EFI_PCI_IO_PROTOCOL *io, int width, UINT32 offset, UINTN n, VOID *in) {
+  MOCK_DEVICE *m = (MOCK_DEVICE *)io->context;
+  if (!in) return 3;
+  if (width == EfiPciIoWidthUint16 && offset == 4 && n == 1) {
+    UINT16 val = *(UINT16 *)in;
+    m->dwords[1] = (m->dwords[1] & 0xffff0000U) | val;
+    return EFI_SUCCESS;
+  }
+  return EFI_SUCCESS;
+}
+static EFI_STATUS Attributes(EFI_PCI_IO_PROTOCOL *io, int op, uint64_t attrs, uint64_t *out) {
+  MOCK_DEVICE *m = (MOCK_DEVICE *)io->context;
+  if (op == EfiPciIoAttributeOperationSupported && out) {
+    *out = EFI_PCI_IO_ATTRIBUTE_MEMORY;
+    return EFI_SUCCESS;
+  }
+  if (op == EfiPciIoAttributeOperationEnable && (attrs & EFI_PCI_IO_ATTRIBUTE_MEMORY)) {
+    m->dwords[1] |= 0x2U;
+    return EFI_SUCCESS;
+  }
+  return EFI_SUCCESS;
+}
 static void Populate(size_t i, GU_GPU_IDENTITY id) {
   MOCK_DEVICE *m = &gpu[i]; memset(m, 0, sizeof(*m));
   m->protocol.GetLocation = GetLocation; m->protocol.Pci.Read = Read;
+  m->protocol.Pci.Write = Write;
+  m->protocol.Attributes = Attributes;
   m->protocol.context = m;
   m->dwords[0] = id.pci_id;
+  m->dwords[1] = 0x00100002U; /* Memory space enabled by default */
   m->dwords[2] = 0x03000000U;
   m->dwords[0x2c / 4] = id.subsystem_id;
   m->dwords[4] = 0xfb000000U + (UINT32)(i * 0x1000000U);
@@ -139,6 +164,13 @@ int main(void) {
   CHECK(devs[0].handle == handles[0]);
   GuBindDevice(system_table.BootServices, (EFI_HANDLE)1, &devs[0]);
   CHECK(Gu.handle == handles[0]);
+
+  /* 8. Headless / secondary compute GPU with unmapped memory space (cmd=0x0) */
+  ResetPair(); count = 1; gpu[0].dwords[1] = 0x00100000U; /* cmd=0x0 */
+  status = GuDiscoverAllGpus((EFI_HANDLE)1, &system_table, devs, GU_MAX_DISCOVERED_DEVICES, &dev_count);
+  CHECK(status == EFI_SUCCESS && dev_count == 1);
+  CHECK(devs[0].device_id == 0x2684);
+  CHECK((gpu[0].dwords[1] & 0x2U) == 0x2U); /* Memory decode was activated */
 
   printf("PASS UEFI discovery adapter: %u checks; mocked protocols only\n", checks);
   return 0;
