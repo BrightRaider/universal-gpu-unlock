@@ -187,3 +187,22 @@ VOID GuBindDevice(EFI_BOOT_SERVICES *bs, EFI_HANDLE image, const GU_DISCOVERED_D
   Gu.msi_cap = dev->msi_cap;
   Gu.msix_cap = dev->msix_cap;
 }
+
+const char *GuArchName(const GU_DISCOVERED_DEVICE *dev) {
+  if (!dev) return "Unknown";
+  if (dev->is_ampere) return "Ampere";
+  if (dev->is_turing) return "Turing";
+  return "Ada Lovelace";
+}
+
+VOID GuLogInventory(const char *prefix, const GU_DISCOVERED_DEVICE *devices, UINTN count) {
+  UINTN g;
+  if (!prefix) prefix = "";
+  GuLog("%sPCI Multi-GPU Inventory: %u supported NVIDIA GPU(s)\n", prefix, (unsigned)count);
+  for (g = 0; devices && g < count; g++)
+    GuLog("%s  GPU [%u/%u]: DevID 0x%04x (%s)\n", prefix, (unsigned)(g + 1), (unsigned)count,
+          (unsigned)devices[g].device_id, GuArchName(&devices[g]));
+  if (count > 1)
+    GuLog("%sWARNING: only GPU [1/%u] is processed; the other GPU(s) stay stock\n", prefix,
+          (unsigned)count);
+}

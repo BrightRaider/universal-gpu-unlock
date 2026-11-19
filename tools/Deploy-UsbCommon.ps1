@@ -1,6 +1,56 @@
 # SPDX-License-Identifier: GPL-2.0-only
 # Common USB Deployment Module for Universal GPU Unlock
 
+# The single source of the version is src/version.h. Returns 'unknown' if it is missing.
+function Get-GuVersion([string]$RepoRoot) {
+    $versionH = Join-Path $RepoRoot 'src\version.h'
+    if (Test-Path -LiteralPath $versionH) {
+        if ((Get-Content -LiteralPath $versionH -Raw) -match '#define\s+GU_VERSION_TAG\s+"([^"]+)"') {
+            return $matches[1]
+        }
+    }
+    return 'unknown'
+}
+
+# The single source of supported GPUs is src/gpu_device_ids.h, the same list the
+# bootloader is built from. Returns a hashtable keyed by the lower-case 4-digit
+# device ID, each value @{ Arch = 'Ada'|'Ampere'|'Turing'; Family = 'AD102'...; Name = ... }.
+# Name is only set when the header comment names exactly one card for that ID.
+function Get-GuSupportedGpuIds([string]$RepoRoot) {
+    $table = @{}
+    $header = Join-Path $RepoRoot 'src\gpu_device_ids.h'
+    if (-not (Test-Path -LiteralPath $header)) { return $table }
+    $arch = $null
+    foreach ($line in Get-Content -LiteralPath $header) {
+        if ($line -match '#define\s+GU_(ADA|AMPERE|TURING)_DEVICE_IDS') {
+            $arch = @{ ADA = 'Ada'; AMPERE = 'Ampere'; TURING = 'Turing' }[$matches[1]]
+        }
+        if (-not $arch) { continue }
+        $ids = @([regex]::Matches($line, 'X\(0x([0-9A-Fa-f]{4})U\)') | ForEach-Object { $_.Groups[1].Value.ToLowerInvariant() })
+        $comment = if ($line -match '/\*\s*(.*?)\s*\*/') { $matches[1] } else { '' }
+        $family = if ($comment -match '\(((?:AD|GA|TU)\d{3})\)') { $matches[1] } else { @{ Ada = 'AD10x'; Ampere = 'GA10x'; Turing = 'TU10x' }[$arch] }
+        foreach ($id in $ids) {
+            $name = if ($ids.Count -eq 1 -and $comment -and $comment -notmatch ',') { ($comment -replace '\s*\([^)]*\)\s*$', '') } else { $null }
+            $table[$id] = @{ Arch = $arch; Family = $family; Name = $name }
+        }
+        if (-not $line.TrimEnd().EndsWith('\')) { $arch = $null }
+    }
+    return $table
+}
+
+# Everything the Control Center and the benchmark need on the USB drive under tools\.
+function Get-GuUsbToolFiles {
+    return @(
+        'quick_check.py',
+        'gu_system_info.py',
+        'Deploy-UsbCommon.ps1',
+        'Universal-Control-Center.ps1',
+        'Universal-Control-Center-Detection.ps1',
+        'Universal-Control-Center-Deployment.ps1',
+        'Universal-Control-Center-Diagnostics.ps1'
+    )
+}
+
 function Deploy-UniversalToUsb {
     [CmdletBinding()]
     param(
@@ -12,7 +62,7 @@ function Deploy-UniversalToUsb {
 
         [bool]$HideS3 = $false,
 
-        [string]$AppVersion = "v1.8.16",
+        [string]$AppVersion = '',
 
         [scriptblock]$OnLog = $null
     )
@@ -22,6 +72,8 @@ function Deploy-UniversalToUsb {
             & $OnLog $Message $Color
         }
     }
+
+    if (-not $AppVersion) { $AppVersion = Get-GuVersion $RepoRoot }
 
     $cleanLetter = $Drive.TrimEnd(':\')
     $driveRoot = "$($cleanLetter):\"
@@ -136,14 +188,25 @@ function Deploy-UniversalToUsb {
         Copy-Item -LiteralPath $checkBat -Destination (Join-Path $driveRoot "Check-GPU-Unlock.bat") -Force
         $toolsDst = Join-Path $driveRoot "tools"
         New-Item -ItemType Directory -Path $toolsDst -Force | Out-Null
-        $quickCheck = Join-Path $toolsDir "quick_check.py"
-        if (Test-Path -LiteralPath $quickCheck) {
-            Copy-Item -LiteralPath $quickCheck -Destination (Join-Path $toolsDst "quick_check.py") -Force
+        # The Control Center dot-sources its modules, and quick_check.py imports
+        # gu_system_info.py, so all of them must be copied together.
+        foreach ($file in (Get-GuUsbToolFiles)) {
+            $source = Join-Path $toolsDir $file
+            if (Test-Path -LiteralPath $source) {
+                Copy-Item -LiteralPath $source -Destination (Join-Path $toolsDst $file) -Force
+            } else {
+                Emit-Log "  [WARN] Missing tool file: $file" "Yellow"
+            }
+        }
+        # Version and supported-GPU list, read by Get-GuVersion and Get-GuSupportedGpuIds on the stick.
+        $srcDst = Join-Path $driveRoot "src"
+        New-Item -ItemType Directory -Path $srcDst -Force | Out-Null
+        foreach ($file in 'version.h', 'gpu_device_ids.h') {
+            $source = Join-Path (Join-Path $RepoRoot "src") $file
+            if (Test-Path -LiteralPath $source) { Copy-Item -LiteralPath $source -Destination (Join-Path $srcDst $file) -Force }
         }
         $uccCmd = Join-Path $RepoRoot "Universal-Control-Center.cmd"
-        $uccPs1 = Join-Path $toolsDir "Universal-Control-Center.ps1"
         if (Test-Path -LiteralPath $uccCmd) { Copy-Item -LiteralPath $uccCmd -Destination (Join-Path $driveRoot "Universal-Control-Center.cmd") -Force }
-        if (Test-Path -LiteralPath $uccPs1) { Copy-Item -LiteralPath $uccPs1 -Destination (Join-Path $toolsDst "Universal-Control-Center.ps1") -Force }
         Emit-Log "  [OK] Verification tools and Control Center copied to $driveRoot" "Green"
     }
 

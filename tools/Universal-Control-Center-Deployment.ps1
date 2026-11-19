@@ -24,7 +24,7 @@ function Get-RemovableDrives {
             }
         }
     }
-    catch {}
+    catch { Write-Verbose "Ignored: $($_.Exception.Message)" }
     return $drives
 }
 

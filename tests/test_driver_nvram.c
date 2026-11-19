@@ -259,6 +259,7 @@ int main(void) {
   CHECK(GuInstallDriverOption(image, &St) == EFI_SUCCESS);
   CHECK(Esp.written == FILE_BYTES && weq(Esp.written_name, L"AdaUnlockDxe.efi"));
   CHECK(entry_on(L"Driver0000", &Esp));
+  CHECK(GuDriverInstalledOnEsp());
   CHECK(Esp.deleted == 0); /* nothing to replace on a fresh ESP */
   CHECK(GuRemoveDriverOption(&St) == EFI_SUCCESS);
   CHECK(Esp.deleted == 1 && find(L"Driver0000") == NULL);
@@ -282,6 +283,13 @@ int main(void) {
   reset(); esp_present = 1; Esp.fail_write = 1;
   CHECK(GuInstallDriverOption(image, &St) == EFI_SUCCESS);
   CHECK(entry_on(L"Driver0000", &Usb));
+  CHECK(!GuDriverInstalledOnEsp());
+
+  /* Without an ESP copy the entry needs \EFI\Drivers\AdaUnlockDxe.efi on the stick;
+   * a copy only under \EFI\BOOT must not produce a dangling entry. */
+  reset(); Usb.files[0] = L"\\EFI\\BOOT\\AdaUnlockDxe.efi";
+  CHECK(GuInstallDriverOption(image, &St) == EFI_NOT_FOUND);
+  CHECK(writes == 0 && find(L"Driver0000") == NULL && !GuDriverInstalledOnEsp());
 
   /* The driver may also come from \EFI\BOOT on the stick. */
   reset(); esp_present = 1; Usb.files[0] = L"\\EFI\\BOOT\\AdaUnlockDxe.efi";

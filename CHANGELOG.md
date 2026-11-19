@@ -6,6 +6,35 @@ For packaged binaries and downloads, visit [GitHub Releases](https://github.com/
 
 ---
 
+## [v1.8.28] - 2026-11-19
+### S3 Sleep Persistence, Stability Hardening & Architecture Refactoring (refs #15, refs #18)
+- **S3 Sleep Persistence Engine (`[P]` Mode):**
+  * Implemented standalone S3 Boot Script Dispatch Handler (`EFI_BOOT_SCRIPT_DISPATCH_2_OPCODE`) with persistent `EfiACPIMemoryNVS` DRAM staging (64 pages / 256 KB).
+  * Hardened PIC execution: Staged positions-independent `GuS3ResumeDispatch` machine code (331 bytes, 0 relocations) directly into the ACPI NVS buffer (`nvs_base + 0x00800`), guaranteeing code survival across Windows `ExitBootServices()` and OS memory reclamation.
+  * Resilient parameter handling: Supports standard UEFI PI dispatch calls (`RDX` Context) and BIOS firmware variants passing Context in `RCX`.
+  * Standalone wake unlock engine: Automatically kicks Falcon SEC2, validates halt, latches rate-limiter selectors SS0 (`0x88888888`) and SS1 (`0x00000008`), and cleanly quiesces SEC2.
+- **Bootloader & NVRAM Hardening:**
+  * **Halt countdown:** A key press during "Rebooting in …" now reboots immediately instead of wrapping the unsigned counter.
+  * **Halt screen:** Accurately states that the GPU may be partially changed and that the reboot resets it to factory stock.
+  * **`[I]` message:** Accurately indicates whether the driver was deployed to the internal NVMe-ESP or registered on the USB drive via `GuDriverInstalledOnEsp()`.
+  * **`[I]` without a valid source:** If ESP copy fails and the stick only has the driver under `\EFI\BOOT`, `[I]` now halts cleanly with `EFI_NOT_FOUND` instead of registering dangling NVRAM entries.
+  * **Diagnostic scan:** Runs only for `[S]` and timeout, after menu selection. Read faults no longer block stock Windows boots, and `[U]` avoids redundant 1 MiB PROM reads.
+  * **Boot menu:** `[P]` is hidden when S3 is unavailable, and pause prompt lists only active options.
+- **Control Center & USB Deployment:**
+  * **Single-Source GPU IDs:** Control Center and setup scripts now dynamically parse `src/gpu_device_ids.h`.
+  * **Full USB Deployment:** `Deploy-UsbCommon.ps1` deploys all Control Center modules, `gu_system_info.py`, and single-source headers onto USB media.
+  * **Self-Contained Native Compatibility Check:** Streamlined offline diagnostics to use native PowerShell report checks and diffing without external python script dependencies.
+- **Refactoring & Code Quality:**
+  * Split `UefiMain` into cleanly scoped routines: `RunInstall`, `RunRemove`, `RunStock`, `RunUnlock`, and `RunFailure`.
+  * Unified GPU inventory logging via `GuArchName()` and `GuLogInventory()`.
+  * Bounded device-path walks (`WalkDevicePath`) in `driver_nvram.c`.
+  * Consolidated MSVC host tests table in `tests/Run-MsvcHostTests.ps1` with 8/8 automated test suites passing (`MSVC_HOST_TESTS=PASS`).
+  * Updated CI Linux workflow to build and run `tests/test_turing_local.c` with gcc and clang.
+- **Known Issues:**
+  * `TU102-ASSETS/v67-tu102-610.43.03.bin` is byte-identical to `GA102-ASSETS/v67-ga102-610.43.03.bin` (same SHA-256). On Turing, rate-limiter registers (`0x82381c`/`0x823820`) are unmapped, meaning full compute gains on TU102/TU104 require a dedicated Turing-native V67 payload.
+
+---
+
 ## [v1.8.27] - 2026-11-19
 ### Headless & Uninitialized Compute Accelerator Activation (addresses #18)
 - **Headless & Secondary GPU PCI Memory Space Activation (addresses #18):**

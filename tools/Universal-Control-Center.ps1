@@ -48,24 +48,12 @@ param(
 $ErrorActionPreference = 'Stop'
 $scriptDir = if ($PSScriptRoot) { $PSScriptRoot } elseif ($MyInvocation.MyCommand.Path) { Split-Path -Parent $MyInvocation.MyCommand.Path } else { (Get-Location).Path }
 $Script:RepoRoot = [System.IO.Path]::GetFullPath((Join-Path $scriptDir '..'))
-$versionH = Join-Path $Script:RepoRoot "src\version.h"
-$Script:AppVersion = "v1.7.9"
-if (Test-Path -LiteralPath $versionH) {
-    if ((Get-Content -LiteralPath $versionH -Raw) -match '#define\s+GU_VERSION_TAG\s+"([^"]+)"') {
-        $Script:AppVersion = $matches[1]
-    }
-}
 . (Join-Path $scriptDir "Deploy-UsbCommon.ps1")
-$Script:AssetsPath = Join-Path $Script:RepoRoot 'assets'
+$Script:AppVersion = Get-GuVersion $Script:RepoRoot
+# Paths shared by the Control Center modules (they are dot-sourced into this script scope).
 $Script:ReleaseEfi = Join-Path $Script:RepoRoot 'bin\BOOTX64.EFI'
 $Script:DxeEfi = Join-Path $Script:RepoRoot 'bin\AdaUnlockDxe.efi'
 $Script:AssetsPath = Join-Path $Script:RepoRoot 'AD102-ASSETS'
-$Script:ProvenanceFile = Join-Path $Script:RepoRoot 'release\provenance.json'
-$Script:AssetsJson = Join-Path $Script:RepoRoot 'unlock\assets.json'
-$Script:ProvenJson = Join-Path $Script:RepoRoot 'research\profile\proven.json'
-$Script:CheckerPy = Join-Path $Script:RepoRoot 'research\profile\check-compatibility.py'
-$Script:ComparatorPy = Join-Path $Script:RepoRoot 'research\profile\compare-compatibility.py'
-
 
 # --- MODULE INCLUSIONS ---
 . (Join-Path $scriptDir "Universal-Control-Center-Detection.ps1")
@@ -542,7 +530,7 @@ function Update-UsbTabInfo {
                 }
             }
         }
-    } catch {}
+    } catch { Write-Verbose "Ignored: $($_.Exception.Message)" }
 }
 
 function Refresh-UsbList {
@@ -1063,7 +1051,7 @@ $btnRunCompareReports.Add_Click({
         }
         try {
             Write-GuiLog "Comparing reports: $left vs $right..."
-            $txtCompareResult.Text = "Running compare-compatibility.py..."
+            $txtCompareResult.Text = "Comparing compatibility reports..."
             $diff = Invoke-CompareCompatibilityReports -LeftReportPath $left -RightReportPath $right
             $txtCompareResult.Text = $diff
             Write-GuiLog "Report comparison finished."
@@ -1119,7 +1107,7 @@ if ($btnRunCheckUnlock) {
             $completed = $p.WaitForExit(15000)
 
             if (-not $completed) {
-                try { $p.Kill() } catch {}
+                try { $p.Kill() } catch { Write-Verbose "Ignored: $($_.Exception.Message)" }
                 throw "Benchmark timed out after 15 seconds."
             }
 

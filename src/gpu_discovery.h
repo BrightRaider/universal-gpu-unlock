@@ -28,3 +28,10 @@ EFI_STATUS GuDiscoverAllGpus(EFI_HANDLE image, EFI_SYSTEM_TABLE *table,
 
 /* Bind a specific discovered device into the global Gu execution context */
 VOID GuBindDevice(EFI_BOOT_SERVICES *bs, EFI_HANDLE image, const GU_DISCOVERED_DEVICE *dev);
+
+/* "Ada Lovelace", "Ampere" or "Turing". */
+const char *GuArchName(const GU_DISCOVERED_DEVICE *dev);
+
+/* Logs the discovered GPUs, each line prefixed with prefix, and warns when more
+ * than one was found, since only the first one is processed. */
+VOID GuLogInventory(const char *prefix, const GU_DISCOVERED_DEVICE *devices, UINTN count);

@@ -2,15 +2,12 @@
 /* AdaUnlockDxe.c - Universal UEFI DXE Driver with S3 Boot Script Persistence */
 #include "port.h"
 #include "version.h"
-#include "checks.h"
 #include "gpu_discovery.h"
 #include "profile.h"
 #include "unlock_release.h"
 #include "boot_io.h"
 #include "driver_nvram.h"
 #include "compat/compat.h"
-#include "vendor/unlock_610.h"
-#include "s3_save.h"
 
 /* Standard UEFI ReadyToBoot event group GUID:
  * 7ce88fb3-4bd7-4679-87a8-a8d8dee50d2b */
@@ -49,14 +46,7 @@ static VOID EFIAPI AdaUnlockOnReadyToBoot(EFI_EVENT event, VOID *context) {
   /* Bind primary GPU for initial assets & cold profile */
   GuBindDevice(mDxeTable->BootServices, mDxeImage, &devices[0]);
 
-  GuLog("DXE-DRIVER: Multi-GPU Inventory found %u supported NVIDIA GPU(s)\n", (unsigned)device_count);
-  for (UINTN g = 0; g < device_count; g++) {
-    GuLog("DXE-DRIVER:   GPU [%u/%u]: DevID 0x%04x (%s)\n",
-          (unsigned)(g + 1), (unsigned)device_count, (unsigned)devices[g].device_id,
-          devices[g].is_ampere ? "Ampere" : (devices[g].is_turing ? "Turing" : "Ada Lovelace"));
-  }
-  if (device_count > 1)
-    GuLog("DXE-DRIVER: WARNING: only GPU [1/%u] is processed; the other GPU(s) stay stock\n", (unsigned)device_count);
+  GuLogInventory("DXE-DRIVER: ", devices, device_count);
 
   stage = "dxe-assets";
   s = GuBootLoadAssets();
@@ -115,7 +105,7 @@ finish:
 
     (VOID)GuBootSyncLog();
 
-    if (device_count > 0 && devices[0].handle) {
+    if (devices[0].handle) {
       (VOID)GuReconnectDisplayAfterUnlock(mDxeTable, mDxeImage, devices[0].handle, TRUE);
     }
   }

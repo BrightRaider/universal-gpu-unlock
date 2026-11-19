@@ -2,22 +2,11 @@
 
 #include "port.h"
 #include "version.h"
-
-#include "checks.h"
 #include "gpu_discovery.h"
-
 #include "profile.h"
-
 #include "unlock_release.h"
-
 #include "boot_io.h"
-
 #include "compat/compat.h"
-
-#include "vendor/unlock_610.h"
-
-#include "s3_save.h"
-
 #include "driver_nvram.h"
 
 static EFI_STATUS GuRebootSystem(EFI_SYSTEM_TABLE *t, EFI_STATUS s) {
@@ -30,215 +19,11 @@ static EFI_STATUS GuRebootSystem(EFI_SYSTEM_TABLE *t, EFI_STATUS s) {
   return s;
 }
 
-EFI_STATUS EFIAPI UefiMain(EFI_HANDLE image, EFI_SYSTEM_TABLE *t) {
-
-  if (!image || !t || !t->BootServices || !t->RuntimeServices)
-    return EFI_INVALID_PARAMETER;
-
-  EFI_STATUS s = GuBootOpen(image, t);
-  if (s != EFI_SUCCESS)
-    return s;
-
-  GuLog("=== Universal Multi-Gen GPU Unlock %s (BOOTX64.EFI) ===\n", GU_VERSION_TAG);
-
-  const char *stage = "discover";
-  CHAR16 choice = L'S';
-
-  GU_DISCOVERED_DEVICE devices[GU_MAX_DISCOVERED_DEVICES];
-  UINTN device_count = 0;
-
-  s = GuDiscoverAllGpus(image, t, devices, GU_MAX_DISCOVERED_DEVICES,
-                        &device_count);
-  if (s != EFI_SUCCESS || device_count == 0)
-    goto failed;
-
-  /* Bind primary GPU for initial profile logs & asset checks */
-  GuBindDevice(t->BootServices, image, &devices[0]);
-
-  GuLog("PCI Multi-GPU Inventory: Discovered %u supported NVIDIA GPU(s)\n",
-        (unsigned)device_count);
-  for (UINTN g = 0; g < device_count; g++) {
-    GuLog("  GPU [%u/%u]: DevID 0x%04x (%s)\n", (unsigned)(g + 1),
-          (unsigned)device_count, (unsigned)devices[g].device_id,
-          devices[g].is_ampere
-              ? "Ampere"
-              : (devices[g].is_turing ? "Turing" : "Ada Lovelace"));
-  }
-
-  if (device_count > 1) {
-    GuLog(
-        "WARNING: only GPU [1/%u] is processed; the other GPU(s) stay stock\n",
-        (unsigned)device_count);
-    GuBootSay(L"\r\n[WARNING] More than one supported GPU found. Only the "
-              L"first one is unlocked; the others stay stock.\r\n");
-  }
-
-  stage = "diagnostic-scan";
-  (VOID)GuDiagnosticScan();
-
-  stage = "stage-windows-image";
-  s = GuBootLoadWindows();
-  if (s != EFI_SUCCESS || Gu.fault)
-    goto failed;
-
-  stage = "manual-choice";
-  s = GuBootChoose(&choice);
-  if (s != EFI_SUCCESS || Gu.fault)
-    goto failed;
-
-  if (choice == L'I') {
-
-    GuLog("Operator I: Requesting DXE Driver NVRAM installation\n");
-
-    s = GuInstallDriverOption(image, t);
-
-    if (s == EFI_SUCCESS) {
-
-      GuLog("DXE Driver successfully installed to Driver#### / DriverOrder\n");
-
-      GuBootSay(
-          L"\r\n\r\n[OK] AdaUnlock DXE Driver installed to Internal NVMe-ESP & UEFI NVRAM.\r\n"
-
-          L"Driver executes automatically during UEFI POST on every cold boot.\r\n"
-          L"USB drive is NO LONGER required and can be safely removed!\r\n"
-
-          L"Rebooting system in 3 seconds...\r\n");
-
-    } else {
-
-      GuLog("ERROR: Failed to install DXE Driver: %#llx\n",
-            (unsigned long long)s);
-
-      GuBootSay(L"\r\n\r\n[ERROR] Failed to install DXE Driver to NVRAM! "
-                L"Nothing was registered.\r\n"
-
-                L"Check that EFI\\Drivers\\AdaUnlockDxe.efi exists on this USB "
-                L"drive.\r\n"
-
-                L"Rebooting in 5 seconds...\r\n");
-
-      if (t->BootServices->Stall)
-        t->BootServices->Stall(2000000);
-    }
-
-    return GuRebootSystem(t, s);
-  }
-
-  if (choice == L'R') {
-
-    GuLog("Operator R: Requesting DXE Driver NVRAM removal\n");
-
-    s = GuRemoveDriverOption(t);
-
-    GuLog("DXE Driver removal from Driver#### / DriverOrder: status=%#llx\n",
-          (unsigned long long)s);
-
-    GuBootSay(
-        s == EFI_SUCCESS
-            ? L"\r\n\r\n[OK] AdaUnlock DXE Driver removed from UEFI NVRAM & Internal ESP.\r\n"
-        : s == EFI_NOT_FOUND ? L"\r\n\r\n[INFO] No AdaUnlock DXE Driver entry "
-                               L"found. Nothing was changed.\r\n"
-                             : L"\r\n\r\n[ERROR] Could not remove the "
-                               L"AdaUnlock DXE Driver. See the USB log.\r\n");
-
-    GuBootSay(L"Rebooting system in 3 seconds...\r\n");
-
-    return GuRebootSystem(t, s);
-  }
-
-  BOOLEAN unlock = (choice == L'U' || choice == L'P');
-
-  BOOLEAN enable_s3 = (choice == L'P');
-
-  if (!unlock) {
-
-    GuLog("Operator skipped: no GPU transaction, no driver release; stock "
-          "Windows\n");
-
-    if (Gu.fault || GuBootClose() != EFI_SUCCESS)
-      return EFI_DEVICE_ERROR;
-
-    return GuBootWindows();
-  }
-
-  stage = "assets";
-  s = GuBootLoadAssets();
-  if (s != EFI_SUCCESS || Gu.fault)
-    goto failed;
-
-  stage = "read-only-cold-profile";
-  s = GuPrepare();
-  if (s != EFI_SUCCESS || Gu.fault)
-    goto failed;
-
-  GuBootSay(
-      L"\r\n=======================================================\r\n"
-      L" UNIVERSAL GPU UNLOCK " GU_VERSION_TAG_WIDE L" - Status Monitor\r\n"
-      L"=======================================================\r\n"
-      L" [1/4] GPU and PCIe Topology Discovery ..... [ OK ]\r\n"
-      L" [2/4] Firmware Hashes and VBIOS Parse ..... [ OK ]\r\n"
-      L" [3/4] Display Handover .................... [ PENDING ]\r\n"
-      L" [4/4] Hardware SEC2 and MSR Unlock ........ [ PENDING ]\r\n\r\n"
-      L" --> Starting GPU unlock...\r\n");
-
-  GuBootSilence();
-
-  GuLog("--- Processing Primary GPU [1/%u]: DevID 0x%04x ---\n",
-        (unsigned)device_count, (unsigned)devices[0].device_id);
-
-  s = GuExecuteUnlock(t, image, &stage);
-  if (s != EFI_SUCCESS || Gu.fault)
-    goto failed;
-
-  if (enable_s3) {
-    (VOID) GuRegisterS3(t);
-  }
-
-  stage = "final-Windows-verification";
-  if (!GuUnlockReadyForWindows()) {
-    s = EFI_NOT_READY;
-    goto failed;
-  }
-
-  stage = "sync-USB-log";
-  (VOID) GuBootSyncLog();
-
-  stage = "reconnect-display";
-  if (device_count > 0 && devices[0].handle) {
-    (VOID) GuReconnectDisplayAfterUnlock(t, image, devices[0].handle, TRUE);
-  }
-
-  GuBootUnsilence();
-  GuBootSay(L" [3/4] Display Handover .................... [ OK ]\r\n"
-            L" [4/4] Hardware SEC2 and MSR Unlock ........ [ OK ]\r\n");
-
-  if (GuUnlockIsCsmVideo()) {
-    GuBootSay(
-        L"\r\n"
-        L"  [!] BIOS WARNING: Legacy CSM Video Mode Detected!\r\n"
-        L"      If Windows boots with low resolution or Code 43 in Device Manager,\r\n"
-        L"      restart into BIOS and set CSM to [Disabled] (pure UEFI mode).\r\n"
-        L"\r\n");
-  }
-
-  GuBootSay(L" Handing over control to Windows Boot Manager...\r\n\r\n");
-
-  GuLog("TRANSACTION OK: GPU [1/%u] unlocked, hardware readbacks passed!\n",
-        (unsigned)device_count);
-
-  stage = "close-USB-log";
-  s = GuBootClose();
-  if (s != EFI_SUCCESS || Gu.fault)
-    goto failed;
-
-  stage = "start-Windows";
-  s = GuBootWindows();
-
-  GuBootHalt();
-  return s == EFI_SUCCESS ? EFI_ABORTED : s;
-
-failed:
-
+/* Common exit for every failed stage. After the GPU was touched it never
+ * returns to the firmware: it reconnects the display if that is safe and halts. */
+static EFI_STATUS RunFailure(EFI_SYSTEM_TABLE *t, EFI_HANDLE image,
+                             const GU_DISCOVERED_DEVICE *gpu, const char *stage,
+                             EFI_STATUS s) {
   GuBootUnsilence();
 
   if (s == EFI_SUCCESS)
@@ -254,9 +39,9 @@ failed:
 
     (VOID) GuBootSyncLog();
 
-    if (device_count > 0 && devices[0].handle && !Gu.retained) {
+    if (gpu && gpu->handle && !Gu.retained) {
       if (!GuUnlockIsCsmVideo() || Gu.flrs == 1) {
-        (VOID) GuReconnectDisplayAfterUnlock(t, image, devices[0].handle, FALSE);
+        (VOID) GuReconnectDisplayAfterUnlock(t, image, gpu->handle, FALSE);
       }
     }
 
@@ -285,4 +70,202 @@ failed:
     t->BootServices->Stall(5000000);
 
   return s;
+}
+
+/* [I]: register the DXE driver, say where it went, reboot. */
+static EFI_STATUS RunInstall(EFI_HANDLE image, EFI_SYSTEM_TABLE *t) {
+  GuLog("Operator I: Requesting DXE Driver NVRAM installation\n");
+
+  EFI_STATUS s = GuInstallDriverOption(image, t);
+
+  if (s == EFI_SUCCESS && GuDriverInstalledOnEsp()) {
+    GuLog("DXE Driver installed to the internal ESP (Driver#### / DriverOrder)\n");
+    GuBootSay(L"\r\n\r\n[OK] AdaUnlock DXE Driver installed to the internal ESP and UEFI NVRAM.\r\n"
+              L"It runs during UEFI POST on every cold boot. The USB drive can be removed.\r\n"
+              L"Rebooting system in 3 seconds...\r\n");
+  } else if (s == EFI_SUCCESS) {
+    GuLog("DXE Driver registered on the USB drive (Driver#### / DriverOrder)\n");
+    GuBootSay(L"\r\n\r\n[OK] AdaUnlock DXE Driver registered in UEFI NVRAM, on this USB drive.\r\n"
+              L"The internal ESP was not available. Keep the USB drive connected.\r\n"
+              L"Rebooting system in 3 seconds...\r\n");
+  } else {
+    GuLog("ERROR: Failed to install DXE Driver: %#llx\n", (unsigned long long)s);
+    GuBootSay(L"\r\n\r\n[ERROR] Failed to install DXE Driver to NVRAM! "
+              L"Nothing was registered.\r\n"
+              L"Check that EFI\\Drivers\\AdaUnlockDxe.efi exists on this USB "
+              L"drive.\r\n"
+              L"Rebooting in 5 seconds...\r\n");
+    if (t->BootServices->Stall)
+      t->BootServices->Stall(2000000);
+  }
+
+  return GuRebootSystem(t, s);
+}
+
+/* [R]: remove the DXE driver entry and its ESP copy, reboot. */
+static EFI_STATUS RunRemove(EFI_SYSTEM_TABLE *t) {
+  GuLog("Operator R: Requesting DXE Driver NVRAM removal\n");
+
+  EFI_STATUS s = GuRemoveDriverOption(t);
+
+  GuLog("DXE Driver removal from Driver#### / DriverOrder: status=%#llx\n",
+        (unsigned long long)s);
+
+  GuBootSay(
+      s == EFI_SUCCESS
+          ? L"\r\n\r\n[OK] AdaUnlock DXE Driver removed from UEFI NVRAM & Internal ESP.\r\n"
+      : s == EFI_NOT_FOUND ? L"\r\n\r\n[INFO] No AdaUnlock DXE Driver entry "
+                             L"found. Nothing was changed.\r\n"
+                           : L"\r\n\r\n[ERROR] Could not remove the "
+                             L"AdaUnlock DXE Driver. See the USB log.\r\n");
+
+  GuBootSay(L"Rebooting system in 3 seconds...\r\n");
+
+  return GuRebootSystem(t, s);
+}
+
+/* [S] or timeout: log a read-only diagnostic scan, then boot Windows unchanged.
+ * The scan never touches the GPU state, so a read fault it latches must not
+ * block the stock boot. */
+static EFI_STATUS RunStock(VOID) {
+  GuLog("Operator skipped: no GPU transaction, no driver release; stock "
+        "Windows\n");
+
+  BOOLEAN fault_before_scan = Gu.fault;
+  (VOID)GuDiagnosticScan();
+  if (Gu.fault && !fault_before_scan)
+    GuLog("DiagnosticScan: read fault ignored for the stock boot\n");
+
+  if (fault_before_scan || GuBootClose() != EFI_SUCCESS)
+    return EFI_DEVICE_ERROR;
+
+  return GuBootWindows();
+}
+
+/* [U] or [P]: run the unlock on the first GPU and hand over to Windows. */
+static EFI_STATUS RunUnlock(EFI_SYSTEM_TABLE *t, EFI_HANDLE image,
+                            const GU_DISCOVERED_DEVICE *gpu, UINTN device_count,
+                            BOOLEAN enable_s3) {
+  const char *stage = "assets";
+  EFI_STATUS s = GuBootLoadAssets();
+  if (s != EFI_SUCCESS || Gu.fault)
+    return RunFailure(t, image, gpu, stage, s);
+
+  stage = "read-only-cold-profile";
+  s = GuPrepare();
+  if (s != EFI_SUCCESS || Gu.fault)
+    return RunFailure(t, image, gpu, stage, s);
+
+  GuBootSay(
+      L"\r\n=======================================================\r\n"
+      L" UNIVERSAL GPU UNLOCK " GU_VERSION_TAG_WIDE L" - Status Monitor\r\n"
+      L"=======================================================\r\n"
+      L" [1/4] GPU and PCIe Topology Discovery ..... [ OK ]\r\n"
+      L" [2/4] Firmware Hashes and VBIOS Parse ..... [ OK ]\r\n"
+      L" [3/4] Display Handover .................... [ PENDING ]\r\n"
+      L" [4/4] Hardware SEC2 and MSR Unlock ........ [ PENDING ]\r\n\r\n"
+      L" --> Starting GPU unlock...\r\n");
+
+  GuBootSilence();
+
+  GuLog("--- Processing Primary GPU [1/%u]: DevID 0x%04x ---\n",
+        (unsigned)device_count, (unsigned)gpu->device_id);
+
+  s = GuExecuteUnlock(t, image, &stage);
+  if (s != EFI_SUCCESS || Gu.fault)
+    return RunFailure(t, image, gpu, stage, s);
+
+  if (enable_s3) {
+    (VOID) GuRegisterS3(t);
+  }
+
+  stage = "final-Windows-verification";
+  if (!GuUnlockReadyForWindows())
+    return RunFailure(t, image, gpu, stage, EFI_NOT_READY);
+
+  (VOID) GuBootSyncLog();
+
+  if (gpu->handle) {
+    (VOID) GuReconnectDisplayAfterUnlock(t, image, gpu->handle, TRUE);
+  }
+
+  GuBootUnsilence();
+  GuBootSay(L" [3/4] Display Handover .................... [ OK ]\r\n"
+            L" [4/4] Hardware SEC2 and MSR Unlock ........ [ OK ]\r\n");
+
+  if (GuUnlockIsCsmVideo()) {
+    GuBootSay(
+        L"\r\n"
+        L"  [!] BIOS WARNING: Legacy CSM Video Mode Detected!\r\n"
+        L"      If Windows boots with low resolution or Code 43 in Device Manager,\r\n"
+        L"      restart into BIOS and set CSM to [Disabled] (pure UEFI mode).\r\n"
+        L"\r\n");
+  }
+
+  GuBootSay(L" Handing over control to Windows Boot Manager...\r\n\r\n");
+
+  GuLog("TRANSACTION OK: GPU [1/%u] unlocked, hardware readbacks passed!\n",
+        (unsigned)device_count);
+
+  stage = "close-USB-log";
+  s = GuBootClose();
+  if (s != EFI_SUCCESS || Gu.fault)
+    return RunFailure(t, image, gpu, stage, s);
+
+  s = GuBootWindows();
+
+  GuBootHalt();
+  return s == EFI_SUCCESS ? EFI_ABORTED : s;
+}
+
+EFI_STATUS EFIAPI UefiMain(EFI_HANDLE image, EFI_SYSTEM_TABLE *t) {
+
+  if (!image || !t || !t->BootServices || !t->RuntimeServices)
+    return EFI_INVALID_PARAMETER;
+
+  EFI_STATUS s = GuBootOpen(image, t);
+  if (s != EFI_SUCCESS)
+    return s;
+
+  GuLog("=== Universal Multi-Gen GPU Unlock %s (BOOTX64.EFI) ===\n", GU_VERSION_TAG);
+
+  GU_DISCOVERED_DEVICE devices[GU_MAX_DISCOVERED_DEVICES];
+  UINTN device_count = 0;
+
+  s = GuDiscoverAllGpus(image, t, devices, GU_MAX_DISCOVERED_DEVICES,
+                        &device_count);
+  if (s != EFI_SUCCESS || device_count == 0)
+    return RunFailure(t, image, NULL, "discover", s);
+
+  const GU_DISCOVERED_DEVICE *gpu = &devices[0];
+
+  /* Bind primary GPU for initial profile logs & asset checks */
+  GuBindDevice(t->BootServices, image, gpu);
+
+  GuLogInventory("", devices, device_count);
+  if (device_count > 1) {
+    GuBootSay(L"\r\n[WARNING] More than one supported GPU found. Only the "
+              L"first one is unlocked; the others stay stock.\r\n");
+  }
+
+  s = GuBootLoadWindows();
+  if (s != EFI_SUCCESS || Gu.fault)
+    return RunFailure(t, image, gpu, "stage-windows-image", s);
+
+  CHAR16 choice = L'S';
+  s = GuBootChoose(&choice);
+  if (s != EFI_SUCCESS || Gu.fault)
+    return RunFailure(t, image, gpu, "manual-choice", s);
+
+  switch (choice) {
+  case L'I':
+    return RunInstall(image, t);
+  case L'R':
+    return RunRemove(t);
+  case L'U':
+  case L'P':
+    return RunUnlock(t, image, gpu, device_count, choice == L'P');
+  default:
+    return RunStock();
+  }
 }

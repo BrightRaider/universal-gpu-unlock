@@ -6,6 +6,10 @@
 #include "compat/compat.h"
 #include "port.h"
 
+/* The board PROM is mirrored into BAR0 at this offset. */
+#define GU_PROM_BAR0_OFFSET 0x300000U
+#define GU_PROM_BYTES 1048576U
+
 static const GU_ARCH_ASSETS GuAssetsAda = {
   "Ada",
   L"\\GA102-ASSETS\\gsp_ga10x.bin",
@@ -63,7 +67,7 @@ BOOLEAN GuAssetsValid(VOID) {
  * some boards legitimately report another ID in the image. */
 BOOLEAN GuPromPlausible(const VOID *Data,UINTN Bytes) {
   const UINT8 *rom=Data;
-  if(!rom||Bytes!=1048576)return FALSE;
+  if(!rom||Bytes!=GU_PROM_BYTES)return FALSE;
   UINTN pcir=rom[0x18]+((UINTN)rom[0x19]<<8);
   if(pcir+8>Bytes)return FALSE;
   if(rom[pcir]=='P'&&rom[pcir+1]=='C'&&rom[pcir+2]=='I'&&rom[pcir+3]=='R') {
@@ -202,8 +206,23 @@ static VOID StageVbiosEfiImage(const UINT8 *prom, UINTN prom_len) {
         (unsigned)info.compressed);
 }
 
+/* Copies the PROM out of BAR0 and checks it. Returns the copy (caller frees it)
+ * or NULL if it cannot be allocated. */
+static VOID *ReadAndCheckProm(BOOLEAN *prom_ok, int *fwsec_res, BOOLEAN *fwsec_match,
+                              struct gpu_unlock_fwsec *fw) {
+  VOID *prom = GuAlloc(GU_PROM_BYTES);
+  if (!prom) return NULL;
+  GuCopyFromIo(prom, (VOID *)(UINTN)(Gu.bar_base + GU_PROM_BAR0_OFFSET), GU_PROM_BYTES);
+  *prom_ok = GuPromPlausible(prom, GU_PROM_BYTES);
+  *fwsec_res = gpu_unlock_vbios_fwsec(prom, GU_PROM_BYTES, fw);
+  *fwsec_match = (*fwsec_res == 0) && GuFwsecMatches(fw);
+  return prom;
+}
+
 EFI_STATUS GuPrepare(VOID) {
   UINT32 ss0,ss1,after0,after1;VOID *prom=NULL;struct gpu_unlock_fwsec fw;
+  BOOLEAN prom_ok = FALSE, fwsec_match = FALSE;
+  int fwsec_res = 0;
   GuReleaseStagedVbiosEfiImage();
   GuLog("GuPrepare: start\n");
   if(Gu.started || Gu.fault || Gu.retained || Gu.allocations || Gu.profile_verified || Gu.prom_checked) {
@@ -223,21 +242,17 @@ EFI_STATUS GuPrepare(VOID) {
     GuLog("GuPrepare: Assets invalid\n");
     return EFI_CRC_ERROR;
   }
-  prom=GuAlloc(1048576);
+  prom = ReadAndCheckProm(&prom_ok, &fwsec_res, &fwsec_match, &fw);
   if(!prom) {
     GuLog("GuPrepare: PROM alloc failed\n");
     return EFI_OUT_OF_RESOURCES;
   }
-  GuCopyFromIo(prom,(VOID *)(UINTN)(Gu.bar_base+0x300000),1048576);
-  BOOLEAN prom_ok = GuPromPlausible(prom,1048576);
-  int fwsec_res = gpu_unlock_vbios_fwsec(prom,1048576,&fw);
-  BOOLEAN fwsec_match = (fwsec_res == 0) && GuFwsecMatches(&fw);
   BOOLEAN cfg2 = Config();
   BOOLEAN reg2 = Registers(&after0,&after1);
   BOOLEAN valid = !Gu.fault && prom_ok && fwsec_match && cfg2 && reg2 && ss0==after0 && ss1==after1;
   GuLog("GuPrepare: prom_ok=%u fwsec_res=%d fwsec_match=%u cfg2=%u reg2=%u ss0_stable=%u\n",
         prom_ok, fwsec_res, fwsec_match, cfg2, reg2, (ss0==after0 && ss1==after1));
-  if(valid) StageVbiosEfiImage((const UINT8 *)prom, 1048576);
+  if(valid) StageVbiosEfiImage((const UINT8 *)prom, GU_PROM_BYTES);
   GuFree(prom);
   if(!valid) return EFI_COMPROMISED_DATA;
   Gu.prom_checked=TRUE;
@@ -261,22 +276,19 @@ BOOLEAN GuAd104ColdEntry(VOID) { return GuColdEntry(); }
 
 EFI_STATUS GuDiagnosticScan(VOID) {
   UINT32 ss0 = 0, ss1 = 0;
-  VOID *prom = NULL;
   struct gpu_unlock_fwsec fw;
+  BOOLEAN prom_ok = FALSE, fwsec_match = FALSE;
+  int fwsec_res = 0;
 
   GuLog("DiagnosticScan: start\n");
   (VOID)Config();
   (VOID)Registers(&ss0, &ss1);
 
-  prom = GuAlloc(1048576);
+  VOID *prom = ReadAndCheckProm(&prom_ok, &fwsec_res, &fwsec_match, &fw);
   if (!prom) {
     GuLog("DiagnosticScan: PROM alloc failed\n");
     return EFI_OUT_OF_RESOURCES;
   }
-  GuCopyFromIo(prom, (VOID *)(UINTN)(Gu.bar_base + 0x300000), 1048576);
-  BOOLEAN prom_ok = GuPromPlausible(prom, 1048576);
-  int fwsec_res = gpu_unlock_vbios_fwsec(prom, 1048576, &fw);
-  BOOLEAN fwsec_match = (fwsec_res == 0) && GuFwsecMatches(&fw);
   GuLog("DiagnosticScan: prom_ok=%u fwsec_res=%d fwsec_match=%u\n",
         prom_ok, fwsec_res, fwsec_match);
   GuFree(prom);

@@ -25,16 +25,35 @@ static EFI_GUID InfoGuid = EFI_FILE_INFO_ID;
 static const CHAR16 DriverDescription[] = L"AdaUnlock";
 static const CHAR16 DriverFile[] = L"\\EFI\\Drivers\\AdaUnlockDxe.efi";
 
-static UINTN GetDevicePathSize(const EFI_DEVICE_PATH_PROTOCOL *dp) {
+#define GU_DEVICE_PATH_MAX_BYTES 4096U
+#define GU_DEVICE_PATH_MAX_NODES 64U
+
+/* Walks a device path with a byte and node limit, so a malformed path from the
+ * firmware cannot run past its end. Returns the size including the end node,
+ * or 0 if the path is malformed. Optionally reports USB and media nodes. */
+static UINTN WalkDevicePath(const EFI_DEVICE_PATH_PROTOCOL *dp, BOOLEAN *has_usb, BOOLEAN *has_media) {
+  const UINT8 *p = (const UINT8 *)dp;
+  UINTN at = 0;
+  if (has_usb) *has_usb = FALSE;
+  if (has_media) *has_media = FALSE;
   if (!dp) return 0;
-  const EFI_DEVICE_PATH_PROTOCOL *node = dp;
-  while (node->Type != 0x7f || node->SubType != 0xff) {
-    UINTN len = (UINTN)node->Length[0] | ((UINTN)node->Length[1] << 8);
-    if (len < 4) return 0;
-    node = (const EFI_DEVICE_PATH_PROTOCOL *)((const UINT8 *)node + len);
+  for (UINTN nodes = 0; nodes < GU_DEVICE_PATH_MAX_NODES && at + 4 <= GU_DEVICE_PATH_MAX_BYTES; nodes++) {
+    UINTN len = (UINTN)p[at + 2] | ((UINTN)p[at + 3] << 8);
+    if (len < 4 || len > GU_DEVICE_PATH_MAX_BYTES - at) return 0;
+    if (p[at] == 0x7f && p[at + 1] == 0xff) return at + 4;
+    if (p[at] == 0x03 && p[at + 1] == 0x05 && has_usb) *has_usb = TRUE; /* MESSAGING / MSG_USB_DP */
+    if (p[at] == 0x04 && has_media) *has_media = TRUE;                   /* MEDIA_DEVICE_PATH */
+    at += len;
   }
-  return ((const UINT8 *)node - (const UINT8 *)dp) + 4;
+  return 0;
 }
+
+static UINTN GetDevicePathSize(const EFI_DEVICE_PATH_PROTOCOL *dp) {
+  return WalkDevicePath(dp, NULL, NULL);
+}
+
+static BOOLEAN LastInstallOnEsp = FALSE;
+BOOLEAN GuDriverInstalledOnEsp(VOID) { return LastInstallOnEsp; }
 
 static VOID SetDriverSlot(CHAR16 name[11], UINTN slot) {
   static const CHAR16 hex[] = L"0123456789ABCDEF";
@@ -242,17 +261,9 @@ static EFI_HANDLE LocateInternalEspVolume(EFI_BOOT_SERVICES *bs) {
     EFI_DEVICE_PATH_PROTOCOL *p = NULL;
     if (bs->HandleProtocol(h[i], &PathGuid, (VOID **)&p) != EFI_SUCCESS || !p) continue;
 
-    /* Check for media/disk path that is not USB */
+    /* Only a well-formed media/disk path that is not USB qualifies. */
     BOOLEAN is_usb = FALSE, is_media = FALSE;
-    const EFI_DEVICE_PATH_PROTOCOL *node = p;
-    while (node->Type != 0x7f || node->SubType != 0xff) {
-      UINTN len = (UINTN)node->Length[0] | ((UINTN)node->Length[1] << 8);
-      if (len < 4) break;
-      if (node->Type == 0x03 && node->SubType == 0x05) is_usb = TRUE; /* MESSAGING / MSG_USB_DP */
-      if (node->Type == 0x04) is_media = TRUE; /* MEDIA_DEVICE_PATH */
-      node = (const EFI_DEVICE_PATH_PROTOCOL *)((const UINT8 *)node + len);
-    }
-    if (is_media && !is_usb) {
+    if (WalkDevicePath(p, &is_usb, &is_media) && is_media && !is_usb) {
       EFI_SIMPLE_FILE_SYSTEM_PROTOCOL *fs = NULL;
       EFI_FILE_PROTOCOL *root = NULL, *mgfw = NULL;
       if (bs->HandleProtocol(h[i], &FsGuid, (VOID **)&fs) == EFI_SUCCESS && fs &&
@@ -276,6 +287,7 @@ EFI_STATUS GuInstallDriverOption(EFI_HANDLE image, EFI_SYSTEM_TABLE *t) {
   EFI_BOOT_SERVICES *bs = t->BootServices;
   EFI_RUNTIME_SERVICES *rs = t->RuntimeServices;
 
+  LastInstallOnEsp = FALSE;
   EFI_LOADED_IMAGE_PROTOCOL *loaded = NULL;
   EFI_STATUS s = bs->HandleProtocol(image, &LoadedGuid, (VOID **)&loaded);
   if (s != EFI_SUCCESS || !loaded || !loaded->DeviceHandle) return EFI_UNSUPPORTED;
@@ -319,6 +331,13 @@ EFI_STATUS GuInstallDriverOption(EFI_HANDLE image, EFI_SYSTEM_TABLE *t) {
       GuLog("GuInstallDriverOption: Warning: ESP copy failed (s=%#llx), falling back to USB medium\n",
             (unsigned long long)s);
     }
+  }
+
+  /* The entry always names \EFI\Drivers\AdaUnlockDxe.efi. On the USB drive that
+   * file must really exist there, not only under \EFI\BOOT. */
+  if (!is_internal && src_driver_path != DriverFile) {
+    GuLog("GuInstallDriverOption: no internal ESP copy and no \\EFI\\Drivers\\AdaUnlockDxe.efi on the USB drive\n");
+    return EFI_NOT_FOUND;
   }
 
   EFI_DEVICE_PATH_PROTOCOL *vol_path = NULL;
@@ -382,8 +401,11 @@ EFI_STATUS GuInstallDriverOption(EFI_HANDLE image, EFI_SYSTEM_TABLE *t) {
     if (s != EFI_SUCCESS && !reinstall) (VOID)rs->SetVariable(name, &GlobalGuid, GU_DRIVER_VAR_ATTRS, 0, NULL);
   }
 
-  GuLog("GuInstallDriverOption: Success! Registered Driver%04x in DriverOrder (internal_esp=%u)\n",
-        (unsigned)slot, (unsigned)is_internal);
+  if (s == EFI_SUCCESS) {
+    LastInstallOnEsp = is_internal;
+    GuLog("GuInstallDriverOption: Registered Driver%04x in DriverOrder (internal_esp=%u)\n",
+          (unsigned)slot, (unsigned)is_internal);
+  }
   return s;
 }
 

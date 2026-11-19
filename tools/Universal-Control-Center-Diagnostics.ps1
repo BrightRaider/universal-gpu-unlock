@@ -49,7 +49,7 @@ function Get-UsbProbeCaptureStatus([string]$Letter) {
                 if ($t.Contains('probe-pci-handles=') -and $t.Contains("capture-complete=1`r`n")) {
                     $captures += $f
                 }
-            } catch {}
+            } catch { Write-Verbose "Ignored: $($_.Exception.Message)" }
         }
     }
     $hasProm = Test-Path -LiteralPath (Join-Path $dir 'PROM.BIN')
@@ -107,7 +107,7 @@ function Export-WindowsDiagnosticDump([string]$TargetDir) {
         $smiXml = & nvidia-smi -q -x 2>&1
         $smiXml | Set-Content -LiteralPath (Join-Path $dumpFolder "NVIDIA-SMI-DUMP.XML") -Encoding utf8
     }
-    catch {}
+    catch { Write-Verbose "Ignored: $($_.Exception.Message)" }
 
     # 3. System & Pre-Flight Summary
     $audit = Get-GpuHardwareInfo
@@ -139,7 +139,7 @@ function Export-WindowsDiagnosticDump([string]$TargetDir) {
         }
         $edidEntries | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath (Join-Path $dumpFolder "DISPLAY-EDID.JSON") -Encoding utf8
     }
-    catch {}
+    catch { Write-Verbose "Ignored: $($_.Exception.Message)" }
 
     # 5. Readme Summary
     $readme = @"
@@ -295,52 +295,7 @@ function Invoke-OfflineCompatibilityCheck {
         throw "Capture directory '$Folder' not found."
     }
 
-    if (-not (Test-Path -LiteralPath $Script:CheckerPy)) {
-        return Invoke-NativeUniversalCompatibilityCheck -Folder $Folder -Language $Language
-    }
-
-    $raw = & python -I $Script:CheckerPy $Folder --lang $Language --json 2>&1
-    $rawText = ($raw -join "`n").Trim()
-
-    $jsonObj = $null
-    try {
-        $jsonObj = $rawText | ConvertFrom-Json
-    }
-    catch {
-        return Invoke-NativeUniversalCompatibilityCheck -Folder $Folder -Language $Language
-    }
-
-    $badge = switch ($jsonObj.status) {
-        'candidate' { '[READY] 100% Compatible (Universal Zero-Compile)' }
-        'needs_data' { '[NEEDS DATA] More Captures / Files Required' }
-        'outside_scope' { '[OUTSIDE SCOPE] Hardware / Layout Outside Envelope' }
-        'invalid_data' { '[INVALID DATA] Inconsistent / Corrupted Observations' }
-        default { "[$($jsonObj.status.ToUpper())]" }
-    }
-
-    $badgeColor = switch ($jsonObj.status) {
-        'candidate' { 'LightGreen' }
-        'needs_data' { 'Gold' }
-        'outside_scope' { 'DarkOrange' }
-        'invalid_data' { 'Tomato' }
-        default { 'Gray' }
-    }
-
-    return [pscustomobject]@{
-        Status       = [string]$jsonObj.status
-        Badge        = $badge
-        BadgeColor   = $badgeColor
-        Summary      = [string]$jsonObj.summary
-        Scope        = [string]$jsonObj.scope
-        Limitations  = [string]$jsonObj.limitations
-        NextStep     = [string]$jsonObj.next_step
-        CaptureCount = [int]$jsonObj.capture_count
-        Checks       = @($jsonObj.checks)
-        Observations = @($jsonObj.observations)
-        RawJson      = $rawText
-        RawText      = $rawText
-        Parsed       = $jsonObj
-    }
+    return Invoke-NativeUniversalCompatibilityCheck -Folder $Folder -Language $Language
 }
 
 
@@ -353,11 +308,6 @@ function Invoke-CompareCompatibilityReports {
 
     if (-not (Test-Path -LiteralPath $LeftReportPath)) { throw "Reference report '$LeftReportPath' does not exist." }
     if (-not (Test-Path -LiteralPath $RightReportPath)) { throw "Target report '$RightReportPath' does not exist." }
-
-    if (Test-Path -LiteralPath $Script:ComparatorPy) {
-        $res = & python -I $Script:ComparatorPy $LeftReportPath $RightReportPath --lang $Language 2>&1
-        return ($res -join "`r`n")
-    }
 
     $left = Get-Content -LiteralPath $LeftReportPath -Raw
     $right = Get-Content -LiteralPath $RightReportPath -Raw

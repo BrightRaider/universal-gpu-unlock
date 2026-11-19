@@ -47,7 +47,12 @@ jobs:
                 "$compiler" -std=c11 -O2 -Wall -Wextra -Werror -pedantic -Isrc "tests/test_${test}.c" src/gpu_inventory.c -o "$RUNNER_TEMP/test_${test}_${compiler}"
                 "$RUNNER_TEMP/test_${test}_${compiler}"
               done
+              # Turing device IDs and TU102 asset sizes; plain C, reads the assets from the checkout.
+              "$compiler" -std=c11 -O2 -Wall -Wextra -Werror -pedantic -Isrc tests/test_turing_local.c -o "$RUNNER_TEMP/test_turing_local_${compiler}"
+              GU_REPO_ROOT="$GITHUB_WORKSPACE" "$RUNNER_TEMP/test_turing_local_${compiler}"
             done
+            # Tests that need EDK2 types (driver_nvram, boot selection, CSM handover, S3 resume)
+            # run with MSVC in the firmware job via tests/Run-MsvcHostTests.ps1.
           ) 2>&1 | tee -a "$RUNNER_TEMP/gu-log/host.log"
       - name: Preserve final host status
         if: always()

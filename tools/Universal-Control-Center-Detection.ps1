@@ -21,7 +21,7 @@ function Get-SystemWindowsEspGuid {
             $g = [regex]::Match($part.Guid, '[0-9a-fA-F-]{36}')
             if ($g.Success) { return $g.Value }
         }
-    } catch {}
+    } catch { Write-Verbose "Ignored: $($_.Exception.Message)" }
     return $null
 }
 
@@ -42,6 +42,7 @@ function Get-GpuHardwareInfo {
         $info['CPU'] = [string]$cpu.Name
         $info['OS'] = "$($os.Caption) ($($os.Version) Build $($os.BuildNumber))"
 
+        $supportedIds = Get-GuSupportedGpuIds $Script:RepoRoot
         $gpus = @()
         foreach ($vc in $videoControllers) {
             $pnp = [string]$vc.PNPDeviceID
@@ -69,51 +70,18 @@ function Get-GpuHardwareInfo {
             $isAda = $false
             $isTuring = $false
             $isSupported = $false
-            if ($pci -and $pci.Vendor -eq '10de') {
-                switch ($pci.Device) {
-                    # Ada Lovelace (AD10X, sm_89)
-                    '2684' { $arch = "RTX 4090 (AD102)"; $family = "AD102"; $isAda = $true; $isSupported = $true }
-                    '2704' { $arch = "RTX 4080 (AD103)"; $family = "AD103"; $isAda = $true; $isSupported = $true }
-                    '2702' { $arch = "RTX 4080 Super (AD103)"; $family = "AD103"; $isAda = $true; $isSupported = $true }
-                    '2705' { $arch = "RTX 4070 Ti Super (AD103)"; $family = "AD103"; $isAda = $true; $isSupported = $true }
-                    '2782' { $arch = "RTX 4070 Ti (AD104)"; $family = "AD104"; $isAda = $true; $isSupported = $true }
-                    '2783' { $arch = "RTX 4070 Super (AD104)"; $family = "AD104"; $isAda = $true; $isSupported = $true }
-                    '2786' { $arch = "RTX 4070 (AD104)"; $family = "AD104"; $isAda = $true; $isSupported = $true }
-                    '2860' { $arch = "RTX 4060 Ti (AD106)"; $family = "AD106"; $isAda = $true; $isSupported = $true }
-                    '2882' { $arch = "RTX 4060 (AD107)"; $family = "AD107"; $isAda = $true; $isSupported = $true }
-                    # Ampere (GA10X, sm_86)
-                    '2204' { $arch = "RTX 3090 (GA102)"; $family = "GA102"; $isAmpere = $true; $isSupported = $true }
-                    '2203' { $arch = "RTX 3090 Ti (GA102)"; $family = "GA102"; $isAmpere = $true; $isSupported = $true }
-                    '2206' { $arch = "RTX 3080 (GA102)"; $family = "GA102"; $isAmpere = $true; $isSupported = $true }
-                    '220a' { $arch = "RTX 3080 12GB (GA102)"; $family = "GA102"; $isAmpere = $true; $isSupported = $true }
-                    '2208' { $arch = "RTX 3080 Ti (GA102)"; $family = "GA102"; $isAmpere = $true; $isSupported = $true }
-                    '2484' { $arch = "RTX 3070 (GA104)"; $family = "GA104"; $isAmpere = $true; $isSupported = $true }
-                    '2482' { $arch = "RTX 3070 Ti (GA104)"; $family = "GA104"; $isAmpere = $true; $isSupported = $true }
-                    '2486' { $arch = "RTX 3060 Ti (GA104)"; $family = "GA104"; $isAmpere = $true; $isSupported = $true }
-                    '2487' { $arch = "RTX 3060 12GB (GA104)"; $family = "GA104"; $isAmpere = $true; $isSupported = $true }
-                    '2488' { $arch = "RTX 3060 Ti (GA104)"; $family = "GA104"; $isAmpere = $true; $isSupported = $true }
-                    '2489' { $arch = "RTX 3060 Ti (GA104)"; $family = "GA104"; $isAmpere = $true; $isSupported = $true }
-                    '24c9' { $arch = "RTX 3060 Ti (GA104)"; $family = "GA104"; $isAmpere = $true; $isSupported = $true }
-                    '2501' { $arch = "RTX 3050 OEM (GA106)"; $family = "GA106"; $isAmpere = $true; $isSupported = $true }
-                    '2503' { $arch = "RTX 3060 (GA106)"; $family = "GA106"; $isAmpere = $true; $isSupported = $true }
-                    '2504' { $arch = "RTX 3060 12GB (GA106)"; $family = "GA106"; $isAmpere = $true; $isSupported = $true }
-                    '2582' { $arch = "RTX 3050 8GB (GA106)"; $family = "GA106"; $isAmpere = $true; $isSupported = $true }
-                    # Turing (TU10X, sm_75)
-                    '1e04' { $arch = "RTX 2080 Ti (TU102)"; $family = "TU102"; $isTuring = $true; $isSupported = $true }
-                    '1e07' { $arch = "RTX 2080 Ti (TU102)"; $family = "TU102"; $isTuring = $true; $isSupported = $true }
-                    '1e81' { $arch = "RTX 2080 Super (TU104)"; $family = "TU104"; $isTuring = $true; $isSupported = $true }
-                    '1e82' { $arch = "RTX 2080 (TU104)"; $family = "TU104"; $isTuring = $true; $isSupported = $true }
-                    '1e84' { $arch = "RTX 2070 Super (TU104)"; $family = "TU104"; $isTuring = $true; $isSupported = $true }
-                    '1f02' { $arch = "RTX 2070 (TU106)"; $family = "TU106"; $isTuring = $true; $isSupported = $true }
-                    '1f06' { $arch = "RTX 2060 Super (TU106)"; $family = "TU106"; $isTuring = $true; $isSupported = $true }
-                    '1f08' { $arch = "RTX 2060 (TU106)"; $family = "TU106"; $isTuring = $true; $isSupported = $true }
-                    '1f0b' { $arch = "CMP 40HX (TU106)"; $family = "TU106"; $isTuring = $true; $isSupported = $true }
-                    default {
-                        if ($vc.Name -match 'RTX 40') { $arch = "Ada Lovelace Family"; $family = "AD10x"; $isAda = $true; $isSupported = $true }
-                        elseif ($vc.Name -match 'RTX 30') { $arch = "Ampere Family"; $family = "GA10x"; $isAmpere = $true; $isSupported = $true }
-                        elseif ($vc.Name -match 'RTX 20') { $arch = "Turing Family"; $family = "TU10x"; $isTuring = $true; $isSupported = $true }
-                    }
-                }
+            if ($pci -and $pci.Vendor -eq '10de' -and $supportedIds.ContainsKey($pci.Device)) {
+                # Supported means: in src\gpu_device_ids.h, the list the bootloader is built from.
+                $entry = $supportedIds[$pci.Device]
+                $isSupported = $true
+                $isAda = $entry.Arch -eq 'Ada'
+                $isAmpere = $entry.Arch -eq 'Ampere'
+                $isTuring = $entry.Arch -eq 'Turing'
+                $family = $entry.Family
+                $arch = "$([string]$vc.Name) ($family)"
+            }
+            elseif ($pci -and $pci.Vendor -eq '10de') {
+                $arch = "$([string]$vc.Name) (not supported, DEV_$($pci.Device))"
             }
 
             $vramMb = [math]::Round([double]$vc.AdapterRAM / 1MB)
@@ -189,10 +157,10 @@ function Get-PreflightChecks {
             $sbEnabled = ($sbReg.UEFISecureBootEnabled -eq 1)
         }
     }
-    catch {}
+    catch { Write-Verbose "Ignored: $($_.Exception.Message)" }
 
     if ($sbEnabled -eq $null -and $isAdmin) {
-        try { $sbEnabled = Confirm-SecureBootUEFI } catch {}
+        try { $sbEnabled = Confirm-SecureBootUEFI } catch { Write-Verbose "Ignored: $($_.Exception.Message)" }
     }
 
     $checks['SecureBoot'] = @{
@@ -215,7 +183,7 @@ function Get-PreflightChecks {
             $hiber = ($powerReg.HiberbootEnabled -eq 1)
         }
     }
-    catch {}
+    catch { Write-Verbose "Ignored: $($_.Exception.Message)" }
 
     $checks['FastStartup'] = @{
         Status = 'PASS'

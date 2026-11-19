@@ -1,6 +1,6 @@
 <#
 .SYNOPSIS
-    Universal RTX 40 & RTX 30 Series Tensor Unlock Setup Tool (v1.6.3)
+    Universal RTX 40, 30 & 20 Series Tensor Unlock Setup Tool (version from src\version.h)
 .DESCRIPTION
     Automated 1-Click Setup Tool to create a bootable UEFI flash drive
     with the universal Ada Lovelace & Ampere rate-limiter unlock.
@@ -14,14 +14,10 @@ if (-not $isAdmin) {
     exit
 }
 
-# 0. Load Central Version
-$versionH = Join-Path $PSScriptRoot "src\version.h"
-$AppVersion = "v1.7.9"
-if (Test-Path -LiteralPath $versionH) {
-    if ((Get-Content -LiteralPath $versionH -Raw) -match '#define\s+GU_VERSION_TAG\s+"([^"]+)"') {
-        $AppVersion = $matches[1]
-    }
-}
+# 0. Load the shared USB deployment module and the central version
+$scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
+. (Join-Path (Join-Path $scriptDir "tools") "Deploy-UsbCommon.ps1")
+$AppVersion = Get-GuVersion $scriptDir
 
 Clear-Host
 Write-Host "======================================================================" -ForegroundColor Magenta
@@ -32,23 +28,10 @@ Write-Host ""
 
 # 2. Hardware Detection (GPU)
 Write-Host "[1/4] Scanning for compatible NVIDIA GeForce GPU (Ada / Ampere / Turing)..." -ForegroundColor Cyan
+# Same device list the bootloader is built from (src\gpu_device_ids.h).
+$supportedIds = Get-GuSupportedGpuIds $scriptDir
 $gpus = Get-CimInstance Win32_VideoController | Where-Object {
-    $_.Name -like "*4090*" -or $_.Name -like "*4080*" -or $_.Name -like "*4070*" -or $_.Name -like "*4060*" -or
-    $_.Name -like "*3090*" -or $_.Name -like "*3080*" -or $_.Name -like "*3070*" -or $_.Name -like "*3060*" -or $_.Name -like "*3050*" -or
-    $_.Name -like "*2080*" -or $_.Name -like "*2070*" -or $_.Name -like "*2060*" -or $_.Name -like "*TITAN RTX*" -or $_.Name -like "*CMP 50HX*" -or
-    $_.PNPDeviceID -like "*VEN_10DE&DEV_2684*" -or $_.PNPDeviceID -like "*VEN_10DE&DEV_2685*" -or
-    $_.PNPDeviceID -like "*VEN_10DE&DEV_2704*" -or $_.PNPDeviceID -like "*VEN_10DE&DEV_2703*" -or
-    $_.PNPDeviceID -like "*VEN_10DE&DEV_2705*" -or $_.PNPDeviceID -like "*VEN_10DE&DEV_2782*" -or
-    $_.PNPDeviceID -like "*VEN_10DE&DEV_2783*" -or $_.PNPDeviceID -like "*VEN_10DE&DEV_2786*" -or
-    $_.PNPDeviceID -like "*VEN_10DE&DEV_2860*" -or $_.PNPDeviceID -like "*VEN_10DE&DEV_2882*" -or
-    $_.PNPDeviceID -like "*VEN_10DE&DEV_2204*" -or $_.PNPDeviceID -like "*VEN_10DE&DEV_2208*" -or
-    $_.PNPDeviceID -like "*VEN_10DE&DEV_2206*" -or $_.PNPDeviceID -like "*VEN_10DE&DEV_220A*" -or
-    $_.PNPDeviceID -like "*VEN_10DE&DEV_2216*" -or
-    $_.PNPDeviceID -like "*VEN_10DE&DEV_2482*" -or $_.PNPDeviceID -like "*VEN_10DE&DEV_2484*" -or
-    $_.PNPDeviceID -like "*VEN_10DE&DEV_2486*" -or $_.PNPDeviceID -like "*VEN_10DE&DEV_2487*" -or
-    $_.PNPDeviceID -like "*VEN_10DE&DEV_2501*" -or $_.PNPDeviceID -like "*VEN_10DE&DEV_2503*" -or
-    $_.PNPDeviceID -like "*VEN_10DE&DEV_2504*" -or $_.PNPDeviceID -like "*VEN_10DE&DEV_2582*" -or
-    $_.PNPDeviceID -like "*VEN_10DE&DEV_1E*" -or $_.PNPDeviceID -like "*VEN_10DE&DEV_1F*"
+    $_.PNPDeviceID -match 'VEN_10DE&DEV_([0-9A-Fa-f]{4})' -and $supportedIds.ContainsKey($matches[1].ToLowerInvariant())
 }
 
 if ($gpus) {
@@ -69,7 +52,7 @@ $detectedDrives = @()
 try {
     $removableVols = Get-CimInstance Win32_Volume -ErrorAction SilentlyContinue | Where-Object { $_.DriveType -eq 2 -and $_.DriveLetter }
     if ($removableVols) { $detectedDrives += $removableVols }
-} catch {}
+} catch { Write-Verbose "Ignored: $($_.Exception.Message)" }
 
 # B: Storage cmdlets (USB bus type, catches USB Fixed disks / external SSDs)
 try {
@@ -87,7 +70,7 @@ try {
             }
         }
     }
-} catch {}
+} catch { Write-Verbose "Ignored: $($_.Exception.Message)" }
 
 $targetDriveLetter = $null
 
@@ -149,9 +132,6 @@ if ($formatAnswer -match "^[yYjJ]") {
 # 4. Copy Bootloader & Microcode Assets
 Write-Host ""
 Write-Host "[3/4] Copying Universal Bootloader & Firmware Assets (Ada & Ampere)..." -ForegroundColor Cyan
-
-$scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
-. (Join-Path (Join-Path $scriptDir "tools") "Deploy-UsbCommon.ps1")
 
 # Bootloader S3 Menu Customization
 Write-Host ""

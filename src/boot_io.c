@@ -63,6 +63,20 @@ static UINTN GuStrLen(const CHAR16 *s) {
   return len;
 }
 
+/* Copies src into dst (capacity in characters, always NUL-terminated).
+ * Returns the number of characters copied. */
+static UINTN GuStrCopy(CHAR16 *dst, UINTN cap, const CHAR16 *src) {
+  UINTN n = 0;
+  if (!dst || !cap)
+    return 0;
+  while (src && src[n] && n + 1 < cap) {
+    dst[n] = src[n];
+    n++;
+  }
+  dst[n] = L'\0';
+  return n;
+}
+
 static BOOLEAN Inspect(const EFI_DEVICE_PATH_PROTOCOL *p, UINTN *size,
                        BOOLEAN *usb, BOOLEAN *windows) {
   UINTN at = 0;
@@ -221,16 +235,9 @@ EFI_STATUS GuBootOpen(EFI_HANDLE image, EFI_SYSTEM_TABLE *t) {
         dir, &Log, name,
         EFI_FILE_MODE_READ | EFI_FILE_MODE_WRITE | EFI_FILE_MODE_CREATE, 0);
     if (s == EFI_SUCCESS && Log) {
-      const CHAR16 *dir_prefix = is_ad102_dir ? L"\\AD102-UNLOCK\\" : L"\\GPU-UNLOCK\\";
-      UINTN d = 0, n = 0;
-      while (dir_prefix[d] && d < 20) {
-        ActiveLogName[d] = dir_prefix[d];
-        d++;
-      }
-      while (name[n] && d < 31) {
-        ActiveLogName[d++] = name[n++];
-      }
-      ActiveLogName[d] = L'\0';
+      UINTN cap = sizeof(ActiveLogName) / sizeof(ActiveLogName[0]);
+      UINTN d = GuStrCopy(ActiveLogName, cap, is_ad102_dir ? L"\\AD102-UNLOCK\\" : L"\\GPU-UNLOCK\\");
+      (VOID)GuStrCopy(ActiveLogName + d, cap - d, name);
     }
     break;
   }
@@ -584,27 +591,23 @@ EFI_STATUS GuBootLoadWindows(VOID) {
   return s;
 }
 
+/* Prints prefix, a two-digit number and suffix. */
+static VOID GuBootSayCountdown(const CHAR16 *prefix, UINTN value, const CHAR16 *suffix) {
+  CHAR16 digits[3];
+  if (value > 99)
+    value = 99;
+  digits[0] = (CHAR16)(L'0' + value / 10);
+  digits[1] = (CHAR16)(L'0' + value % 10);
+  digits[2] = L'\0';
+  GuBootSay(prefix);
+  GuBootSay(digits);
+  GuBootSay(suffix);
+}
+
 static VOID GuPrintCountdownPrompt(BOOLEAN hide_s3, UINTN sec, BOOLEAN overwrite) {
-  CHAR16 prompt[96];
-  const CHAR16 *prefix = overwrite
-      ? L"\r--> TIMER: "
-      : L"--> TIMER: ";
-  UINTN i = 0;
-  while (prefix[i]) {
-    prompt[i] = prefix[i];
-    i++;
-  }
-  prompt[i++] = (CHAR16)(L'0' + ((sec / 10) % 10));
-  prompt[i++] = (CHAR16)(L'0' + (sec % 10));
-  const CHAR16 *suffix = hide_s3
-      ? L"s left (default: Stock Windows) - Select [U/I/R/S]: "
-      : L"s left (default: Stock Windows) - Select [U/P/I/R/S]: ";
-  UINTN j = 0;
-  while (suffix[j]) {
-    prompt[i++] = suffix[j++];
-  }
-  prompt[i] = L'\0';
-  GuBootSay(prompt);
+  GuBootSayCountdown(overwrite ? L"\r--> TIMER: " : L"--> TIMER: ", sec,
+                     hide_s3 ? L"s left (default: Stock Windows) - Select [U/I/R/S]: "
+                             : L"s left (default: Stock Windows) - Select [U/P/I/R/S]: ");
 }
 
 EFI_STATUS GuBootChoose(CHAR16 *choice) {
@@ -634,14 +637,12 @@ EFI_STATUS GuBootChoose(CHAR16 *choice) {
       L" (Press [Space] to pause countdown and read in peace)\r\n"
       L"=======================================================\r\n");
   if (hide_s3) {
-    GuBootSay(L"  [U] Full GPU Unlock (proven rock-solid, RAM-only)\r\n"
-              L"  [I] Install DXE Driver to UEFI NVRAM (Auto-boot, USB stays "
-              L"in)\r\n");
+    GuBootSay(L"  [U] Full GPU Unlock (RAM-only)\r\n"
+              L"  [I] Install DXE Driver to internal ESP and UEFI NVRAM (Auto-boot)\r\n");
   } else {
-    GuBootSay(L"  [U] Standard Unlock (proven rock-solid, RAM-only)\r\n"
+    GuBootSay(L"  [U] Standard Unlock (RAM-only)\r\n"
               L"  [P] Experimental S3 Persistence Unlock (Boot-Script)\r\n"
-              L"  [I] Install DXE Driver to UEFI NVRAM (Auto-boot / S3, USB "
-              L"stays in)\r\n");
+              L"  [I] Install DXE Driver to internal ESP and UEFI NVRAM (Auto-boot / S3)\r\n");
   }
   GuBootSay(L"  [R] Remove DXE Driver from UEFI NVRAM\r\n"
             L"  [S] Stock Windows (Diagnostic hardware scan, logs to USB, normal boot)\r\n"
@@ -664,36 +665,21 @@ EFI_STATUS GuBootChoose(CHAR16 *choice) {
     if (s == EFI_SUCCESS) {
       if (key.UnicodeChar == ' ' && !paused) {
         paused = TRUE;
-        GuBootSay(L"\r\n[PAUSED] Countdown stopped. Take your time to select [U/P/I/R/S]: ");
+        GuBootSay(hide_s3 ? L"\r\n[PAUSED] Countdown stopped. Take your time to select [U/I/R/S]: "
+                          : L"\r\n[PAUSED] Countdown stopped. Take your time to select [U/P/I/R/S]: ");
         continue;
       }
 
       GuBootSay(L"\r\n");
       timed_out = FALSE;
 
-      if (key.UnicodeChar == 'u' || key.UnicodeChar == 'U') {
-        *choice = L'U';
-        return EFI_SUCCESS;
-      }
-
-      if (key.UnicodeChar == 'p' || key.UnicodeChar == 'P') {
-        *choice = L'P';
-        return EFI_SUCCESS;
-      }
-
-      if (key.UnicodeChar == 'i' || key.UnicodeChar == 'I') {
-        *choice = L'I';
-        return EFI_SUCCESS;
-      }
-
-      if (key.UnicodeChar == 'r' || key.UnicodeChar == 'R') {
-        *choice = L'R';
-        return EFI_SUCCESS;
-      }
-
-      if (key.ScanCode == 0x17 || key.UnicodeChar == 27 ||
-          key.UnicodeChar == 's' || key.UnicodeChar == 'S') {
-        *choice = L'S';
+      CHAR16 c = key.UnicodeChar;
+      if (c >= L'a' && c <= L'z')
+        c = (CHAR16)(c - L'a' + L'A');
+      if (key.ScanCode == 0x17 || c == 27)
+        c = L'S'; /* Esc */
+      if (c == L'U' || c == L'I' || c == L'R' || c == L'S' || (c == L'P' && !hide_s3)) {
+        *choice = c;
         return EFI_SUCCESS;
       }
 
@@ -793,7 +779,7 @@ VOID GuBootHalt(VOID) {
       L" UNIVERSAL GPU UNLOCK - TRANSACTION HALTED\r\n"
       L"=======================================================\r\n"
       L" [!] Hardware unlock could not be completed safely.\r\n"
-      L" [+] Hardware state: SAFE (Registers intact, stock preserved)\r\n"
+      L" [!] The GPU may be partially changed. The reboot below resets it.\r\n"
       L" [+] Diagnostic log: ");
   GuBootSay(ActiveLogName);
   GuBootSay(
@@ -801,68 +787,19 @@ VOID GuBootHalt(VOID) {
       L" Please report this issue with your log file on GitHub:\r\n"
       L" https://github.com/BrightRaider/universal-gpu-unlock/issues\r\n\r\n");
 
-  /* Live countdown for automatic system reboot */
-  for (UINTN sec = 15; sec > 0; sec--) {
-    CHAR16 prompt[80];
-    const CHAR16 *prefix = (sec == 15)
-        ? L"Rebooting to safe stock state in "
-        : L"\rRebooting to safe stock state in ";
-    UINTN i = 0;
-    while (prefix[i]) {
-      prompt[i] = prefix[i];
-      i++;
-    }
-    prompt[i++] = (CHAR16)(L'0' + ((sec / 10) % 10));
-    prompt[i++] = (CHAR16)(L'0' + (sec % 10));
-    prompt[i++] = L's';
-    prompt[i++] = L' ';
-    prompt[i++] = L'(';
-    prompt[i++] = L'p';
-    prompt[i++] = L'r';
-    prompt[i++] = L'e';
-    prompt[i++] = L's';
-    prompt[i++] = L's';
-    prompt[i++] = L' ';
-    prompt[i++] = L'a';
-    prompt[i++] = L'n';
-    prompt[i++] = L'y';
-    prompt[i++] = L' ';
-    prompt[i++] = L'k';
-    prompt[i++] = L'e';
-    prompt[i++] = L'y';
-    prompt[i++] = L' ';
-    prompt[i++] = L't';
-    prompt[i++] = L'o';
-    prompt[i++] = L' ';
-    prompt[i++] = L'r';
-    prompt[i++] = L'e';
-    prompt[i++] = L'b';
-    prompt[i++] = L'o';
-    prompt[i++] = L'o';
-    prompt[i++] = L't';
-    prompt[i++] = L' ';
-    prompt[i++] = L'n';
-    prompt[i++] = L'o';
-    prompt[i++] = L'w';
-    prompt[i++] = L')';
-    prompt[i++] = L'.';
-    prompt[i++] = L'.';
-    prompt[i++] = L'.';
-    prompt[i++] = L' ';
-    prompt[i] = L'\0';
-    GuBootSay(prompt);
-
-    for (UINTN tick = 0; tick < 10; tick++) {
-      if (Table && Table->ConIn && Table->ConIn->ReadKeyStroke) {
-        EFI_INPUT_KEY key;
-        if (Table->ConIn->ReadKeyStroke(Table->ConIn, &key) == EFI_SUCCESS) {
-          sec = 0;
-          break;
-        }
-      }
-      if (Table && Table->BootServices && Table->BootServices->Stall) {
+  /* Live countdown for the automatic reboot. A key press ends it early. */
+#define GU_HALT_REBOOT_SEC 15U
+  BOOLEAN key_pressed = FALSE;
+  for (UINTN sec = GU_HALT_REBOOT_SEC; sec > 0 && !key_pressed; sec--) {
+    GuBootSayCountdown(sec == GU_HALT_REBOOT_SEC ? L"Rebooting in " : L"\rRebooting in ",
+                       sec, L"s (press any key to reboot now)... ");
+    for (UINTN tick = 0; tick < 10 && !key_pressed; tick++) {
+      EFI_INPUT_KEY key;
+      if (Table && Table->ConIn && Table->ConIn->ReadKeyStroke &&
+          Table->ConIn->ReadKeyStroke(Table->ConIn, &key) == EFI_SUCCESS)
+        key_pressed = TRUE;
+      else if (Table && Table->BootServices && Table->BootServices->Stall)
         Table->BootServices->Stall(100000);
-      }
     }
   }
 

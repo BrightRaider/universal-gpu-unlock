@@ -14,40 +14,9 @@ from tkinter import ttk, messagebox
 
 # --- Hardware & System Inspection Helpers ---
 
-def get_firmware_mode():
-    try:
-        ft = ctypes.c_uint()
-        if hasattr(ctypes, "windll") and hasattr(ctypes.windll, "kernel32"):
-            if ctypes.windll.kernel32.GetFirmwareType(ctypes.byref(ft)):
-                if ft.value == 2:
-                    return "UEFI (Pure)", True
-                elif ft.value == 1:
-                    return "Legacy BIOS (CSM Active)", False
-    except Exception:
-        pass
-    if os.path.exists("/sys/firmware/efi"):
-        return "UEFI", True
-    return "Unknown", None
-
-def get_rebar_info():
-    candidates = [
-        "nvidia-smi",
-        r"C:\Windows\System32\nvidia-smi.exe",
-        r"C:\Program Files\NVIDIA Corporation\NVSMI\nvidia-smi.exe",
-    ]
-    for exe in candidates:
-        try:
-            out = subprocess.check_output([exe, "-q", "-d", "MEMORY"], text=True, stderr=subprocess.DEVNULL)
-            m_bar = re.search(r"BAR1 Memory Usage\s*\n\s*Total\s*:\s*(\d+)\s*MiB", out)
-            m_fb = re.search(r"FB Memory Usage\s*\n\s*Total\s*:\s*(\d+)\s*MiB", out)
-            bar1 = int(m_bar.group(1)) if m_bar else None
-            fb = int(m_fb.group(1)) if m_fb else None
-            if bar1 is not None:
-                is_active = bar1 > 1024 or (fb is not None and bar1 >= fb)
-                return bar1, fb, is_active
-        except Exception:
-            continue
-    return None, None, None
+# Shared helpers live next to this script (tools/gu_system_info.py).
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from gu_system_info import CARD_PROFILES, get_firmware_mode, get_rebar_info  # noqa: E402
 
 def get_gpu_details():
     try:
@@ -90,35 +59,6 @@ def get_gpu_details():
             "props": None,
             "torch_ok": False
         }
-
-CARD_PROFILES = {
-    "4090": {"min_unlocked": 200.0, "threshold": 175.0, "stock": 135.0},
-    "4080": {"min_unlocked": 115.0, "threshold": 98.0, "stock": 80.0},
-    "4070 ti super": {"min_unlocked": 100.0, "threshold": 88.0, "stock": 70.0},
-    "4070 ti": {"min_unlocked": 95.0, "threshold": 82.0, "stock": 64.0},
-    "4070 super": {"min_unlocked": 88.0, "threshold": 76.0, "stock": 60.0},
-    "4070": {"min_unlocked": 78.0, "threshold": 68.0, "stock": 52.0},
-    "4060 ti": {"min_unlocked": 55.0, "threshold": 48.0, "stock": 36.0},
-    "4060": {"min_unlocked": 40.0, "threshold": 34.0, "stock": 26.0},
-    "3090 ti": {"min_unlocked": 125.0, "threshold": 105.0, "stock": 78.0},
-    "3090": {"min_unlocked": 115.0, "threshold": 95.0, "stock": 72.0},
-    "3080 ti": {"min_unlocked": 110.0, "threshold": 92.0, "stock": 70.0},
-    "3080": {"min_unlocked": 95.0, "threshold": 80.0, "stock": 62.0},
-    "3070 ti": {"min_unlocked": 75.0, "threshold": 62.0, "stock": 48.0},
-    "3070": {"min_unlocked": 65.0, "threshold": 54.0, "stock": 40.0},
-    "3060 ti": {"min_unlocked": 55.0, "threshold": 46.0, "stock": 34.0},
-    "3060": {"min_unlocked": 40.0, "threshold": 32.0, "stock": 24.0},
-    "3050": {"min_unlocked": 28.0, "threshold": 22.0, "stock": 15.0},
-    "titan rtx": {"min_unlocked": 115.0, "threshold": 95.0, "stock": 65.0},
-    "2080 ti": {"min_unlocked": 105.0, "threshold": 85.0, "stock": 54.0},
-    "2080 super": {"min_unlocked": 80.0, "threshold": 65.0, "stock": 42.0},
-    "2080": {"min_unlocked": 72.0, "threshold": 60.0, "stock": 38.0},
-    "2070 super": {"min_unlocked": 65.0, "threshold": 52.0, "stock": 34.0},
-    "2070": {"min_unlocked": 55.0, "threshold": 45.0, "stock": 29.0},
-    "2060 super": {"min_unlocked": 50.0, "threshold": 42.0, "stock": 27.0},
-    "2060": {"min_unlocked": 42.0, "threshold": 35.0, "stock": 22.0},
-    "cmp 50hx": {"min_unlocked": 105.0, "threshold": 85.0, "stock": 54.0},
-}
 
 class GpuUnlockApp(tk.Tk):
     def __init__(self):
