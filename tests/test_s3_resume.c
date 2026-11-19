@@ -129,6 +129,10 @@ static void TestGuS3ResumeDispatch_Wrapper(void) {
   /* Call a second time to simulate subsequent resume cycle */
   GuS3ResumeDispatch(NULL, &ctx);
   CHECK(ctx.resume_count == 2, "Second resume cycle must increment resume_count to 2");
+
+  /* Call with context passed in This (RCX parameter fallback) */
+  GuS3ResumeDispatch(&ctx, NULL);
+  CHECK(ctx.resume_count == 3, "RCX parameter fallback must increment resume_count to 3");
 }
 
 int main(void) {

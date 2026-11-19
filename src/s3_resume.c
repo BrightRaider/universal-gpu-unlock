@@ -73,9 +73,15 @@ INTN GuS3ExecuteResumeUnlock(GU_S3_RESUME_CONTEXT *ctx) {
 }
 
 VOID EFIAPI GuS3ResumeDispatch(IN CONST VOID *This, IN VOID *Context) {
-  (VOID)This;
-  if (!Context) return;
   GU_S3_RESUME_CONTEXT *ctx = (GU_S3_RESUME_CONTEXT *)Context;
+  if (!ctx || ctx->magic != GU_S3_CONTEXT_MAGIC) {
+    /* Check if motherboard firmware passes Context as the first argument in RCX */
+    if (This && ((CONST GU_S3_RESUME_CONTEXT *)This)->magic == GU_S3_CONTEXT_MAGIC) {
+      ctx = (GU_S3_RESUME_CONTEXT *)This;
+    } else {
+      return;
+    }
+  }
   (VOID)GuS3ExecuteResumeUnlock(ctx);
 }
 
@@ -141,12 +147,18 @@ EFI_STATUS GuS3PrepareAndRegister(EFI_SYSTEM_TABLE *t) {
     memcpy(nvs_base + 0x2A000, GuAssets[4].firmware.data, ctx->meta_size);
   }
 
+  /* Copy the self-contained GuS3ResumeDispatch PIC machine code into the ACPI NVS buffer.
+   * This guarantees that the executable code survives Windows ExitBootServices() and memory
+   * reclamation even if EfiBootServicesCode / EfiLoaderCode is overwritten by the OS. */
+  memcpy(nvs_base + 0x00800, (const void *)(uintptr_t)GuS3ResumeDispatch, 0x200);
+
   /* 1. Register S3 Boot Script Dispatch 2 OpCode:
-   * Calls GuS3ResumeDispatch with Context = nvs_phys upon motherboard S3 resume. */
+   * Calls the NVS-resident dispatch handler with Context = nvs_phys upon motherboard S3 resume. */
+  EFI_PHYSICAL_ADDRESS dispatch_entry = nvs_phys + 0x00800;
   EFI_STATUS s_dispatch = s3->Write(
       s3,
       EFI_BOOT_SCRIPT_DISPATCH_2_OPCODE,
-      (EFI_PHYSICAL_ADDRESS)(UINTN)GuS3ResumeDispatch,
+      dispatch_entry,
       nvs_phys
   );
 

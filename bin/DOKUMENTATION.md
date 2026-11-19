@@ -85,10 +85,41 @@ Um den Unlock auch über Standby-Zyklen hinweg ohne Neustart aufrechtzuerhalten,
 
 2. **Boot-Script Dispatch Registrierung (`EFI_BOOT_SCRIPT_DISPATCH_2_OPCODE`):**
    - Über das `EFI_S3_SAVE_STATE_PROTOCOL` registriere ich den Dispatch-2-Opcode im Motherboard-Boot-Script.
-   - Dieser Eintrag weist die UEFI-Firmware des Motherboards an, beim Aufwachen aus S3 direkt die autarke Dispatcher-Routine `GuS3ResumeDispatch` mit dem NVS-Kontext als Parameter aufzurufen.
+   - **Autarke PIC-Code-Spiegelung:** Da normaler Executable Code in `EfiBootServicesCode` oder `EfiLoaderCode` nach `ExitBootServices()` von Windows freigegeben und überschrieben werden kann, kopiere ich den positionsunabhängigen Maschinencode der Dispatch-Routine `GuS3ResumeDispatch` (331 Bytes, 0 Relocations) direkt in den geschützten NVS-Puffer (`nvs_base + 0x00800`).
+   - Der Dispatch-2-Eintrag verweist auf `nvs_phys + 0x00800`. Dadurch ist garantiert, dass der auszuführende Code auch bei maximaler Windows-Speicherauslastung niemals überschrieben wird.
+   - **Parameter-Resilienz:** Die Dispatch-Routine unterstützt sowohl den Standard-UEFI-PI-Aufruf (`PeiServices` in `RCX`, `Context` in `RDX`) als auch BIOS-Varianten, die den Kontext direkt im ersten Parameter (`RCX`) übergeben.
    - Als Rückfallebene werden zusätzlich MMIO-Writes für SS0 und SS1 registriert, falls ein BIOS Dispatch-2 nicht ausführt.
 
 3. **Autarke Resume-Engine (`GuS3ExecuteResumeUnlock`):**
    - Beim Aufwachen des Systems führt das Motherboard-BIOS die Routine noch vor der Wiederübergabe an das Betriebssystem aus.
    - Die Engine setzt den SEC2-Falcon-Controller zurück, konfiguriert das FBIF-Interface, stößt den Booter per DMA an, pollt das Falcon-Halt-Signal und verriegelt anschließend die Rate-Limiter-Selektoren `0x88888888` und `0x00000008`.
    - Nach erfolgreicher Verriegelung wird der SEC2-Controller in einen sauberen Zustand versetzt und der Resume-Status im NVS-Header protokolliert (`resume_status = 1`, inkrementierter `resume_count`).
+
+---
+
+## 7. Sicherheitsarchitektur & Containment (Code-Review Zusammenfassung)
+
+### 7.1 Zweistufige Hardware-Containment-Logik
+- **Keine Mutation (`!GuUnlockMutated()`):** Bei unpassenden Karten oder Preflight-Verweigerung bleibt die GPU unberührt. Der Bootloader informiert den Benutzer und kehrt sicher nach 5 Sekunden zum BIOS/Bootmenü zurück.
+- **Aktive Mutation (`GuUnlockMutated()`):** Sollte während der Hardware-Transaktion ein Fehler auftreten, entzieht der Bootloader dem Gerät sofort das Bus-Mastering (`GuClearMaster()`), setzt PCI-Attribute zurück und hält das System kontrolliert an (`GuBootHalt()`), damit Windows keinen inkonsistenten DMA-Zustand erbt.
+
+### 7.2 CSM Video Isolation & GOP Recovery
+- Erkennt Legacy-CSM-Video-Adapter (`pci_attributes & VGA_MEMORY/VGA_IO`).
+- Verhindert das Aufrufen von `ConnectController` auf dem Legacy-Handle.
+- **Layer 1:** Lädt und bindet den nativen UEFI GOP-Treiber aus dem VBIOS Option ROM.
+- **Layer 2:** Installiert bei Bedarf einen sicheren Fallback-GOP auf der EFI ConsoleOut-Handle.
+
+### 7.3 DXE Selbstdeaktivierungsschutz (`AdaUnlockDxe.efi`)
+- Tritt bei der permanenten DXE-Treiber-Ausführung ein Fehler auf, deaktiviert sich der Treiber vor dem Herunterfahren automatisch in der NVRAM-Variable `DriverOrder`.
+- Dadurch bootet der Rechner beim nächsten Start garantiert sauber in normales Windows, ohne in einer Boot-Schleife festzustecken.
+
+### 7.4 Host-Testabdeckung (8 Test-Suiten)
+Alle Kernkomponenten werden über gemockte Firmware-Services automatisiert validiert (`tests/Run-MsvcHostTests.ps1`):
+1. `test_driver_nvram`: NVRAM Load-Optionen & DriverOrder-Verwaltung.
+2. `test_boot_select`: Countdown-Timer & Tastatureingaben.
+3. `test_csm_handover`: CSM-Erkennung & zweistufige GOP-Wiederherstellung.
+4. `test_gpu_inventory`: Multi-GPU Inventory Parser (57 Checks).
+5. `test_gpu_topology`: Negative Topology Isolation (44 Checks).
+6. `test_gpu_discovery`: PCI I/O Protocol Adapter & Memory-Decode-Aktivierung (21 Checks).
+7. `test_turing_local`: Turing TU102/TU104/TU106 Device-IDs & Binär-Hashes.
+8. `test_s3_resume`: ACPI NVS Dispatcher & Wake-Handshake (18 Checks).
