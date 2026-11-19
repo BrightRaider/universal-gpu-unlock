@@ -13,6 +13,7 @@ try {
     $sources = @(
         'dxe_main.c',
         'driver_nvram.c',
+        's3_resume.c',
         'boot_io.c',
         'unlock_release.c',
         'port.c',

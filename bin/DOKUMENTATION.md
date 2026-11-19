@@ -63,3 +63,32 @@ Die Binärdateien (`BOOTX64.EFI` und `AdaUnlockDxe.efi`) sind mit einem dedizier
 - **CSM zwingend deaktivieren:** CSM (Compatibility Support Module) muss im BIOS deaktiviert sein (Pure UEFI Mode), um legacy VGA-Konflikte (Fehlercode 43) zu vermeiden.
 - **Above 4G Decoding & Resizable BAR:** Im BIOS aktivieren, um den Flaschenhals des 256-MB-PCIe-Fensters aufzuheben (+10 % bis +15 % Durchsatzgewinn).
 - **Turing / CMP Karten:** Einmalig `Toggle-Turing-GSP.bat` als Administrator in Windows ausführen, um den Treiber an den GSP-Firmware-Modus zu binden.
+
+---
+
+## 6. S3 Persistence Architektur & Boot-Script Dispatch (`[P]`-Modus)
+
+### 6.1 Die technische Herausforderung beim S3 Sleep (Suspend-to-RAM)
+Beim Wechsel in den Standby-Zustand (ACPI S3) schaltet das Betriebssystem und das Motherboard-Power-Management die GPU stromlos (Power Gating). Beim Aufwachen (S3 Resume) erfährt die GPU einen hardwareseitigen Power-On-Reset:
+- Alle internen Steuer- und Konfigurationsregister der GPU werden auf Werkseinstellungen zurückgesetzt.
+- Der hardwarebasierte Rate-Limiter an den Adressen `0x0082381c` (SS0) und `0x00823820` (SS1) wird hardwaremäßig gesperrt.
+- Einfache MMIO-Schreiboperationen (`EFI_BOOT_SCRIPT_MEM_WRITE_OPCODE`) werden von der GPU nach einem Reset ignoriert, weil der NVIDIA SEC2 Falcon Microcontroller zuerst die kryptografische Authentifizierung des V67-Microcodes abschließen muss.
+- Ohne erneute Ausführung des Handshakes startet der Grafiktreiber nach dem Standby wieder mit gedrosselter Tensor-Core-Leistung.
+
+### 6.2 Die ACPI NVS Boot-Script Dispatch Architektur
+Um den Unlock auch über Standby-Zyklen hinweg ohne Neustart aufrechtzuerhalten, implementiert der `[P]`-Modus folgende mehrstufige Architektur:
+
+1. **Persistentes Memory Staging (`EfiACPIMemoryNVS`):**
+   - Standardmäßige UEFI-Boot-Services-Speicherbereiche (`EfiBootServicesCode`, `EfiBootServicesData`) werden von Windows nach `ExitBootServices()` freigegeben und überschrieben.
+   - Ich allokiere daher 64 Seiten (256 KB) persistenten `EfiACPIMemoryNVS`-Speicher (Non-Volatile Sleeping Memory). Dieser Speicherbereich ist im ACPI-Memory-Map als reserviert markiert, bleibt während des S3-Schlafs im DRAM mit Strom versorgt und wird vom Windows-Kernel niemals angetastet.
+   - In diesen Puffer werden alle benötigten Firmware-Payloads (Booter ~60 KB, V67 Microcode 64 KB, Boot Descriptor und Metadaten) sowie die `GU_S3_RESUME_CONTEXT`-Struktur kopiert.
+
+2. **Boot-Script Dispatch Registrierung (`EFI_BOOT_SCRIPT_DISPATCH_2_OPCODE`):**
+   - Über das `EFI_S3_SAVE_STATE_PROTOCOL` registriere ich den Dispatch-2-Opcode im Motherboard-Boot-Script.
+   - Dieser Eintrag weist die UEFI-Firmware des Motherboards an, beim Aufwachen aus S3 direkt die autarke Dispatcher-Routine `GuS3ResumeDispatch` mit dem NVS-Kontext als Parameter aufzurufen.
+   - Als Rückfallebene werden zusätzlich MMIO-Writes für SS0 und SS1 registriert, falls ein BIOS Dispatch-2 nicht ausführt.
+
+3. **Autarke Resume-Engine (`GuS3ExecuteResumeUnlock`):**
+   - Beim Aufwachen des Systems führt das Motherboard-BIOS die Routine noch vor der Wiederübergabe an das Betriebssystem aus.
+   - Die Engine setzt den SEC2-Falcon-Controller zurück, konfiguriert das FBIF-Interface, stößt den Booter per DMA an, pollt das Falcon-Halt-Signal und verriegelt anschließend die Rate-Limiter-Selektoren `0x88888888` und `0x00000008`.
+   - Nach erfolgreicher Verriegelung wird der SEC2-Controller in einen sauberen Zustand versetzt und der Resume-Status im NVS-Header protokolliert (`resume_status = 1`, inkrementierter `resume_count`).

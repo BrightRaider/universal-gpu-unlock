@@ -17,13 +17,15 @@ $includes = @('.', 'compat', 'vendor', 'vendor\edk2\Include', 'vendor\edk2\Inclu
     ForEach-Object { '/I"' + (Join-Path $src $_) + '"' }
 $flags = '/nologo /W3 /TC /D__KERNEL__ /DGU_UEFI_PORT /DGU_AD104_TRANSACTION /DGU_ENTRY_LATCHED_SS1_FULL /D_CRT_SECURE_NO_WARNINGS ' + ($includes -join ' ')
 
-$tests = @('test_driver_nvram', 'test_boot_select', 'test_csm_handover', 'test_gpu_discovery', 'test_turing_local')
+$tests = @('test_driver_nvram', 'test_boot_select', 'test_csm_handover', 'test_gpu_discovery', 'test_turing_local', 'test_s3_resume')
 $lines = @('@echo off', "call `"$VcVars`" >nul", 'if errorlevel 1 exit /b 1', "set `"GU_REPO_ROOT=$repo`"", "cd /d `"$OutDir`"")
 foreach ($test in $tests) {
     $source = Join-Path $PSScriptRoot "$test.c"
     $extra = ""
     if ($test -eq 'test_gpu_discovery') {
         $extra = "`"" + (Join-Path $src 'gpu_inventory.c') + "`""
+    } elseif ($test -eq 'test_s3_resume') {
+        $extra = "`"" + (Join-Path $src 's3_resume.c') + "`""
     }
     $lines += "cl $flags /Fe$test.exe `"$source`" $extra /link /subsystem:console"
     $lines += 'if errorlevel 1 exit /b 1'

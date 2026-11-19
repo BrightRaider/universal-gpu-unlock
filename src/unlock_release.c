@@ -12,6 +12,7 @@
 #include "compat/compat.h"
 #include "vendor/unlock_610.h"
 #include "s3_save.h"
+#include "s3_resume.h"
 #include <Protocol/GraphicsOutput.h>
 #include <Protocol/DriverBinding.h>
 #include <Protocol/LoadedImage.h>
@@ -849,22 +850,7 @@ EFI_STATUS GuExecuteUnlock(EFI_SYSTEM_TABLE *t, EFI_HANDLE image, const char **s
 }
 
 EFI_STATUS GuRegisterS3(EFI_SYSTEM_TABLE *t) {
-  if (Gu.is_turing) return EFI_SUCCESS;
-  if (!t || !t->BootServices) return EFI_INVALID_PARAMETER;
-  static EFI_GUID S3SaveStateGuid = EFI_S3_SAVE_STATE_PROTOCOL_GUID;
-  EFI_S3_SAVE_STATE_PROTOCOL *s3 = NULL;
-  EFI_STATUS s3_status = t->BootServices->LocateProtocol(&S3SaveStateGuid, NULL, (VOID **)&s3);
-  if (s3_status == EFI_SUCCESS && s3 && s3->Write) {
-    UINT32 val_ss0 = 0x88888888;
-    UINT32 val_ss1 = 0x00000008;
-    UINT64 addr_ss0 = (UINT64)Gu.bar_base + 0x0082381cULL;
-    UINT64 addr_ss1 = (UINT64)Gu.bar_base + 0x00823820ULL;
-    EFI_STATUS w0 = s3->Write(s3, EFI_BOOT_SCRIPT_MEM_WRITE_OPCODE, EfiBootScriptWidthUint32, addr_ss0, (UINTN)1, &val_ss0);
-    EFI_STATUS w1 = s3->Write(s3, EFI_BOOT_SCRIPT_MEM_WRITE_OPCODE, EfiBootScriptWidthUint32, addr_ss1, (UINTN)1, &val_ss1);
-    GuLog("Registered S3 Boot Script SS0=%#llx SS1=%#llx\n", (unsigned long long)w0, (unsigned long long)w1);
-    return EFI_SUCCESS;
-  }
-  return s3_status;
+  return GuS3PrepareAndRegister(t);
 }
 
 BOOLEAN GuDetectCsmVideoDriver(UINT64 pci_attributes, BOOLEAN has_nv_agent,

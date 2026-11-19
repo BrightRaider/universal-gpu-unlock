@@ -22,6 +22,7 @@ EFI_STATUS GuFlr(VOID) { return EFI_SUCCESS; }
 EFI_STATUS GuRestorePci(VOID) { return EFI_SUCCESS; }
 EFI_STATUS GuEnableMaster(VOID) { return EFI_SUCCESS; }
 EFI_STATUS GuClearMaster(VOID) { return EFI_SUCCESS; }
+EFI_STATUS GuS3PrepareAndRegister(EFI_SYSTEM_TABLE *t) { (void)t; return EFI_SUCCESS; }
 BOOLEAN GuSafeToReturn(VOID) { return TRUE; }
 BOOLEAN GuFlrAllowed(VOID) { return TRUE; }
 EFI_STATUS GuBootSyncLog(VOID) { return EFI_SUCCESS; }
