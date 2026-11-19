@@ -123,3 +123,54 @@ Alle Kernkomponenten werden über gemockte Firmware-Services automatisiert valid
 6. `test_gpu_discovery`: PCI I/O Protocol Adapter & Memory-Decode-Aktivierung (21 Checks).
 7. `test_turing_local`: Turing TU102/TU104/TU106 Device-IDs & Binär-Hashes.
 8. `test_s3_resume`: ACPI NVS Dispatcher & Wake-Handshake (18 Checks).
+
+---
+
+## 8. Multi-GPU Sequential Unlock Engine (ab v1.8.28)
+
+### 8.1 Herausforderung bei Multi-GPU-Systemen
+In Workstations und Multi-GPU-Setups (z. B. Dual RTX 4090 oder RTX 4090 + RTX 3090) verarbeitete der UEFI-Bootloader in älteren Versionen lediglich den primären Anzeige-Controller (`gpu[0]`). Sekundäre Karten blieben im uninitialisierten Werkszustand mit aktivem Rate-Limiter zurück.
+
+### 8.2 Die sequentielle Unlock-Schleife
+Ab v1.8.28 implementieren sowohl die Bootloader-Anwendung (`src/app.c`) als auch der permanente DXE-Treiber (`src/dxe_main.c`) eine vollständige Multi-GPU-Schleife:
+1. **Sequentielles Binding:** Der Bootloader iteriert über alle erkannten unterstützten NVIDIA-Grafikkarten (`0 .. device_count - 1`) und bindet jede Karte per `GuBindDevice`.
+2. **Dynamischer Asset-Reload:** Bei heterogenen Kombinationen (z. B. Ada Lovelace + Ampere) erkennt der Bootloader den Architekturwechsel (`is_ampere` / `is_turing`) und lädt die spezifischen Firmware-Payloads (`AD102-ASSETS` vs `GA102-ASSETS`) dynamisch nach.
+3. **Autarke Transaktions-Isolation:** Schlägt die Freischaltung einer sekundären Karte fehl, wird der Fehler protokolliert und mit der nächsten Karte fortgefahren, ohne den Systemstart abzubrechen.
+4. **S3 Boot Script Registrierung für alle Karten:** Jede erfolgreich entsperrte GPU wird im ACPI-Boot-Script-Table für das unterbrechungsfreie Aufwachen aus dem Standby (S3) registriert.
+5. **Console-Reconnect:** Erst nach Abschluss aller GPU-Transaktionen wird der primäre Display-Controller wieder mit dem UEFI-Console-Out-System verbunden.
+
+---
+
+## 9. Das 60-Sekunden Quick-Start Prinzip & Bereinigung des Script-Wildwuchses
+
+### 9.1 Warum Skript-Wildwuchs schadet
+Ein Kernversprechen des Projekts ist der **60-Second Quick Start**: Ein Benutzer muss innerhalb von einer Minute vom Download zur voll entsperrten GPU gelangen.
+Durch das Hinzufügen vieler einzelner Werkzeuge (`Setup-FastResume.bat`, `Toggle-Sleep-Button.bat`, `Toggle-Turing-GSP.bat`, `Universal-Control-Center.cmd`) entstand im Wurzelverzeichnis ein unübersichtlicher Skript-Dschungel, der Verwirrung stiftete.
+
+### 9.2 Die bereinigte Struktur
+Ab v1.8.28 ist das Wurzelverzeichnis auf die wesentlichen 1-Klick-Einstiegspunkte reduziert:
+- **`Setup.bat`:** 1-Klick Einrichtung (erstellt den USB-Stick oder installiert den DXE-Treiber).
+- **`Check-GPU-Unlock.bat`:** 1-Klick CLI-Verifikation (Multi-GPU-fähig, zeigt TFLOPS, CUDA-Verhältnis, ReBAR, PCIe-Link und S3-Wake-Status).
+- **`Launch-Dashboard.bat`:** 1-Klick GUI Cockpit (vereint alle Statusanzeigen, Multi-GPU-Auswahl, Benchmark und Direkt-Buttons für alle Werkzeuge).
+- **`Update-USB.bat`:** 1-Klick Schnell-Aktualisierung für bestehende USB-Sticks (erkennt den Stick automatisch und aktualisiert Binärdateien & Skripte in 2 Sekunden).
+
+Alle spezifischen Hilfsskripte wurden sauber nach `tools/` ausgelagert. Im Dashboard stehen sie als direkte 1-Klick-Schaltflächen zur Verfügung, sodass kein Benutzer mehr manuell nach Hilfsskripten suchen muss. Im Wurzelverzeichnis verbleiben lediglich transparente 2-Zeilen-Forwarder für vollständige Abwärtskompatibilität.
+
+---
+
+## 10. Turing-Architektur & Rate-Limiter Realität (Issue #15 Analyse)
+
+### 10.1 Analyse des TU102-Assets
+Im Verzeichnis `TU102-ASSETS/` ist die Datei `v67-tu102-610.43.03.bin` mit `GA102-ASSETS/v67-ga102-610.43.03.bin` byte-identisch (identischer SHA-256-Hash).
+
+### 10.2 Hardware-Befund
+1. **Keine SS0/SS1 MSR-Register auf Turing:**
+   Die Speed-Select-MSR-Register an den Adressen `0x0082381c` (SS0) und `0x00823820` (SS1) existieren auf der Turing-Mikroarchitektur physikalisch nicht (Leseoperationen liefern `0xbadf5040`). NVIDIA führte die hardwareseitige PLM-Drosselung dieser Register erst mit Ampere (GA102) und Ada Lovelace (AD102) ein.
+2. **Ursache des Verhaltens in Issue #15:**
+   Auf TU102 (RTX 2080 Ti / TITAN RTX) läuft der SEC2-Falcon-Handshake fehlerfrei durch, der Booter meldet Erfolg. Da jedoch keine SS0/SS1-Register existieren, bewirkt die Ampere-Payload auf Turing keine Freischaltung von Hardware-MSRs – die GEMM-Performance bleibt bei den Werks-54-TFLOPS.
+3. **Der tatsächliche Turing-Boost:**
+   Auf Turing wird der Leistungssprung (>85 bis 105 TFLOPS) primär durch die Aktivierung des modernen GSP-Firmware-Modus im Windows-Treiber erzielt:
+   ```cmd
+   reg add "HKLM\SYSTEM\CurrentControlSet\Control\Class\{4d36e968-e325-11ce-bfc1-08002be10318}\0000" /v EnableGpuFirmware /t REG_DWORD /d 1 /f
+   ```
+   Dies bindet `nvlddmkm.sys` an den integrierten RISC-V GSP-Coprozessor statt an den langsameren CPU-RM-Modus.

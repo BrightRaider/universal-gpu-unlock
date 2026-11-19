@@ -28,15 +28,16 @@
 ## ⚡ 60-Second Quick Start
 
 1. **Prepare USB Drive:** Download **[Universal_GPU_Unlock_v1.8.28.zip](https://github.com/BrightRaider/universal-gpu-unlock/releases/latest)**, extract it, insert a USB drive (FAT32), and run `Setup.bat` (formats & sets up all boot files automatically).
+   - *(Existing USB sticks can be updated in 2 seconds by running `Update-USB.bat`).*
 2. **Boot & Unlock:** Restart your PC, open your boot menu (`F8` / `F11` / `F12`), boot from the USB drive, and select:
-   - `[U]` **Standard Unlock:** RAM-only, temporary unlock (reverts cleanly to factory stock on power off).
+   - `[U]` **Standard Unlock:** RAM-only, temporary unlock (reverts cleanly to factory stock on power off). Multi-GPU systems unlock all cards sequentially.
    - `[P]` **S3 Persistence:** Experimental sleep-aware unlock mode (Boot-Script).
    - `[I]` **Install to NVRAM:** Permanent, stickless auto-unlock on every cold boot via internal ESP & NVRAM.
    - `[R]` **Remove DXE Driver:** Cleanly uninstalls and deregisters the driver from UEFI NVRAM & internal ESP.
    - `[S]` **Stock Windows:** Diagnostic hardware scan, logs to USB, normal boot without unlock.  
    *(Tip: The boot menu features a 30-second countdown. Press `[Space]` at any time to pause and read in peace).*
-3. **Verify:** In Windows, run `Check-GPU-Unlock.bat` (or `Launch-Dashboard.bat`) to verify your unlocked Tensor Core throughput!
-   - *(RTX 20 / Turing / CMP users: Run `Toggle-Turing-GSP.bat` once as Administrator to bind NVIDIA drivers to GSP firmware mode).*
+3. **Verify & Control:** In Windows, run `Check-GPU-Unlock.bat` (CLI) or `Launch-Dashboard.bat` (GUI Cockpit) to verify your unlocked Tensor Core throughput!
+   - All tools (Fast-Resume S3 Guard, Turing GSP Toggle, Sleep Shortcut) are integrated directly as 1-click buttons inside the Cockpit GUI.
 
 > [!TIP]
 > **Troubleshooting & Optimization:** If your display remains blank on boot, set **CSM to Disabled** in your BIOS. To unlock maximum memory throughput (+10% to +15%), enable **Above 4G Decoding** and **Resizable BAR**.

@@ -168,25 +168,53 @@ static EFI_STATUS RunUnlock(EFI_SYSTEM_TABLE *t, EFI_HANDLE image,
 
   GuBootSilence();
 
-  GuLog("--- Processing Primary GPU [1/%u]: DevID 0x%04x ---\n",
-        (unsigned)device_count, (unsigned)gpu->device_id);
+  UINTN unlocked_count = 0;
+  for (UINTN g = 0; g < device_count; g++) {
+    if (g > 0) {
+      GuBindDevice(t->BootServices, image, &gpu[g]);
+      if (gpu[g].is_ampere != gpu[0].is_ampere || gpu[g].is_turing != gpu[0].is_turing) {
+        s = GuBootLoadAssets();
+        if (s != EFI_SUCCESS || Gu.fault) {
+          GuLog("Secondary GPU [%u/%u] asset load failed; skipping\n",
+                (unsigned)(g + 1), (unsigned)device_count);
+          continue;
+        }
+      }
+      s = GuPrepare();
+      if (s != EFI_SUCCESS || Gu.fault) {
+        GuLog("Secondary GPU [%u/%u] prepare failed (%#llx); skipping\n",
+              (unsigned)(g + 1), (unsigned)device_count, (unsigned long long)s);
+        continue;
+      }
+    }
 
-  s = GuExecuteUnlock(t, image, &stage);
-  if (s != EFI_SUCCESS || Gu.fault)
-    return RunFailure(t, image, gpu, stage, s);
+    GuLog("--- Processing GPU [%u/%u]: DevID 0x%04x (%s) ---\n",
+          (unsigned)(g + 1), (unsigned)device_count, (unsigned)gpu[g].device_id,
+          GuArchName(&gpu[g]));
 
-  if (enable_s3) {
-    (VOID) GuRegisterS3(t);
+    s = GuExecuteUnlock(t, image, &stage);
+    if (s != EFI_SUCCESS || Gu.fault) {
+      if (g == 0)
+        return RunFailure(t, image, &gpu[0], stage, s);
+      GuLog("Secondary GPU [%u/%u] unlock failed (%#llx); continuing\n",
+            (unsigned)(g + 1), (unsigned)device_count, (unsigned long long)s);
+    } else {
+      unlocked_count++;
+    }
+
+    if (enable_s3 && s == EFI_SUCCESS) {
+      (VOID) GuRegisterS3(t);
+    }
   }
 
   stage = "final-Windows-verification";
   if (!GuUnlockReadyForWindows())
-    return RunFailure(t, image, gpu, stage, EFI_NOT_READY);
+    return RunFailure(t, image, &gpu[0], stage, EFI_NOT_READY);
 
   (VOID) GuBootSyncLog();
 
-  if (gpu->handle) {
-    (VOID) GuReconnectDisplayAfterUnlock(t, image, gpu->handle, TRUE);
+  if (gpu[0].handle) {
+    (VOID) GuReconnectDisplayAfterUnlock(t, image, gpu[0].handle, TRUE);
   }
 
   GuBootUnsilence();
@@ -204,8 +232,8 @@ static EFI_STATUS RunUnlock(EFI_SYSTEM_TABLE *t, EFI_HANDLE image,
 
   GuBootSay(L" Handing over control to Windows Boot Manager...\r\n\r\n");
 
-  GuLog("TRANSACTION OK: GPU [1/%u] unlocked, hardware readbacks passed!\n",
-        (unsigned)device_count);
+  GuLog("TRANSACTION OK: %u of %u GPU(s) unlocked, hardware readbacks passed!\n",
+        (unsigned)unlocked_count, (unsigned)device_count);
 
   stage = "close-USB-log";
   s = GuBootClose();
@@ -244,8 +272,7 @@ EFI_STATUS EFIAPI UefiMain(EFI_HANDLE image, EFI_SYSTEM_TABLE *t) {
 
   GuLogInventory("", devices, device_count);
   if (device_count > 1) {
-    GuBootSay(L"\r\n[WARNING] More than one supported GPU found. Only the "
-              L"first one is unlocked; the others stay stock.\r\n");
+    GuBootSay(L"\r\n[INFO] Multi-GPU system detected: All supported GPUs will be unlocked.\r\n");
   }
 
   s = GuBootLoadWindows();
@@ -264,7 +291,7 @@ EFI_STATUS EFIAPI UefiMain(EFI_HANDLE image, EFI_SYSTEM_TABLE *t) {
     return RunRemove(t);
   case L'U':
   case L'P':
-    return RunUnlock(t, image, gpu, device_count, choice == L'P');
+    return RunUnlock(t, image, devices, device_count, choice == L'P');
   default:
     return RunStock();
   }

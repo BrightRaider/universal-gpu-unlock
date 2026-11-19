@@ -22,7 +22,7 @@ def get_firmware_mode():
         return "UEFI", True
     return "Unknown", None
 
-def get_rebar_info():
+def get_rebar_info(gpu_index=0):
     candidates = [
         "nvidia-smi",
         r"C:\Windows\System32\nvidia-smi.exe",
@@ -30,7 +30,8 @@ def get_rebar_info():
     ]
     for exe in candidates:
         try:
-            out = subprocess.check_output([exe, "-q", "-d", "MEMORY"], text=True, stderr=subprocess.DEVNULL)
+            cmd = [exe, "-i", str(gpu_index), "-q", "-d", "MEMORY"]
+            out = subprocess.check_output(cmd, text=True, stderr=subprocess.DEVNULL)
             m_bar = re.search(r"BAR1 Memory Usage\s*\n\s*Total\s*:\s*(\d+)\s*MiB", out)
             m_fb = re.search(r"FB Memory Usage\s*\n\s*Total\s*:\s*(\d+)\s*MiB", out)
             bar1 = int(m_bar.group(1)) if m_bar else None

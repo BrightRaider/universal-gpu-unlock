@@ -7,7 +7,21 @@ For packaged binaries and downloads, visit [GitHub Releases](https://github.com/
 ---
 
 ## [v1.8.28] - 2026-11-19
-### S3 Sleep Persistence, Stability Hardening & Architecture Refactoring (refs #15, refs #18)
+### Multi-GPU Sequential Unlock, S3 Sleep Persistence & Script Sprawl Consolidation (refs #14, refs #15, refs #18)
+- **Multi-GPU Sequential Unlock Engine (`src/app.c` & `src/dxe_main.c`):**
+  * Implemented sequential multi-GPU unlocking loops in both the pre-boot loader (`RunUnlock`) and DXE driver (`AdaUnlockOnReadyToBoot`).
+  * Iterates across all discovered supported NVIDIA GPUs (`0 .. device_count - 1`), binding each card sequentially via `GuBindDevice`.
+  * Dynamically reloads architecture assets on heterogeneous setups (e.g. Ada Lovelace + Ampere) when switching architectures.
+  * Fault-isolated transaction handling: Failure on a secondary card logs an error and continues to the remaining GPUs without aborting boot.
+  * Registers S3 Boot Script Dispatch for all successfully unlocked GPUs and restores console display handles cleanly at handover.
+- **60-Second Quick Start & Script Sprawl Consolidation:**
+  * Streamlined project root down to clean 1-click entrypoints: `Setup.bat` (Setup), `Check-GPU-Unlock.bat` (CLI Verify), `Launch-Dashboard.bat` (GUI Cockpit), and `Update-USB.bat` (2-second Stick Updater).
+  * Relocated auxiliary tools (`Setup-FastResume`, `Toggle-Sleep-Button`, `Toggle-Turing-GSP`, `Universal-Control-Center`) into `tools/` with backwards-compatible root forwarders.
+  * Integrated all utilities as 1-click action buttons inside `tools/gpu_dashboard.py`.
+- **Multi-GPU & S3 Resume Telemetry in Diagnostics:**
+  * Enhanced `tools/quick_check.py` to benchmark all available CUDA GPUs, reporting per-GPU TFLOPS, CUDA ratio, PCIe links, ReBAR status, and a consolidated multi-GPU summary badge.
+  * Added automated Windows Power-Troubleshooter S3 wake event detection in `quick_check.py` and `gpu_dashboard.py` confirming live sleep persistence.
+  * Added multi-GPU device selector dropdown in `tools/gpu_dashboard.py`.
 - **S3 Sleep Persistence Engine (`[P]` Mode):**
   * Implemented standalone S3 Boot Script Dispatch Handler (`EFI_BOOT_SCRIPT_DISPATCH_2_OPCODE`) with persistent `EfiACPIMemoryNVS` DRAM staging (64 pages / 256 KB).
   * Hardened PIC execution: Staged positions-independent `GuS3ResumeDispatch` machine code (331 bytes, 0 relocations) directly into the ACPI NVS buffer (`nvs_base + 0x00800`), guaranteeing code survival across Windows `ExitBootServices()` and OS memory reclamation.
@@ -30,8 +44,10 @@ For packaged binaries and downloads, visit [GitHub Releases](https://github.com/
   * Bounded device-path walks (`WalkDevicePath`) in `driver_nvram.c`.
   * Consolidated MSVC host tests table in `tests/Run-MsvcHostTests.ps1` with 8/8 automated test suites passing (`MSVC_HOST_TESTS=PASS`).
   * Updated CI Linux workflow to build and run `tests/test_turing_local.c` with gcc and clang.
-- **Known Issues:**
-  * `TU102-ASSETS/v67-tu102-610.43.03.bin` is byte-identical to `GA102-ASSETS/v67-ga102-610.43.03.bin` (same SHA-256). On Turing, rate-limiter registers (`0x82381c`/`0x823820`) are unmapped, meaning full compute gains on TU102/TU104 require a dedicated Turing-native V67 payload.
+- **Turing Architecture Documentation (Issue #15 Analysis):**
+  * Turing TU102/TU104 lacks hardware SS0/SS1 speed-select registers (`0x0082381c`/`0x00823820`, reading `0xbadf5040`). Rate limiting was introduced in Ampere (GA102) and Ada (AD102).
+  * The TU102 payload is byte-identical to GA102 because it reuses the Ampere loader; no GEMM boost occurs via MSR manipulation on Turing.
+  * Verified that Turing compute performance (>85-105 TFLOPS) is unlocked primarily via NVIDIA Windows GSP driver firmware mode (`EnableGpuFirmware = 1`).
 
 ---
 

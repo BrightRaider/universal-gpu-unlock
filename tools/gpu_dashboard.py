@@ -18,54 +18,83 @@ from tkinter import ttk, messagebox
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from gu_system_info import CARD_PROFILES, get_firmware_mode, get_rebar_info  # noqa: E402
 
-def get_gpu_details():
+def get_s3_wake_info():
+    if os.name != "nt":
+        return None
+    try:
+        cmd = [
+            "powershell", "-NoProfile", "-Command",
+            "(Get-WinEvent -FilterHashtable @{LogName='System'; ProviderName='Microsoft-Windows-Power-Troubleshooter'} -MaxEvents 1 -ErrorAction SilentlyContinue | Select-Object -ExpandProperty TimeCreated).ToString('yyyy-MM-dd HH:mm:ss')"
+        ]
+        res = subprocess.check_output(cmd, text=True, stderr=subprocess.DEVNULL).strip()
+        if res:
+            return res
+    except Exception:
+        pass
+    return None
+
+def get_gpu_list():
+    gpus = []
     try:
         import torch
         if torch.cuda.is_available():
-            name = torch.cuda.get_device_name(0)
-            props = torch.cuda.get_device_properties(0)
-            vram_gb = props.total_memory / (1024**3)
-            arch = f"sm_{props.major}{props.minor}"
-            sm = props.multi_processor_count
-            return {
-                "name": name,
-                "arch": arch,
-                "sm": sm,
-                "vram": f"{vram_gb:.1f} GB",
-                "props": props,
-                "torch_ok": True
-            }
+            count = torch.cuda.device_count()
+            for i in range(count):
+                name = torch.cuda.get_device_name(i)
+                props = torch.cuda.get_device_properties(i)
+                vram_gb = props.total_memory / (1024**3)
+                arch = f"sm_{props.major}{props.minor}"
+                sm = props.multi_processor_count
+                gpus.append({
+                    "index": i,
+                    "name": name,
+                    "arch": arch,
+                    "sm": sm,
+                    "vram": f"{vram_gb:.1f} GB",
+                    "props": props,
+                    "torch_ok": True
+                })
+            if gpus:
+                return gpus
     except Exception:
         pass
-    
+
     # Fallback to nvidia-smi if torch not imported
     try:
-        out = subprocess.check_output(["nvidia-smi", "--query-gpu=name,memory.total", "--format=csv,noheader"], text=True)
-        parts = [p.strip() for p in out.strip().split(",")]
-        return {
-            "name": parts[0] if parts else "NVIDIA GPU",
-            "arch": "NVIDIA",
-            "sm": 0,
-            "vram": parts[1] if len(parts) > 1 else "N/A",
-            "props": None,
-            "torch_ok": False
-        }
+        out = subprocess.check_output(["nvidia-smi", "--query-gpu=index,name,memory.total", "--format=csv,noheader"], text=True)
+        for line in out.strip().splitlines():
+            parts = [p.strip() for p in line.split(",")]
+            if len(parts) >= 3:
+                gpus.append({
+                    "index": int(parts[0]),
+                    "name": parts[1],
+                    "arch": "NVIDIA",
+                    "sm": 0,
+                    "vram": parts[2],
+                    "props": None,
+                    "torch_ok": False
+                })
+        if gpus:
+            return gpus
     except Exception:
-        return {
-            "name": "NVIDIA GPU Not Detected",
-            "arch": "Unknown",
-            "sm": 0,
-            "vram": "N/A",
-            "props": None,
-            "torch_ok": False
-        }
+        pass
+
+    return [{
+        "index": 0,
+        "name": "NVIDIA GPU Not Detected",
+        "arch": "Unknown",
+        "sm": 0,
+        "vram": "N/A",
+        "props": None,
+        "torch_ok": False
+    }]
 
 class GpuUnlockApp(tk.Tk):
     def __init__(self):
         super().__init__()
         self.title("Universal GPU Unlock - Status & Diagnostics")
-        self.geometry("820x680")
-        self.minsize(780, 640)
+        self.geometry("860x730")
+        self.minsize(800, 680)
         self.configure(bg="#121212")
 
         # Color Palette
@@ -79,20 +108,36 @@ class GpuUnlockApp(tk.Tk):
         self.c_red = "#FF5252"
         self.c_blue = "#2979FF"
 
-        self.gpu_info = get_gpu_details()
+        self.gpus = get_gpu_list()
+        self.selected_gpu_idx = 0
+        self.gpu_info = self.gpus[0]
         self.fw_mode, self.fw_is_uefi = get_firmware_mode()
-        self.bar1, self.fb, self.rebar_active = get_rebar_info()
+        self.s3_wake = get_s3_wake_info()
+        self.bar1, self.fb, self.rebar_active = get_rebar_info(self.selected_gpu_idx)
 
         self.benchmark_running = False
         self.build_ui()
 
+    def get_repo_path(self, rel_path):
+        repo_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        p = os.path.join(repo_dir, rel_path)
+        if os.path.exists(p):
+            return p
+        p_tools = os.path.join(os.path.dirname(os.path.abspath(__file__)), os.path.basename(rel_path))
+        if os.path.exists(p_tools):
+            return p_tools
+        return p
+
     def build_ui(self):
         # Header Frame
-        header = tk.Frame(self, bg=self.c_bg, padx=20, pady=16)
+        header = tk.Frame(self, bg=self.c_bg, padx=20, pady=14)
         header.pack(fill="x")
 
+        title_frame = tk.Frame(header, bg=self.c_bg)
+        title_frame.pack(side="left", fill="both")
+
         title_lbl = tk.Label(
-            header,
+            title_frame,
             text="UNIVERSAL GPU UNLOCK DASHBOARD",
             font=("Segoe UI", 16, "bold"),
             fg=self.c_text_bright,
@@ -101,13 +146,27 @@ class GpuUnlockApp(tk.Tk):
         title_lbl.pack(anchor="w")
 
         sub_lbl = tk.Label(
-            header,
-            text="Hardware Rate-Limiter Status, System Firmware & Live TFLOPS Benchmark",
+            title_frame,
+            text="Hardware Rate-Limiter Bypass, Multi-GPU Topology & S3 Sleep Persistence",
             font=("Segoe UI", 10),
             fg=self.c_text_dim,
             bg=self.c_bg
         )
         sub_lbl.pack(anchor="w")
+
+        # Multi-GPU Selector in Header if > 1 GPU
+        if len(self.gpus) > 1:
+            sel_frame = tk.Frame(header, bg=self.c_bg)
+            sel_frame.pack(side="right", padx=10)
+            tk.Label(sel_frame, text="Active Device:", font=("Segoe UI", 9, "bold"),
+                     fg=self.c_text_dim, bg=self.c_bg).pack(anchor="e")
+            self.gpu_combo = ttk.Combobox(
+                sel_frame, values=[f"GPU {g['index']}: {g['name']}" for g in self.gpus] + ["All GPUs (Sequential)"],
+                state="readonly", width=28
+            )
+            self.gpu_combo.current(0)
+            self.gpu_combo.bind("<<ComboboxSelected>>", self.on_gpu_selected)
+            self.gpu_combo.pack(anchor="e")
 
         # Main Content Scrollable / Container
         container = tk.Frame(self, bg=self.c_bg, padx=20)
@@ -120,36 +179,38 @@ class GpuUnlockApp(tk.Tk):
 
         # Card 1: GPU Identity
         self.card_gpu = self.create_card(cards_frame, 0, "GPU HARDWARE", self.gpu_info["name"])
-        lbl_arch = tk.Label(self.card_gpu, text=f"Arch: {self.gpu_info['arch']} ({self.gpu_info['sm']} SMs) | VRAM: {self.gpu_info['vram']}",
-                            font=("Segoe UI", 9), fg=self.c_text_dim, bg=self.c_card)
-        lbl_arch.pack(anchor="w", padx=12, pady=(0, 10))
+        self.lbl_arch = tk.Label(self.card_gpu, text=f"Arch: {self.gpu_info['arch']} ({self.gpu_info['sm']} SMs) | VRAM: {self.gpu_info['vram']}",
+                                 font=("Segoe UI", 9), fg=self.c_text_dim, bg=self.c_card)
+        self.lbl_arch.pack(anchor="w", padx=12, pady=(0, 10))
 
-        # Card 2: Firmware & CSM
+        # Card 2: Firmware & S3 Persistence
         fw_color = self.c_green if self.fw_is_uefi else (self.c_red if self.fw_is_uefi is False else self.c_yellow)
         fw_status = "Pure UEFI (OK)" if self.fw_is_uefi else "Legacy CSM (Warning!)"
-        self.card_fw = self.create_card(cards_frame, 1, "BIOS FIRMWARE MODE", fw_status, val_color=fw_color)
-        lbl_fw_detail = tk.Label(self.card_fw, text="CSM: Disabled" if self.fw_is_uefi else "CSM: Active (Disable in BIOS!)",
-                                 font=("Segoe UI", 9), fg=self.c_text_dim, bg=self.c_card)
-        lbl_fw_detail.pack(anchor="w", padx=12, pady=(0, 10))
+        self.card_fw = self.create_card(cards_frame, 1, "BIOS FIRMWARE & S3", fw_status, val_color=fw_color)
+        s3_txt = f"S3 Wake: {self.s3_wake}" if self.s3_wake else ("CSM: Disabled" if self.fw_is_uefi else "CSM: Active!")
+        self.lbl_fw_detail = tk.Label(self.card_fw, text=s3_txt,
+                                      font=("Segoe UI", 9), fg=self.c_green if self.s3_wake else self.c_text_dim, bg=self.c_card)
+        self.lbl_fw_detail.pack(anchor="w", padx=12, pady=(0, 10))
 
         # Card 3: Resizable BAR
         rebar_color = self.c_green if self.rebar_active else (self.c_red if self.rebar_active is False else self.c_text_dim)
         rebar_txt = "ENABLED (Full VRAM)" if self.rebar_active else ("DISABLED (256 MB)!" if self.rebar_active is False else "Undetected")
         self.card_rebar = self.create_card(cards_frame, 2, "RESIZABLE BAR (ReBAR)", rebar_txt, val_color=rebar_color)
         bar_sub = f"BAR1: {self.bar1} MiB (Enable in BIOS!)" if (self.rebar_active is False and self.bar1) else (f"BAR1: {self.bar1} MiB" if self.bar1 else "Query unavailable")
-        lbl_rebar_detail = tk.Label(self.card_rebar, text=bar_sub,
-                                    font=("Segoe UI", 9), fg=self.c_text_dim, bg=self.c_card)
-        lbl_rebar_detail.pack(anchor="w", padx=12, pady=(0, 10))
+        self.lbl_rebar_detail = tk.Label(self.card_rebar, text=bar_sub,
+                                         font=("Segoe UI", 9), fg=self.c_text_dim, bg=self.c_card)
+        self.lbl_rebar_detail.pack(anchor="w", padx=12, pady=(0, 10))
 
         # Main Benchmark Display Box
         bench_box = tk.Frame(container, bg=self.c_card, highlightbackground=self.c_card_border, highlightthickness=1)
-        bench_box.pack(fill="x", pady=12)
+        bench_box.pack(fill="x", pady=10)
 
-        bench_header = tk.Frame(bench_box, bg=self.c_card, padx=16, pady=12)
+        bench_header = tk.Frame(bench_box, bg=self.c_card, padx=16, pady=10)
         bench_header.pack(fill="x")
 
-        tk.Label(bench_header, text="COMPUTE THROUGHPUT STATUS", font=("Segoe UI", 11, "bold"),
-                 fg=self.c_text_bright, bg=self.c_card).pack(side="left")
+        self.lbl_bench_title = tk.Label(bench_header, text="COMPUTE THROUGHPUT STATUS", font=("Segoe UI", 11, "bold"),
+                                        fg=self.c_text_bright, bg=self.c_card)
+        self.lbl_bench_title.pack(side="left")
 
         self.lbl_status_badge = tk.Label(
             bench_header, text="READY TO BENCHMARK", font=("Segoe UI", 10, "bold"),
@@ -158,7 +219,7 @@ class GpuUnlockApp(tk.Tk):
         self.lbl_status_badge.pack(side="right")
 
         # TFLOPS Display Center
-        tflops_center = tk.Frame(bench_box, bg=self.c_card, pady=10)
+        tflops_center = tk.Frame(bench_box, bg=self.c_card, pady=8)
         tflops_center.pack(fill="x")
 
         self.lbl_tflops_big = tk.Label(
@@ -174,7 +235,7 @@ class GpuUnlockApp(tk.Tk):
         self.lbl_tflops_subtitle.pack()
 
         # Detailed Metrics Table
-        metrics_frame = tk.Frame(bench_box, bg=self.c_card, padx=20, pady=12)
+        metrics_frame = tk.Frame(bench_box, bg=self.c_card, padx=20, pady=10)
         metrics_frame.pack(fill="x")
         metrics_frame.columnconfigure((0, 1, 2, 3), weight=1)
 
@@ -188,49 +249,124 @@ class GpuUnlockApp(tk.Tk):
             container, text="Press 'Run TFLOPS Benchmark' to measure live tensor throughput.",
             font=("Segoe UI", 9, "italic"), fg=self.c_text_dim, bg=self.c_bg
         )
-        self.lbl_log.pack(anchor="w", pady=(4, 8))
+        self.lbl_log.pack(anchor="w", pady=(2, 6))
 
-        # Action Buttons Frame
-        btn_frame = tk.Frame(container, bg=self.c_bg)
-        btn_frame.pack(fill="x", pady=6)
+        # Action Buttons Frame (Row 1: Primary Controls)
+        btn_frame1 = tk.Frame(container, bg=self.c_bg)
+        btn_frame1.pack(fill="x", pady=4)
 
         self.btn_run = tk.Button(
-            btn_frame, text="RUN TFLOPS BENCHMARK", font=("Segoe UI", 11, "bold"),
+            btn_frame1, text="RUN TFLOPS BENCHMARK", font=("Segoe UI", 11, "bold"),
             bg="#00C853", fg="#FFFFFF", activebackground="#00E676", activeforeground="#FFFFFF",
-            relief="flat", padx=20, pady=10, cursor="hand2", command=self.start_benchmark_thread
+            relief="flat", padx=18, pady=8, cursor="hand2", command=self.start_benchmark_thread
         )
-        self.btn_run.pack(side="left", padx=(0, 10))
+        self.btn_run.pack(side="left", padx=(0, 8))
 
         btn_refresh = tk.Button(
-            btn_frame, text="Refresh Info", font=("Segoe UI", 10),
+            btn_frame1, text="Refresh Info", font=("Segoe UI", 10),
             bg="#2A2A2A", fg=self.c_text_bright, activebackground="#3A3A3A", activeforeground="#FFFFFF",
-            relief="flat", padx=14, pady=10, cursor="hand2", command=self.refresh_all
+            relief="flat", padx=12, pady=8, cursor="hand2", command=self.refresh_all
         )
-        btn_refresh.pack(side="left", padx=5)
+        btn_refresh.pack(side="left", padx=4)
 
         self.guard_active = self.check_idle_guard()
         guard_txt = "Idle Guard: ACTIVE" if self.guard_active else "Idle Guard: DEFAULT"
         guard_col = "#00C853" if self.guard_active else "#2A2A2A"
         self.btn_guard = tk.Button(
-            btn_frame, text=guard_txt, font=("Segoe UI", 10),
+            btn_frame1, text=guard_txt, font=("Segoe UI", 10),
             bg=guard_col, fg=self.c_text_bright, activebackground="#3A3A3A", activeforeground="#FFFFFF",
-            relief="flat", padx=14, pady=10, cursor="hand2", command=self.toggle_idle_guard
+            relief="flat", padx=12, pady=8, cursor="hand2", command=self.toggle_idle_guard
         )
-        self.btn_guard.pack(side="left", padx=5)
-
-        btn_msinfo = tk.Button(
-            btn_frame, text="Hardware (msinfo32)", font=("Segoe UI", 10),
-            bg="#2A2A2A", fg=self.c_text_bright, activebackground="#3A3A3A", activeforeground="#FFFFFF",
-            relief="flat", padx=14, pady=10, cursor="hand2", command=lambda: subprocess.Popen(["msinfo32.exe"])
-        )
-        btn_msinfo.pack(side="right")
+        self.btn_guard.pack(side="left", padx=4)
 
         btn_devmgr = tk.Button(
-            btn_frame, text="Device Manager", font=("Segoe UI", 10),
+            btn_frame1, text="Device Manager", font=("Segoe UI", 10),
             bg="#2A2A2A", fg=self.c_text_bright, activebackground="#3A3A3A", activeforeground="#FFFFFF",
-            relief="flat", padx=14, pady=10, cursor="hand2", command=lambda: subprocess.Popen(["devmgmt.msc"], shell=True)
+            relief="flat", padx=12, pady=8, cursor="hand2", command=lambda: subprocess.Popen(["devmgmt.msc"], shell=True)
         )
-        btn_devmgr.pack(side="right", padx=5)
+        btn_devmgr.pack(side="right")
+
+        btn_msinfo = tk.Button(
+            btn_frame1, text="msinfo32", font=("Segoe UI", 10),
+            bg="#2A2A2A", fg=self.c_text_bright, activebackground="#3A3A3A", activeforeground="#FFFFFF",
+            relief="flat", padx=12, pady=8, cursor="hand2", command=lambda: subprocess.Popen(["msinfo32.exe"])
+        )
+        btn_msinfo.pack(side="right", padx=4)
+
+        # Quick Tools & Integrations Frame (Row 2: 1-Click Utilities)
+        tools_box = tk.LabelFrame(
+            container, text=" 60-Second Quick Utilities & Integrations ",
+            font=("Segoe UI", 9, "bold"), fg=self.c_text_dim, bg=self.c_bg, padx=10, pady=8
+        )
+        tools_box.pack(fill="x", pady=(10, 4))
+
+        btn_gsp = tk.Button(
+            tools_box, text="Turing GSP Mode", font=("Segoe UI", 9),
+            bg="#242424", fg=self.c_text_bright, activebackground="#333333", relief="flat", padx=10, pady=6,
+            command=self.launch_turing_gsp
+        )
+        btn_gsp.pack(side="left", padx=4)
+
+        btn_sleep = tk.Button(
+            tools_box, text="Sleep Shortcut", font=("Segoe UI", 9),
+            bg="#242424", fg=self.c_text_bright, activebackground="#333333", relief="flat", padx=10, pady=6,
+            command=self.launch_sleep_button
+        )
+        btn_sleep.pack(side="left", padx=4)
+
+        btn_fastresume = tk.Button(
+            tools_box, text="Fast-Resume Setup", font=("Segoe UI", 9),
+            bg="#242424", fg=self.c_text_bright, activebackground="#333333", relief="flat", padx=10, pady=6,
+            command=self.launch_fast_resume
+        )
+        btn_fastresume.pack(side="left", padx=4)
+
+        btn_cc = tk.Button(
+            tools_box, text="Universal Control Center", font=("Segoe UI", 9),
+            bg="#242424", fg=self.c_text_bright, activebackground="#333333", relief="flat", padx=10, pady=6,
+            command=self.launch_control_center
+        )
+        btn_cc.pack(side="left", padx=4)
+
+        btn_usb = tk.Button(
+            tools_box, text="Update USB Stick", font=("Segoe UI", 9, "bold"),
+            bg="#1565C0", fg="#FFFFFF", activebackground="#1E88E5", relief="flat", padx=12, pady=6,
+            command=self.launch_usb_update
+        )
+        btn_usb.pack(side="right", padx=4)
+
+    def on_gpu_selected(self, event=None):
+        sel_idx = self.gpu_combo.current()
+        if sel_idx < len(self.gpus):
+            self.selected_gpu_idx = sel_idx
+            self.gpu_info = self.gpus[sel_idx]
+            self.lbl_card_val_gpu.config(text=self.gpu_info["name"])
+            self.lbl_arch.config(text=f"Arch: {self.gpu_info['arch']} ({self.gpu_info['sm']} SMs) | VRAM: {self.gpu_info['vram']}")
+            self.bar1, self.fb, self.rebar_active = get_rebar_info(self.selected_gpu_idx)
+            bar_sub = f"BAR1: {self.bar1} MiB" if self.bar1 else "Query unavailable"
+            self.lbl_rebar_detail.config(text=bar_sub)
+        else:
+            self.selected_gpu_idx = -1  # All GPUs
+
+    def launch_turing_gsp(self):
+        script = self.get_repo_path("tools/Toggle-Turing-GSP.bat")
+        subprocess.Popen(f'start cmd /c "{script}"', shell=True)
+
+    def launch_sleep_button(self):
+        script = self.get_repo_path("tools/Toggle-Sleep-Button.bat")
+        subprocess.Popen(f'start cmd /c "{script}"', shell=True)
+
+    def launch_fast_resume(self):
+        script = self.get_repo_path("tools/Setup-FastResume.bat")
+        subprocess.Popen(f'start cmd /c "{script}"', shell=True)
+
+    def launch_control_center(self):
+        script = self.get_repo_path("tools/Universal-Control-Center.ps1")
+        subprocess.Popen(["powershell.exe", "-STA", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", script])
+
+    def launch_usb_update(self):
+        script = self.get_repo_path("Update-USB.bat")
+        subprocess.Popen(f'start cmd /c "{script}"', shell=True)
 
     def create_card(self, parent, col, title, val_text, val_color=None):
         if val_color is None:
@@ -239,7 +375,10 @@ class GpuUnlockApp(tk.Tk):
         card.grid(row=0, column=col, padx=4, sticky="nsew")
 
         tk.Label(card, text=title, font=("Segoe UI", 8, "bold"), fg=self.c_text_dim, bg=self.c_card).pack(anchor="w", padx=12, pady=(10, 2))
-        tk.Label(card, text=val_text, font=("Segoe UI", 11, "bold"), fg=val_color, bg=self.c_card).pack(anchor="w", padx=12, pady=(0, 4))
+        lbl_val = tk.Label(card, text=val_text, font=("Segoe UI", 11, "bold"), fg=val_color, bg=self.c_card)
+        lbl_val.pack(anchor="w", padx=12, pady=(0, 4))
+        if col == 0:
+            self.lbl_card_val_gpu = lbl_val
         return card
 
     def create_metric_col(self, parent, col, title, initial_val):
@@ -274,11 +413,7 @@ class GpuUnlockApp(tk.Tk):
         return False
 
     def toggle_idle_guard(self):
-        repo_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-        fast_resume = os.path.join(repo_dir, "Setup-FastResume.bat")
-        if not os.path.exists(fast_resume):
-            fast_resume = os.path.join(os.path.dirname(os.path.abspath(__file__)), "Setup-FastResume.bat")
-
+        fast_resume = self.get_repo_path("tools/Setup-FastResume.bat")
         target_arg = "--revert" if self.guard_active else "--yes"
         cmd = f'powershell -NoProfile -Command "Start-Process cmd.exe -ArgumentList \'/c \"\"{fast_resume}\"\" {target_arg} --no-pause\' -Verb RunAs -Wait"'
         try:
@@ -289,9 +424,22 @@ class GpuUnlockApp(tk.Tk):
             self.lbl_log.config(text=f"Failed to toggle guard: {e}", fg=self.c_red)
 
     def refresh_all(self):
-        self.gpu_info = get_gpu_details()
+        self.gpus = get_gpu_list()
+        if self.selected_gpu_idx >= len(self.gpus) or self.selected_gpu_idx < 0:
+            self.selected_gpu_idx = 0
+        self.gpu_info = self.gpus[self.selected_gpu_idx]
+        self.lbl_card_val_gpu.config(text=self.gpu_info["name"])
+        self.lbl_arch.config(text=f"Arch: {self.gpu_info['arch']} ({self.gpu_info['sm']} SMs) | VRAM: {self.gpu_info['vram']}")
+
         self.fw_mode, self.fw_is_uefi = get_firmware_mode()
-        self.bar1, self.fb, self.rebar_active = get_rebar_info()
+        self.s3_wake = get_s3_wake_info()
+        s3_txt = f"S3 Wake: {self.s3_wake}" if self.s3_wake else ("CSM: Disabled" if self.fw_is_uefi else "CSM: Active!")
+        self.lbl_fw_detail.config(text=s3_txt, fg=self.c_green if self.s3_wake else self.c_text_dim)
+
+        self.bar1, self.fb, self.rebar_active = get_rebar_info(self.selected_gpu_idx)
+        bar_sub = f"BAR1: {self.bar1} MiB" if self.bar1 else "Query unavailable"
+        self.lbl_rebar_detail.config(text=bar_sub)
+
         self.guard_active = self.check_idle_guard()
         if hasattr(self, "btn_guard"):
             self.btn_guard.config(
@@ -315,9 +463,10 @@ class GpuUnlockApp(tk.Tk):
                 self.after(0, lambda: self.finish_benchmark_error("CUDA is not available on this system."))
                 return
 
-            device = torch.device("cuda:0")
-            gpu_name = torch.cuda.get_device_name(0)
-            props = torch.cuda.get_device_properties(0)
+            dev_idx = 0 if self.selected_gpu_idx < 0 else self.selected_gpu_idx
+            device = torch.device(f"cuda:{dev_idx}")
+            gpu_name = torch.cuda.get_device_name(dev_idx)
+            props = torch.cuda.get_device_properties(dev_idx)
             size = 4096
 
             if hasattr(torch.backends, "cudnn") and hasattr(torch.backends.cudnn, "benchmark"):
@@ -331,8 +480,8 @@ class GpuUnlockApp(tk.Tk):
                     profile = prof
                     break
             if profile is None:
-                threshold = props.multi_processor_count * 1.35 if (props.major==8 and props.minor==9) else props.multi_processor_count * 1.15
-                profile = {"min_unlocked": threshold * 1.15, "threshold": threshold, "stock": threshold * 0.75}
+                threshold = props.multi_processor_count * 1.35 if (props.major == 8 and props.minor == 9) else props.multi_processor_count * 1.15
+                profile = {"min_unlocked": threshold * 1.15, "threshold": threshold, "stock_typical": threshold * 0.75}
 
             def bench(dtype, runs=20, warmup=5):
                 a = torch.randn((size, size), dtype=dtype, device=device)
@@ -352,12 +501,12 @@ class GpuUnlockApp(tk.Tk):
                 del a, b
                 return ms, tflops
 
-            self.after(0, lambda: self.lbl_log.config(text="Measuring FP16 Tensor Cores (GEMM)..."))
+            self.after(0, lambda: self.lbl_log.config(text=f"Measuring FP16 Tensor Cores on GPU {dev_idx}..."))
             ms_fp16, tflops_fp16 = bench(torch.float16, runs=25, warmup=8)
 
             has_bf16 = hasattr(torch.cuda, "is_bf16_supported") and torch.cuda.is_bf16_supported()
             if has_bf16:
-                self.after(0, lambda: self.lbl_log.config(text="Measuring BF16 Tensor Cores..."))
+                self.after(0, lambda: self.lbl_log.config(text=f"Measuring BF16 Tensor Cores on GPU {dev_idx}..."))
                 ms_bf16, tflops_bf16 = bench(torch.bfloat16, runs=15, warmup=4)
             else:
                 ms_bf16, tflops_bf16 = 0.0, 0.0
@@ -365,14 +514,14 @@ class GpuUnlockApp(tk.Tk):
             has_tf32 = props.major >= 8 and hasattr(torch.backends.cuda.matmul, "allow_tf32")
             if has_tf32:
                 torch.backends.cuda.matmul.allow_tf32 = True
-                self.after(0, lambda: self.lbl_log.config(text="Measuring TF32 Tensor Cores..."))
+                self.after(0, lambda: self.lbl_log.config(text=f"Measuring TF32 Tensor Cores on GPU {dev_idx}..."))
                 ms_tf32, tflops_tf32 = bench(torch.float32, runs=15, warmup=4)
             else:
                 ms_tf32, tflops_tf32 = 0.0, 0.0
 
             if hasattr(torch.backends.cuda.matmul, "allow_tf32"):
                 torch.backends.cuda.matmul.allow_tf32 = False
-            self.after(0, lambda: self.lbl_log.config(text="Measuring FP32 CUDA Control..."))
+            self.after(0, lambda: self.lbl_log.config(text=f"Measuring FP32 CUDA Control on GPU {dev_idx}..."))
             ms_fp32, tflops_fp32 = bench(torch.float32, runs=15, warmup=4)
 
             torch.cuda.empty_cache()

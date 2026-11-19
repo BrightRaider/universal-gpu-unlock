@@ -56,19 +56,48 @@ static VOID EFIAPI AdaUnlockOnReadyToBoot(EFI_EVENT event, VOID *context) {
   s = GuPrepare();
   if (s != EFI_SUCCESS || Gu.fault) goto finish;
 
-  GuLog("DXE-DRIVER: Priming Primary GPU [1/%u]: DevID 0x%04x\n",
-        (unsigned)device_count, (unsigned)devices[0].device_id);
-
   GuBootSay(L"[Universal GPU Unlock] Performing pre-boot hardware unlock...\r\n");
 
-  s = GuExecuteUnlock(mDxeTable, mDxeImage, &stage);
-  if (s != EFI_SUCCESS || Gu.fault) goto finish;
+  UINTN unlocked_count = 0;
+  for (UINTN g = 0; g < device_count; g++) {
+    if (g > 0) {
+      GuBindDevice(mDxeTable->BootServices, mDxeImage, &devices[g]);
+      if (devices[g].is_ampere != devices[0].is_ampere || devices[g].is_turing != devices[0].is_turing) {
+        s = GuBootLoadAssets();
+        if (s != EFI_SUCCESS || Gu.fault) {
+          GuLog("DXE-DRIVER: Secondary GPU [%u/%u] asset load failed; skipping\n",
+                (unsigned)(g + 1), (unsigned)device_count);
+          continue;
+        }
+      }
+      s = GuPrepare();
+      if (s != EFI_SUCCESS || Gu.fault) {
+        GuLog("DXE-DRIVER: Secondary GPU [%u/%u] prepare failed (%#llx); skipping\n",
+              (unsigned)(g + 1), (unsigned)device_count, (unsigned long long)s);
+        continue;
+      }
+    }
+
+    GuLog("DXE-DRIVER: Priming GPU [%u/%u]: DevID 0x%04x (%s)\n",
+          (unsigned)(g + 1), (unsigned)device_count, (unsigned)devices[g].device_id,
+          GuArchName(&devices[g]));
+
+    s = GuExecuteUnlock(mDxeTable, mDxeImage, &stage);
+    if (s != EFI_SUCCESS || Gu.fault) {
+      if (g == 0) goto finish;
+      GuLog("DXE-DRIVER: Secondary GPU [%u/%u] unlock failed (%#llx); continuing\n",
+            (unsigned)(g + 1), (unsigned)device_count, (unsigned long long)s);
+    } else {
+      unlocked_count++;
+    }
+
+    /* Register S3 Boot Script Table via EFI_S3_SAVE_STATE_PROTOCOL */
+    (VOID)GuRegisterS3(mDxeTable);
+  }
 
   stage = "dxe-finish";
-  GuLog("DXE-DRIVER: TRANSACTION OK: hardware readbacks passed!\n");
-
-  /* Register S3 Boot Script Table via EFI_S3_SAVE_STATE_PROTOCOL */
-  (VOID)GuRegisterS3(mDxeTable);
+  GuLog("DXE-DRIVER: TRANSACTION OK: %u of %u GPU(s) unlocked, hardware readbacks passed!\n",
+        (unsigned)unlocked_count, (unsigned)device_count);
 
 finish:
   if (s == EFI_SUCCESS && Gu.fault) s = EFI_DEVICE_ERROR;
