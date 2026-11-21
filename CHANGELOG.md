@@ -7,6 +7,14 @@ For packaged binaries and downloads, visit [GitHub Releases](https://github.com/
 ---
 
 ## [Unreleased]
+### Fixed
+- **Multi-GPU Plan State Reset Between GPUs (refs #19):** Fixed `EFI_ALREADY_STARTED` (`0x8000000000000014`) on secondary GPUs caused by persistent file-static `Plan` state in `src/unlock_release.c`. Added `GuUnlockPrepareNextGpu()` to safely reset `Plan` and `GuHardwareVerified` between cards when the prior GPU cleanly finished or was untouched.
+- **Headless GOP Framebuffer Preservation (refs #19):** In multi-GPU configurations, the primary display adapter is rotated to the end of the unlock queue (`devices[device_count - 1]`), ensuring secondary headless GPUs retain an active GOP framebuffer during preflight before display FLR is executed.
+- **Stale Multi-GPU Inventory Log Message:** Removed outdated log warning in `src/gpu_discovery.c` that falsely claimed only GPU [1/N] is processed.
+
+### Added
+- **Automated Multi-GPU Preflight Host Test:** Added `tests/test_multi_gpu_second_preflight.c` validating plan clearing and rejection guards across multi-GPU passes.
+- **Community Hardware Verification (refs #19):** Added verified physical benchmark for dual Ampere setup on ASUS TUF GAMING Z590-PLUS WIFI (Intel i5-11600K) running HP OEM RTX 3090 24GB + EVGA RTX 3060 12GB achieving 86.0 TFLOPS and 49.6 TFLOPS respectively.
 
 ## [v1.8.28] - 2026-11-21
 ### Multi-GPU Sequential Unlock, S3 Sleep Persistence & Script Sprawl Consolidation (refs #14, refs #15, refs #18)

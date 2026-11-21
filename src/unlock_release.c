@@ -740,6 +740,23 @@ EFI_STATUS GuUnlockFinish(VOID) {
   return s;
 }
 BOOLEAN GuUnlockMutated(VOID){return Plan.mutated;}
+BOOLEAN GuUnlockClaimed(VOID){return Plan.claimed;}
+static BOOLEAN GuHardwareVerified = FALSE;
+BOOLEAN GuUnlockPrepareNextGpu(VOID) {
+  BOOLEAN finished = Plan.ready && Plan.mutated && Plan.stage == 3 && !Plan.claimed &&
+                     !Gu.owned && !Gu.fault && !Gu.retained && Gu.quiesced && Gu.flrs == 1 &&
+                     GuSafeToReturn() && GuHardwareVerified;
+  BOOLEAN untouched = !Plan.mutated && !Plan.claimed && !Gu.started && !Gu.owned && !Gu.retained;
+  if (!finished && !untouched) {
+    GuLog("GuUnlockPrepareNextGpu: refused (ready=%u mutated=%u stage=%zu claimed=%u owned=%u fault=%u quiesced=%u flrs=%u hw=%u)\n",
+          Plan.ready, Plan.mutated, (size_t)Plan.stage, Plan.claimed, Gu.owned, Gu.fault, Gu.quiesced, Gu.flrs,
+          (unsigned)GuHardwareVerified);
+    return FALSE;
+  }
+  memset(&Plan, 0, sizeof(Plan));
+  GuHardwareVerified = FALSE;
+  return TRUE;
+}
 /* PMC_BOOT_0 bits 31:24 name the architecture: Turing 0x16, Ampere 0x17/0xb7, Ada 0x19. */
 static BOOLEAN ChipMatchesTarget(UINT32 chip) {
   if (chip == 0xffffffffU || (chip & 0xffff0000U) == 0xbadf0000U) return FALSE;
@@ -748,7 +765,6 @@ static BOOLEAN ChipMatchesTarget(UINT32 chip) {
   if (Gu.is_ampere) return arch == 0x07U;
   return arch == 0x09U;
 }
-static BOOLEAN GuHardwareVerified = FALSE;
 
 /* Verify silicon state while device is exclusively claimed and MMIO is fully active. */
 static BOOLEAN GuVerifyHardwareRegisters(VOID) {

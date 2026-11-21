@@ -7,6 +7,9 @@ BOOLEAN GuUnlockReleased(VOID);
 EFI_STATUS GuUnlockFinish(VOID);
 BOOLEAN GuUnlockReadyForWindows(VOID);
 BOOLEAN GuUnlockMutated(VOID);
+#define GU_HAVE_NEXT_GPU_RESET 1
+BOOLEAN GuUnlockClaimed(VOID);
+BOOLEAN GuUnlockPrepareNextGpu(VOID);
 BOOLEAN GuUnlockIsCsmVideo(VOID);
 BOOLEAN GuDetectCsmVideoDriver(UINT64 pci_attributes, BOOLEAN has_nv_agent,
                                UINT32 driver_ver, UINTN driver_size);

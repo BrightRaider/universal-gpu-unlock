@@ -20,6 +20,7 @@ EFI_STATUS GuUnlockAllGpus(EFI_SYSTEM_TABLE *t, EFI_HANDLE image,
                            const char **stage, UINTN *unlocked, UINTN *failed) {
   const GU_DISCOVERED_DEVICE *assets_for = devices;
   EFI_STATUS s = EFI_SUCCESS;
+  EFI_STATUS last_refusal = EFI_NOT_FOUND;
   UINTN g;
 
   if (!t || !devices || !count || !stage || !unlocked || !failed) return EFI_INVALID_PARAMETER;
@@ -61,7 +62,15 @@ EFI_STATUS GuUnlockAllGpus(EFI_SYSTEM_TABLE *t, EFI_HANDLE image,
           (unsigned)(g + 1), (unsigned)count, (unsigned)dev->device_id, GuArchName(dev));
     s = GuExecuteUnlock(t, image, stage);
     if (Failed(s)) {
-      /* Plan.mutated is global, so a change on this GPU cannot be ruled out: stop. */
+      if (!GuUnlockMutated() && !GuUnlockClaimed() && !Gu.started && !Gu.retained &&
+          GuUnlockPrepareNextGpu()) {
+        GuLog("%sGPU [%u/%u] refused at stage=%s before any change (%#llx); skipped, it stays stock\n",
+              log_prefix, (unsigned)(g + 1), (unsigned)count, *stage, (unsigned long long)s);
+        GuBindDevice(t->BootServices, image, dev);
+        *failed = g;
+        last_refusal = s != EFI_SUCCESS ? s : EFI_DEVICE_ERROR;
+        continue;
+      }
       *failed = g;
       return s != EFI_SUCCESS ? s : EFI_DEVICE_ERROR;
     }
@@ -76,6 +85,13 @@ EFI_STATUS GuUnlockAllGpus(EFI_SYSTEM_TABLE *t, EFI_HANDLE image,
       }
     }
     (*unlocked)++;
+
+    if (g + 1 < count && !GuUnlockPrepareNextGpu()) {
+      *stage = "next-gpu-reset";
+      *failed = g;
+      return EFI_NOT_READY;
+    }
   }
+  if (*unlocked == 0) return last_refusal;
   return EFI_SUCCESS;
 }

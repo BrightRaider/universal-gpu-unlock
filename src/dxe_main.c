@@ -44,6 +44,12 @@ static VOID EFIAPI AdaUnlockOnReadyToBoot(EFI_EVENT event, VOID *context) {
   s = GuDiscoverAllGpus(mDxeImage, mDxeTable, devices, GU_MAX_DISCOVERED_DEVICES, &device_count);
   if (s != EFI_SUCCESS || device_count == 0) goto finish;
 
+  if (device_count > 1) {
+    GU_DISCOVERED_DEVICE display = devices[0];
+    for (UINTN i = 1; i < device_count; i++) devices[i - 1] = devices[i];
+    devices[device_count - 1] = display;
+  }
+
   /* Bind primary GPU for initial assets & cold profile */
   GuBindDevice(mDxeTable->BootServices, mDxeImage, &devices[0]);
 
@@ -105,8 +111,8 @@ finish:
 
     (VOID)GuBootSyncLog();
 
-    if (devices[0].handle) {
-      (VOID)GuReconnectDisplayAfterUnlock(mDxeTable, mDxeImage, devices[0].handle, TRUE);
+    if (devices[device_count - 1].handle) {
+      (VOID)GuReconnectDisplayAfterUnlock(mDxeTable, mDxeImage, devices[device_count - 1].handle, TRUE);
     }
   }
   (VOID)GuBootClose();

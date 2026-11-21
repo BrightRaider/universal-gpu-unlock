@@ -178,8 +178,8 @@ static EFI_STATUS RunUnlock(EFI_SYSTEM_TABLE *t, EFI_HANDLE image,
 
   (VOID) GuBootSyncLog();
 
-  if (gpu[0].handle) {
-    (VOID) GuReconnectDisplayAfterUnlock(t, image, gpu[0].handle, TRUE);
+  if (gpu[device_count - 1].handle) {
+    (VOID) GuReconnectDisplayAfterUnlock(t, image, gpu[device_count - 1].handle, TRUE);
   }
 
   GuBootUnsilence();
@@ -229,6 +229,12 @@ EFI_STATUS EFIAPI UefiMain(EFI_HANDLE image, EFI_SYSTEM_TABLE *t) {
                         &device_count);
   if (s != EFI_SUCCESS || device_count == 0)
     return RunFailure(t, image, NULL, "discover", s);
+
+  if (device_count > 1) {
+    GU_DISCOVERED_DEVICE display = devices[0];
+    for (UINTN i = 1; i < device_count; i++) devices[i - 1] = devices[i];
+    devices[device_count - 1] = display;
+  }
 
   const GU_DISCOVERED_DEVICE *gpu = &devices[0];
 

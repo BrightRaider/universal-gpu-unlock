@@ -27,6 +27,7 @@ $tests = [ordered]@{
     'test_gpu_discovery' = @('gpu_inventory.c')
     'test_turing_local'  = @()
     'test_s3_resume'     = @('s3_resume.c')
+    'test_multi_gpu_second_preflight' = @()
 }
 $lines = @('@echo off', "call `"$VcVars`" >nul", 'if errorlevel 1 exit /b 1', "set `"GU_REPO_ROOT=$repo`"", "cd /d `"$OutDir`"")
 foreach ($test in $tests.Keys) {

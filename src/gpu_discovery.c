@@ -203,6 +203,6 @@ VOID GuLogInventory(const char *prefix, const GU_DISCOVERED_DEVICE *devices, UIN
     GuLog("%s  GPU [%u/%u]: DevID 0x%04x (%s)\n", prefix, (unsigned)(g + 1), (unsigned)count,
           (unsigned)devices[g].device_id, GuArchName(&devices[g]));
   if (count > 1)
-    GuLog("%sWARNING: only GPU [1/%u] is processed; the other GPU(s) stay stock\n", prefix,
+    GuLog("%sMulti-GPU: %u GPU(s) queued for sequential unlock\n", prefix,
           (unsigned)count);
 }
