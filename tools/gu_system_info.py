@@ -7,6 +7,11 @@ import os
 import re
 import subprocess
 
+# Number CUDA devices in PCI bus order, the same order nvidia-smi uses, so a
+# torch device index can be passed to "nvidia-smi -i". Must be set before torch
+# initializes CUDA; both tools import this module first.
+os.environ.setdefault("CUDA_DEVICE_ORDER", "PCI_BUS_ID")
+
 def get_firmware_mode():
     try:
         ft = ctypes.c_uint()
@@ -71,3 +76,21 @@ CARD_PROFILES = {
     "2060": {"min_unlocked": 42.0, "threshold": 35.0, "stock_typical": 22.0},
     "cmp 50hx": {"min_unlocked": 105.0, "threshold": 85.0, "stock_typical": 54.0},
 }
+
+
+def get_last_wake_time():
+    """Time of the last wake from sleep or hibernation, or None.
+
+    This only says that Windows woke up at some point. It does not show that the
+    GPU unlock survived the sleep."""
+    if os.name != "nt":
+        return None
+    try:
+        cmd = [
+            "powershell", "-NoProfile", "-Command",
+            "(Get-WinEvent -FilterHashtable @{LogName='System'; ProviderName='Microsoft-Windows-Power-Troubleshooter'} -MaxEvents 1 -ErrorAction SilentlyContinue | Select-Object -ExpandProperty TimeCreated).ToString('yyyy-MM-dd HH:mm:ss')"
+        ]
+        res = subprocess.check_output(cmd, text=True, stderr=subprocess.DEVNULL).strip()
+        return res or None
+    except Exception:
+        return None

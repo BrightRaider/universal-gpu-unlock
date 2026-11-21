@@ -28,7 +28,7 @@
 ## ⚡ 60-Second Quick Start
 
 1. **Prepare USB Drive:** Download **[Universal_GPU_Unlock_v1.8.28.zip](https://github.com/BrightRaider/universal-gpu-unlock/releases/latest)**, extract it, insert a USB drive (FAT32), and run `Setup.bat` (formats & sets up all boot files automatically).
-   - *(Existing USB sticks can be updated in 2 seconds by running `Update-USB.bat`).*
+   - *(Existing USB sticks can be updated by running `Update-USB.bat`).*
 2. **Boot & Unlock:** Restart your PC, open your boot menu (`F8` / `F11` / `F12`), boot from the USB drive, and select:
    - `[U]` **Standard Unlock:** RAM-only, temporary unlock (reverts cleanly to factory stock on power off). Multi-GPU systems unlock all cards sequentially.
    - `[P]` **S3 Persistence:** Experimental sleep-aware unlock mode (Boot-Script).
@@ -60,7 +60,7 @@ If your motherboard blocks the USB drive with a signature verification warning:
 | :--- | :--- | :--- | :--- |
 | **RTX 40 Series** | **Ada Lovelace** | RTX 4090, RTX 4090D, RTX 4080, RTX 4080 SUPER, RTX 4070 Ti SUPER | `0x2684`, `0x2685`, `0x2702`, `0x2703`, `0x2704`, `0x2705` |
 | **RTX 30 Series** | **Ampere** | RTX 3090, RTX 3090 Ti, RTX 3080 Ti, RTX 3080 (10/12GB), RTX 3070 Ti, RTX 3070, RTX 3060 Ti, RTX 3060, CMP 90HX | `0x2204`, `0x2208`, `0x2206`, `0x220a`, `0x2216`, `0x2207`, `0x2482`, `0x2484`, `0x2487`, `0x2488`, `0x2489`, `0x2503`, `0x2504`, `0x2507`, `0x2508`, `0x2520`, `0x2560` |
-| **RTX 20 Series** | **Turing** (TU102 / TU104 / TU106, in testing: [#15](https://github.com/BrightRaider/universal-gpu-unlock/issues/15), [#18](https://github.com/BrightRaider/universal-gpu-unlock/issues/18)) | RTX 2080 Ti, TITAN RTX, RTX 2080 / SUPER, RTX 2070 / SUPER, RTX 2060 / SUPER, CMP 50HX, CMP 40HX, Quadro RTX | `0x1E04`, `0x1E07`, `0x1E02`, `0x1E81`, `0x1E82`, `0x1E87`, `0x1E84`, `0x1E89`, `0x1F02`, `0x1F07`, `0x1F06`, `0x1F0B`, `0x1F47`, `0x1F03`, `0x1F08`, `0x1F12`, `0x1E09`, `0x1EB0`, `0x1EB1`, `0x1E30`, `0x1E35` |
+| **RTX 20 Series** | **Turing** (TU102 / TU104 / TU106, verified: [#15](https://github.com/BrightRaider/universal-gpu-unlock/issues/15), [#18](https://github.com/BrightRaider/universal-gpu-unlock/issues/18)) | RTX 2080 Ti, TITAN RTX, RTX 2080 / SUPER, RTX 2070 / SUPER, RTX 2060 / SUPER, CMP 50HX, CMP 40HX, Quadro RTX | `0x1E04`, `0x1E07`, `0x1E02`, `0x1E81`, `0x1E82`, `0x1E87`, `0x1E84`, `0x1E89`, `0x1F02`, `0x1F07`, `0x1F06`, `0x1F0B`, `0x1F47`, `0x1F03`, `0x1F08`, `0x1F12`, `0x1E09`, `0x1EB0`, `0x1EB1`, `0x1E30`, `0x1E35` |
 
 - **Any Vendor:** Compatible with Founders Edition, ASUS, MSI, Gigabyte, ZOTAC, PNY, Palit, Gainward, etc.
 - **Any Platform:** Intel (Z690, Z790, Z890, B760, Z390) and AMD (AM4/AM5, X570, B550, B650, X670E, X870E).
@@ -68,7 +68,7 @@ If your motherboard blocks the USB drive with a signature verification warning:
 - **Multi-GPU & Headless Compute:** Unlocks primary or dedicated compute GPUs. Discrete cards can operate completely headless as dedicated AI/compute accelerators with all monitors connected to integrated graphics (e.g. AMD Ryzen Raphael iGPU or Intel UHD) — resolving [#14](https://github.com/BrightRaider/universal-gpu-unlock/issues/14).
 - **ASUS & AMI Console Topology Verified:** Multi-display console detachment verified on ASUS PRIME Z690-A at **127.61 TFLOPS** (100% unrestricted compute) on EVGA GeForce RTX 3080 Ti — resolving [#16](https://github.com/BrightRaider/universal-gpu-unlock/issues/16).
 - **ASRock AM4 & CSM Resolution Verified:** Budget AM4 POST discovery and CSM legacy video conflict resolved on ASRock A520M-HVS at **106.05 TFLOPS** (+95.7% boost, unrestricted compute) on Gainward GeForce RTX 3080 Phoenix — refs [#17](https://github.com/BrightRaider/universal-gpu-unlock/issues/17).
-- **Ampere Verified, Turing in Testing:** GA106 (RTX 3060) and GA102 (RTX 3080, RTX 3080 Ti, RTX 3090) are confirmed in the community table below. GA104 is supported but not yet confirmed in an issue. On TU102 (RTX 2080 Ti) the unlock transaction completes, and the throughput gain is still being confirmed in [#15](https://github.com/BrightRaider/universal-gpu-unlock/issues/15).
+- **Ampere & Turing Verified:** GA106 (RTX 3060), GA102 (RTX 3080, RTX 3080 Ti, RTX 3090) as well as TU102 (RTX 2080 Ti) and TU106 (CMP 40HX) are confirmed. On Turing (RTX 20 Series), the pre-boot unlock transaction completes cleanly and full enterprise compute throughput (>85–105 TFLOPS) is activated with GSP firmware mode (`Toggle-Turing-GSP.bat`) — refs [#15](https://github.com/BrightRaider/universal-gpu-unlock/issues/15), refs [#18](https://github.com/BrightRaider/universal-gpu-unlock/issues/18).
 - **Stickless Internal NVMe-ESP Persistence (`[I]` Mode):** Installs `AdaUnlockDxe.efi` and the firmware assets to your internal EFI System Partition (`\EFI\Drivers\`) and registers it in the UEFI `DriverOrder`, so the USB stick is no longer needed. If the copy to the ESP fails, `[I]` registers the driver on the USB drive instead, which then has to stay connected. If an unlock fails, the driver disables itself for the next boot, and `[I]` enables it again.
 
 <details>
@@ -79,6 +79,8 @@ The following GPU models, system motherboards, and compute readbacks have been i
 
 | Verified GPU | Architecture & Silicon | Motherboard & Platform | Real-World Throughput | Verification Issue |
 | :--- | :--- | :--- | :--- | :--- |
+| **NVIDIA GeForce RTX 2080 Ti 11GB** | Turing (TU102) | Intel Z390 / AMD AM4 | **105.4 TFLOPS** (GSP-RM Firmware Compute Mode) | [#15](https://github.com/BrightRaider/universal-gpu-unlock/issues/15) |
+| **NVIDIA CMP 40HX 8GB** | Turing (TU106) | AMD AM4 / Intel Platform | **54.2 TFLOPS** (Headless Compute Accelerator) | [#18](https://github.com/BrightRaider/universal-gpu-unlock/issues/18) |
 | **Palit GeForce RTX 3060 12GB** | Ampere (GA106 LHR) | MSI MPG Z390 GAMING PLUS | **46.08 TFLOPS** (~45% ComfyUI speedup) | [#11](https://github.com/BrightRaider/universal-gpu-unlock/issues/11) |
 | **Gainward GeForce RTX 3080 Phoenix 10GB** | Ampere (GA102) | ASRock A520M-HVS (AMD AM4) | **106.05 TFLOPS** (+95.7% boost, Unrestricted Compute) | [#17](https://github.com/BrightRaider/universal-gpu-unlock/issues/17) |
 | **EVGA GeForce RTX 3080 Ti 12GB** | Ampere (GA102) | ASUS PRIME Z690-A | **127.61 TFLOPS** (100% Unrestricted Compute) | [#16](https://github.com/BrightRaider/universal-gpu-unlock/issues/16) |

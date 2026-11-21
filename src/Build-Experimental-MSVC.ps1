@@ -22,6 +22,7 @@ try {
         'gpu_inventory.c',
         'gpu_discovery.c',
         'profile.c',
+        'multi_gpu.c',
         'sha256.c',
         'runtime.c',
         'format.c',

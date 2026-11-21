@@ -25,7 +25,7 @@ C_RESET = "\033[0m"
 
 # Shared helpers live next to this script (tools/gu_system_info.py).
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from gu_system_info import CARD_PROFILES, get_firmware_mode, get_rebar_info  # noqa: E402
+from gu_system_info import CARD_PROFILES, get_firmware_mode, get_last_wake_time, get_rebar_info  # noqa: E402
 
 def get_pcie_info(gpu_index=0):
     candidates = [
@@ -50,21 +50,6 @@ def get_pcie_info(gpu_index=0):
         except Exception:
             continue
     return None, None, False
-
-def get_s3_wake_info():
-    if os.name != "nt":
-        return None
-    try:
-        cmd = [
-            "powershell", "-NoProfile", "-Command",
-            "(Get-WinEvent -FilterHashtable @{LogName='System'; ProviderName='Microsoft-Windows-Power-Troubleshooter'} -MaxEvents 1 -ErrorAction SilentlyContinue | Select-Object -ExpandProperty TimeCreated).ToString('yyyy-MM-dd HH:mm:ss')"
-        ]
-        res = subprocess.check_output(cmd, text=True, stderr=subprocess.DEVNULL).strip()
-        if res:
-            return res
-    except Exception:
-        pass
-    return None
 
 def copy_to_clipboard(text):
     if os.name == "nt":
@@ -241,7 +226,7 @@ def evaluate_gpu(dev_idx, dev_count, fw_str):
 
 def main():
     fw_str, fw_is_uefi = get_firmware_mode()
-    wake_time = get_s3_wake_info()
+    wake_time = get_last_wake_time()
 
     try:
         global torch
@@ -255,7 +240,7 @@ def main():
         print("  SYSTEM HARDWARE ENVIRONMENT:")
         print(f"  * Firmware Mode      : {fw_str}")
         if wake_time:
-            print(f"  * S3/S4 Wake Event   : {C_GREEN}[OK] Resumed at {wake_time} (Sleep Persistence Active){C_RESET}")
+            print(f"  * Last Wake (S3/S4)  : {wake_time} (does not show whether the unlock survived)")
         if rebar_active is True:
             print(f"  * Resizable BAR      : {C_GREEN}[OK] ENABLED (BAR1: {bar1} MiB / VRAM: {fb} MiB){C_RESET}")
         elif rebar_active is False:
@@ -301,7 +286,7 @@ def main():
     print("  SYSTEM HARDWARE ENVIRONMENT:")
     print(f"  * Firmware Mode      : {fw_str}")
     if wake_time:
-        print(f"  * S3/S4 Wake Event   : {C_GREEN}[OK] Resumed at {wake_time} (Sleep Persistence Active){C_RESET}")
+        print(f"  * Last Wake (S3/S4)  : {wake_time} (does not show whether the unlock survived)")
     print(f"  * NVIDIA CUDA GPUs   : {dev_count} device(s) detected")
     print("-" * 72)
 
@@ -333,7 +318,7 @@ def main():
     if dev_count == 1:
         r0 = results[0]
         tag = "UNLOCKED" if r0["is_unlocked"] else "STOCK"
-        rebar_str = f"{r0['bar1']}MB (Active)" if r0["rebar_active"] else "Disabled"
+        rebar_str = f"{r0['bar1']}MB (Active)" if r0["rebar_active"] else ("Disabled" if r0["rebar_active"] is False else "N/A")
         pcie_str = f"Gen{r0['gen_max']} x{r0['width_max']}" if r0["gen_max"] else "N/A"
         summary_badge = f"[{tag}] {r0['name']}: {r0['tflops']:.1f} TFLOPS | ReBAR: {rebar_str} | PCIe: {pcie_str} | BIOS: {fw_str}"
     else:

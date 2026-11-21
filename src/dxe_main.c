@@ -7,6 +7,7 @@
 #include "unlock_release.h"
 #include "boot_io.h"
 #include "driver_nvram.h"
+#include "multi_gpu.h"
 #include "compat/compat.h"
 
 /* Standard UEFI ReadyToBoot event group GUID:
@@ -38,7 +39,7 @@ static VOID EFIAPI AdaUnlockOnReadyToBoot(EFI_EVENT event, VOID *context) {
 
   const char *stage = "dxe-discover";
   GU_DISCOVERED_DEVICE devices[GU_MAX_DISCOVERED_DEVICES];
-  UINTN device_count = 0;
+  UINTN device_count = 0, unlocked_count = 0, failed = 0;
 
   s = GuDiscoverAllGpus(mDxeImage, mDxeTable, devices, GU_MAX_DISCOVERED_DEVICES, &device_count);
   if (s != EFI_SUCCESS || device_count == 0) goto finish;
@@ -58,41 +59,11 @@ static VOID EFIAPI AdaUnlockOnReadyToBoot(EFI_EVENT event, VOID *context) {
 
   GuBootSay(L"[Universal GPU Unlock] Performing pre-boot hardware unlock...\r\n");
 
-  UINTN unlocked_count = 0;
-  for (UINTN g = 0; g < device_count; g++) {
-    if (g > 0) {
-      GuBindDevice(mDxeTable->BootServices, mDxeImage, &devices[g]);
-      if (devices[g].is_ampere != devices[0].is_ampere || devices[g].is_turing != devices[0].is_turing) {
-        s = GuBootLoadAssets();
-        if (s != EFI_SUCCESS || Gu.fault) {
-          GuLog("DXE-DRIVER: Secondary GPU [%u/%u] asset load failed; skipping\n",
-                (unsigned)(g + 1), (unsigned)device_count);
-          continue;
-        }
-      }
-      s = GuPrepare();
-      if (s != EFI_SUCCESS || Gu.fault) {
-        GuLog("DXE-DRIVER: Secondary GPU [%u/%u] prepare failed (%#llx); skipping\n",
-              (unsigned)(g + 1), (unsigned)device_count, (unsigned long long)s);
-        continue;
-      }
-    }
-
-    GuLog("DXE-DRIVER: Priming GPU [%u/%u]: DevID 0x%04x (%s)\n",
-          (unsigned)(g + 1), (unsigned)device_count, (unsigned)devices[g].device_id,
-          GuArchName(&devices[g]));
-
-    s = GuExecuteUnlock(mDxeTable, mDxeImage, &stage);
-    if (s != EFI_SUCCESS || Gu.fault) {
-      if (g == 0) goto finish;
-      GuLog("DXE-DRIVER: Secondary GPU [%u/%u] unlock failed (%#llx); continuing\n",
-            (unsigned)(g + 1), (unsigned)device_count, (unsigned long long)s);
-    } else {
-      unlocked_count++;
-    }
-
-    /* Register S3 Boot Script Table via EFI_S3_SAVE_STATE_PROTOCOL */
-    (VOID)GuRegisterS3(mDxeTable);
+  s = GuUnlockAllGpus(mDxeTable, mDxeImage, devices, device_count, GU_UNLOCK_REGISTER_S3,
+                      "DXE-DRIVER: ", &stage, &unlocked_count, &failed);
+  if (s != EFI_SUCCESS) {
+    GuLog("DXE-DRIVER: GPU [%u/%u] failed\n", (unsigned)(failed + 1), (unsigned)device_count);
+    goto finish;
   }
 
   stage = "dxe-finish";
@@ -129,8 +100,8 @@ finish:
       return;
     }
   } else {
-    GuLog("DXE-DRIVER: Succeeded for GPU [1/%u]. Handing over to OS loader.\n",
-          (unsigned)device_count);
+    GuLog("DXE-DRIVER: Succeeded for %u of %u GPU(s). Handing over to OS loader.\n",
+          (unsigned)unlocked_count, (unsigned)device_count);
 
     (VOID)GuBootSyncLog();
 

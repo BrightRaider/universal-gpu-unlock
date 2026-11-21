@@ -1,53 +1,79 @@
 @echo off
 setlocal EnableDelayedExpansion
-title Universal GPU Unlock - 1-Click USB Updater
+title Universal GPU Unlock - USB Updater
 color 0F
 cls
 
 echo ====================================================================
-echo      UNIVERSAL GPU UNLOCK - 1-CLICK USB STICK QUICK UPDATER
+echo      UNIVERSAL GPU UNLOCK - USB STICK UPDATER
 echo ====================================================================
 echo.
 
+:: Usage: Update-USB.bat [F:] [--no-pause]
+:: A drive given on the command line is used without asking.
 set "TARGET_DRIVE=%~1"
+set "ASK_CONFIRM="
 
 if not defined TARGET_DRIVE (
-    for /f "usebackq delims=" %%A in (`powershell -NoProfile -Command "Get-CimInstance Win32_LogicalDisk | Where-Object { $_.DriveType -eq 2 } | Select-Object -ExpandProperty DeviceID"`) do (
+    set "ASK_CONFIRM=1"
+    echo  Removable drives found:
+    for /f "usebackq delims=" %%A in (`powershell -NoProfile -Command "Get-CimInstance Win32_LogicalDisk | Where-Object { $_.DriveType -eq 2 } | ForEach-Object { '{0}  {1}  {2}' -f $_.DeviceID, $_.FileSystem, $_.VolumeName }"`) do (
+        echo    %%A
         if not defined TARGET_DRIVE set "TARGET_DRIVE=%%A"
     )
+    echo.
 )
 
 if not defined TARGET_DRIVE (
     echo [!] No removable USB drive detected automatically.
-    set /p "TARGET_DRIVE=Please enter your USB Drive Letter (e.g. F:): "
+    set /p "TARGET_DRIVE=Please enter your USB drive letter (e.g. F:): "
 )
 
 if not defined TARGET_DRIVE (
     echo [ERROR] No drive specified. Exiting.
-    pause
+    if not "%~2"=="--no-pause" pause
     exit /b 1
 )
 
-:: Ensure drive ends with colon
+:: Keep only the drive letter and add the colon.
 set "CLEAN_DRIVE=%TARGET_DRIVE:~0,1%:"
 
-echo  Target USB Drive: %CLEAN_DRIVE%
+if defined ASK_CONFIRM (
+    set "ANSWER="
+    set /p "ANSWER=Update drive %CLEAN_DRIVE%? Type Y to continue, or another letter to pick that drive: "
+    if /i "!ANSWER!"=="Y" (
+        rem keep the detected drive
+    ) else if defined ANSWER (
+        set "CLEAN_DRIVE=!ANSWER:~0,1!:"
+        set "ANSWER="
+        set /p "ANSWER=Update drive !CLEAN_DRIVE!? [Y/N]: "
+        if /i not "!ANSWER!"=="Y" goto :cancelled
+    ) else (
+        goto :cancelled
+    )
+)
+
+echo.
+echo  Target USB drive: %CLEAN_DRIVE%
 echo  Deploying latest binaries, assets, and tools...
 echo.
 
-powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "& { . '%~dp0tools\Deploy-UsbCommon.ps1'; Deploy-UniversalToUsb -Drive '%CLEAN_DRIVE%' -RepoRoot '%~dp0' -OnLog { param($m, $c) if ($c) { Write-Host $m -ForegroundColor $c } else { Write-Host $m } } }"
+powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "& { try { . '%~dp0tools\Deploy-UsbCommon.ps1'; Deploy-UniversalToUsb -Drive '%CLEAN_DRIVE%' -RepoRoot '%~dp0' -OnLog { param($m, $c) if ($c) { Write-Host $m -ForegroundColor $c } else { Write-Host $m } } } catch { Write-Host ('[ERROR] ' + $_.Exception.Message) -ForegroundColor Red; exit 1 } }"
+set "RC=%ERRORLEVEL%"
 
-if %ERRORLEVEL% equ 0 (
-    echo.
-    echo ====================================================================
-    echo   [OK] USB DRIVE %CLEAN_DRIVE% UPDATED SUCCESSFULLY IN 2 SECONDS!
-    echo ====================================================================
+echo.
+echo ====================================================================
+if "%RC%"=="0" (
+    echo   [OK] USB drive %CLEAN_DRIVE% updated.
 ) else (
-    echo.
-    echo ====================================================================
     echo   [ERROR] Failed to update USB drive %CLEAN_DRIVE%.
-    echo ====================================================================
 )
+echo ====================================================================
 
 if not "%~2"=="--no-pause" pause
-exit /b %ERRORLEVEL%
+exit /b %RC%
+
+:cancelled
+echo Cancelled. Nothing was changed.
+if not "%~2"=="--no-pause" pause
+exit /b 1

@@ -16,22 +16,7 @@ from tkinter import ttk, messagebox
 
 # Shared helpers live next to this script (tools/gu_system_info.py).
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from gu_system_info import CARD_PROFILES, get_firmware_mode, get_rebar_info  # noqa: E402
-
-def get_s3_wake_info():
-    if os.name != "nt":
-        return None
-    try:
-        cmd = [
-            "powershell", "-NoProfile", "-Command",
-            "(Get-WinEvent -FilterHashtable @{LogName='System'; ProviderName='Microsoft-Windows-Power-Troubleshooter'} -MaxEvents 1 -ErrorAction SilentlyContinue | Select-Object -ExpandProperty TimeCreated).ToString('yyyy-MM-dd HH:mm:ss')"
-        ]
-        res = subprocess.check_output(cmd, text=True, stderr=subprocess.DEVNULL).strip()
-        if res:
-            return res
-    except Exception:
-        pass
-    return None
+from gu_system_info import CARD_PROFILES, get_firmware_mode, get_last_wake_time, get_rebar_info  # noqa: E402
 
 def get_gpu_list():
     gpus = []
@@ -112,8 +97,8 @@ class GpuUnlockApp(tk.Tk):
         self.selected_gpu_idx = 0
         self.gpu_info = self.gpus[0]
         self.fw_mode, self.fw_is_uefi = get_firmware_mode()
-        self.s3_wake = get_s3_wake_info()
-        self.bar1, self.fb, self.rebar_active = get_rebar_info(self.selected_gpu_idx)
+        self.s3_wake = get_last_wake_time()
+        self.bar1, self.fb, self.rebar_active = get_rebar_info(self.gpu_info["index"])
 
         self.benchmark_running = False
         self.build_ui()
@@ -161,7 +146,7 @@ class GpuUnlockApp(tk.Tk):
             tk.Label(sel_frame, text="Active Device:", font=("Segoe UI", 9, "bold"),
                      fg=self.c_text_dim, bg=self.c_bg).pack(anchor="e")
             self.gpu_combo = ttk.Combobox(
-                sel_frame, values=[f"GPU {g['index']}: {g['name']}" for g in self.gpus] + ["All GPUs (Sequential)"],
+                sel_frame, values=[f"GPU {g['index']}: {g['name']}" for g in self.gpus],
                 state="readonly", width=28
             )
             self.gpu_combo.current(0)
@@ -187,9 +172,8 @@ class GpuUnlockApp(tk.Tk):
         fw_color = self.c_green if self.fw_is_uefi else (self.c_red if self.fw_is_uefi is False else self.c_yellow)
         fw_status = "Pure UEFI (OK)" if self.fw_is_uefi else "Legacy CSM (Warning!)"
         self.card_fw = self.create_card(cards_frame, 1, "BIOS FIRMWARE & S3", fw_status, val_color=fw_color)
-        s3_txt = f"S3 Wake: {self.s3_wake}" if self.s3_wake else ("CSM: Disabled" if self.fw_is_uefi else "CSM: Active!")
-        self.lbl_fw_detail = tk.Label(self.card_fw, text=s3_txt,
-                                      font=("Segoe UI", 9), fg=self.c_green if self.s3_wake else self.c_text_dim, bg=self.c_card)
+        self.lbl_fw_detail = tk.Label(self.card_fw, text=self.firmware_detail_text(),
+                                      font=("Segoe UI", 9), fg=self.c_text_dim, bg=self.c_card)
         self.lbl_fw_detail.pack(anchor="w", padx=12, pady=(0, 10))
 
         # Card 3: Resizable BAR
@@ -303,70 +287,58 @@ class GpuUnlockApp(tk.Tk):
         btn_gsp = tk.Button(
             tools_box, text="Turing GSP Mode", font=("Segoe UI", 9),
             bg="#242424", fg=self.c_text_bright, activebackground="#333333", relief="flat", padx=10, pady=6,
-            command=self.launch_turing_gsp
+            command=lambda: self.launch_script("tools/Toggle-Turing-GSP.bat")
         )
         btn_gsp.pack(side="left", padx=4)
 
         btn_sleep = tk.Button(
             tools_box, text="Sleep Shortcut", font=("Segoe UI", 9),
             bg="#242424", fg=self.c_text_bright, activebackground="#333333", relief="flat", padx=10, pady=6,
-            command=self.launch_sleep_button
+            command=lambda: self.launch_script("tools/Toggle-Sleep-Button.bat")
         )
         btn_sleep.pack(side="left", padx=4)
 
         btn_fastresume = tk.Button(
             tools_box, text="Fast-Resume Setup", font=("Segoe UI", 9),
             bg="#242424", fg=self.c_text_bright, activebackground="#333333", relief="flat", padx=10, pady=6,
-            command=self.launch_fast_resume
+            command=lambda: self.launch_script("tools/Setup-FastResume.bat")
         )
         btn_fastresume.pack(side="left", padx=4)
 
         btn_cc = tk.Button(
             tools_box, text="Universal Control Center", font=("Segoe UI", 9),
             bg="#242424", fg=self.c_text_bright, activebackground="#333333", relief="flat", padx=10, pady=6,
-            command=self.launch_control_center
+            command=lambda: self.launch_script("tools/Universal-Control-Center.cmd")
         )
         btn_cc.pack(side="left", padx=4)
 
         btn_usb = tk.Button(
             tools_box, text="Update USB Stick", font=("Segoe UI", 9, "bold"),
             bg="#1565C0", fg="#FFFFFF", activebackground="#1E88E5", relief="flat", padx=12, pady=6,
-            command=self.launch_usb_update
+            command=lambda: self.launch_script("Update-USB.bat")
         )
         btn_usb.pack(side="right", padx=4)
 
     def on_gpu_selected(self, event=None):
-        sel_idx = self.gpu_combo.current()
-        if sel_idx < len(self.gpus):
-            self.selected_gpu_idx = sel_idx
-            self.gpu_info = self.gpus[sel_idx]
-            self.lbl_card_val_gpu.config(text=self.gpu_info["name"])
-            self.lbl_arch.config(text=f"Arch: {self.gpu_info['arch']} ({self.gpu_info['sm']} SMs) | VRAM: {self.gpu_info['vram']}")
-            self.bar1, self.fb, self.rebar_active = get_rebar_info(self.selected_gpu_idx)
-            bar_sub = f"BAR1: {self.bar1} MiB" if self.bar1 else "Query unavailable"
-            self.lbl_rebar_detail.config(text=bar_sub)
-        else:
-            self.selected_gpu_idx = -1  # All GPUs
+        self.selected_gpu_idx = self.gpu_combo.current()
+        self.gpu_info = self.gpus[self.selected_gpu_idx]
+        self.lbl_card_val_gpu.config(text=self.gpu_info["name"])
+        self.lbl_arch.config(text=f"Arch: {self.gpu_info['arch']} ({self.gpu_info['sm']} SMs) | VRAM: {self.gpu_info['vram']}")
+        self.bar1, self.fb, self.rebar_active = get_rebar_info(self.gpu_info["index"])
+        bar_sub = f"BAR1: {self.bar1} MiB" if self.bar1 else "Query unavailable"
+        self.lbl_rebar_detail.config(text=bar_sub)
 
-    def launch_turing_gsp(self):
-        script = self.get_repo_path("tools/Toggle-Turing-GSP.bat")
-        subprocess.Popen(f'start cmd /c "{script}"', shell=True)
+    def firmware_detail_text(self):
+        csm = "CSM: Disabled" if self.fw_is_uefi else "CSM: Active!"
+        return f"{csm} | Last wake: {self.s3_wake}" if self.s3_wake else csm
 
-    def launch_sleep_button(self):
-        script = self.get_repo_path("tools/Toggle-Sleep-Button.bat")
-        subprocess.Popen(f'start cmd /c "{script}"', shell=True)
-
-    def launch_fast_resume(self):
-        script = self.get_repo_path("tools/Setup-FastResume.bat")
-        subprocess.Popen(f'start cmd /c "{script}"', shell=True)
-
-    def launch_control_center(self):
-        script = self.get_repo_path("tools/Universal-Control-Center.ps1")
-        subprocess.Popen(["powershell.exe", "-STA", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", script])
-
-    def launch_usb_update(self):
-        script = self.get_repo_path("Update-USB.bat")
-        subprocess.Popen(f'start cmd /c "{script}"', shell=True)
+    def launch_script(self, rel_path):
+        """Opens a .bat/.cmd from the repository in its own console window."""
+        script = self.get_repo_path(rel_path)
+        if not os.path.exists(script):
+            self.lbl_log.config(text=f"Not found: {rel_path}", fg=self.c_red)
+            return
+        subprocess.Popen(f'start "" cmd /c "{script}"', shell=True)
 
     def create_card(self, parent, col, title, val_text, val_color=None):
         if val_color is None:
@@ -425,18 +397,17 @@ class GpuUnlockApp(tk.Tk):
 
     def refresh_all(self):
         self.gpus = get_gpu_list()
-        if self.selected_gpu_idx >= len(self.gpus) or self.selected_gpu_idx < 0:
+        if self.selected_gpu_idx >= len(self.gpus):
             self.selected_gpu_idx = 0
         self.gpu_info = self.gpus[self.selected_gpu_idx]
         self.lbl_card_val_gpu.config(text=self.gpu_info["name"])
         self.lbl_arch.config(text=f"Arch: {self.gpu_info['arch']} ({self.gpu_info['sm']} SMs) | VRAM: {self.gpu_info['vram']}")
 
         self.fw_mode, self.fw_is_uefi = get_firmware_mode()
-        self.s3_wake = get_s3_wake_info()
-        s3_txt = f"S3 Wake: {self.s3_wake}" if self.s3_wake else ("CSM: Disabled" if self.fw_is_uefi else "CSM: Active!")
-        self.lbl_fw_detail.config(text=s3_txt, fg=self.c_green if self.s3_wake else self.c_text_dim)
+        self.s3_wake = get_last_wake_time()
+        self.lbl_fw_detail.config(text=self.firmware_detail_text())
 
-        self.bar1, self.fb, self.rebar_active = get_rebar_info(self.selected_gpu_idx)
+        self.bar1, self.fb, self.rebar_active = get_rebar_info(self.gpu_info["index"])
         bar_sub = f"BAR1: {self.bar1} MiB" if self.bar1 else "Query unavailable"
         self.lbl_rebar_detail.config(text=bar_sub)
 
@@ -463,7 +434,7 @@ class GpuUnlockApp(tk.Tk):
                 self.after(0, lambda: self.finish_benchmark_error("CUDA is not available on this system."))
                 return
 
-            dev_idx = 0 if self.selected_gpu_idx < 0 else self.selected_gpu_idx
+            dev_idx = self.selected_gpu_idx
             device = torch.device(f"cuda:{dev_idx}")
             gpu_name = torch.cuda.get_device_name(dev_idx)
             props = torch.cuda.get_device_properties(dev_idx)

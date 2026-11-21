@@ -8,6 +8,7 @@
 #include "boot_io.h"
 #include "compat/compat.h"
 #include "driver_nvram.h"
+#include "multi_gpu.h"
 
 static EFI_STATUS GuRebootSystem(EFI_SYSTEM_TABLE *t, EFI_STATUS s) {
   (VOID) GuBootClose();
@@ -142,7 +143,7 @@ static EFI_STATUS RunStock(VOID) {
   return GuBootWindows();
 }
 
-/* [U] or [P]: run the unlock on the first GPU and hand over to Windows. */
+/* [U] or [P]: run the unlock on every supported GPU and hand over to Windows. */
 static EFI_STATUS RunUnlock(EFI_SYSTEM_TABLE *t, EFI_HANDLE image,
                             const GU_DISCOVERED_DEVICE *gpu, UINTN device_count,
                             BOOLEAN enable_s3) {
@@ -168,48 +169,12 @@ static EFI_STATUS RunUnlock(EFI_SYSTEM_TABLE *t, EFI_HANDLE image,
 
   GuBootSilence();
 
-  UINTN unlocked_count = 0;
-  for (UINTN g = 0; g < device_count; g++) {
-    if (g > 0) {
-      GuBindDevice(t->BootServices, image, &gpu[g]);
-      if (gpu[g].is_ampere != gpu[0].is_ampere || gpu[g].is_turing != gpu[0].is_turing) {
-        s = GuBootLoadAssets();
-        if (s != EFI_SUCCESS || Gu.fault) {
-          GuLog("Secondary GPU [%u/%u] asset load failed; skipping\n",
-                (unsigned)(g + 1), (unsigned)device_count);
-          continue;
-        }
-      }
-      s = GuPrepare();
-      if (s != EFI_SUCCESS || Gu.fault) {
-        GuLog("Secondary GPU [%u/%u] prepare failed (%#llx); skipping\n",
-              (unsigned)(g + 1), (unsigned)device_count, (unsigned long long)s);
-        continue;
-      }
-    }
-
-    GuLog("--- Processing GPU [%u/%u]: DevID 0x%04x (%s) ---\n",
-          (unsigned)(g + 1), (unsigned)device_count, (unsigned)gpu[g].device_id,
-          GuArchName(&gpu[g]));
-
-    s = GuExecuteUnlock(t, image, &stage);
-    if (s != EFI_SUCCESS || Gu.fault) {
-      if (g == 0)
-        return RunFailure(t, image, &gpu[0], stage, s);
-      GuLog("Secondary GPU [%u/%u] unlock failed (%#llx); continuing\n",
-            (unsigned)(g + 1), (unsigned)device_count, (unsigned long long)s);
-    } else {
-      unlocked_count++;
-    }
-
-    if (enable_s3 && s == EFI_SUCCESS) {
-      (VOID) GuRegisterS3(t);
-    }
-  }
-
-  stage = "final-Windows-verification";
-  if (!GuUnlockReadyForWindows())
-    return RunFailure(t, image, &gpu[0], stage, EFI_NOT_READY);
+  UINTN unlocked_count = 0, failed = 0;
+  UINT32 options = GU_UNLOCK_VERIFY_WINDOWS | (enable_s3 ? GU_UNLOCK_REGISTER_S3 : 0U);
+  s = GuUnlockAllGpus(t, image, gpu, device_count, options, "", &stage,
+                      &unlocked_count, &failed);
+  if (s != EFI_SUCCESS)
+    return RunFailure(t, image, &gpu[failed], stage, s);
 
   (VOID) GuBootSyncLog();
 

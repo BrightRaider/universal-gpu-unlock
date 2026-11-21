@@ -38,7 +38,7 @@ function Get-GuSupportedGpuIds([string]$RepoRoot) {
     return $table
 }
 
-# Everything the Control Center and the benchmark need on the USB drive under tools\.
+# Everything the Control Center, the benchmark and the root launchers need on the USB drive under tools\.
 function Get-GuUsbToolFiles {
     return @(
         'quick_check.py',
@@ -47,7 +47,11 @@ function Get-GuUsbToolFiles {
         'Universal-Control-Center.ps1',
         'Universal-Control-Center-Detection.ps1',
         'Universal-Control-Center-Deployment.ps1',
-        'Universal-Control-Center-Diagnostics.ps1'
+        'Universal-Control-Center-Diagnostics.ps1',
+        # Targets of the launcher stubs copied to the stick root.
+        'Universal-Control-Center.cmd',
+        'Toggle-Turing-GSP.bat',
+        'Toggle-Sleep-Button.bat'
     )
 }
 

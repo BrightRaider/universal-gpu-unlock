@@ -132,11 +132,11 @@ Alle Kernkomponenten werden über gemockte Firmware-Services automatisiert valid
 In Workstations und Multi-GPU-Setups (z. B. Dual RTX 4090 oder RTX 4090 + RTX 3090) verarbeitete der UEFI-Bootloader in älteren Versionen lediglich den primären Anzeige-Controller (`gpu[0]`). Sekundäre Karten blieben im uninitialisierten Werkszustand mit aktivem Rate-Limiter zurück.
 
 ### 8.2 Die sequentielle Unlock-Schleife
-Ab v1.8.28 implementieren sowohl die Bootloader-Anwendung (`src/app.c`) als auch der permanente DXE-Treiber (`src/dxe_main.c`) eine vollständige Multi-GPU-Schleife:
+Ab v1.8.28 nutzen sowohl die Bootloader-Anwendung (`src/app.c`) als auch der permanente DXE-Treiber (`src/dxe_main.c`) dieselbe Multi-GPU-Schleife `GuUnlockAllGpus` (`src/multi_gpu.c`):
 1. **Sequentielles Binding:** Der Bootloader iteriert über alle erkannten unterstützten NVIDIA-Grafikkarten (`0 .. device_count - 1`) und bindet jede Karte per `GuBindDevice`.
-2. **Dynamischer Asset-Reload:** Bei heterogenen Kombinationen (z. B. Ada Lovelace + Ampere) erkennt der Bootloader den Architekturwechsel (`is_ampere` / `is_turing`) und lädt die spezifischen Firmware-Payloads (`AD102-ASSETS` vs `GA102-ASSETS`) dynamisch nach.
-3. **Autarke Transaktions-Isolation:** Schlägt die Freischaltung einer sekundären Karte fehl, wird der Fehler protokolliert und mit der nächsten Karte fortgefahren, ohne den Systemstart abzubrechen.
-4. **S3 Boot Script Registrierung für alle Karten:** Jede erfolgreich entsperrte GPU wird im ACPI-Boot-Script-Table für das unterbrechungsfreie Aufwachen aus dem Standby (S3) registriert.
+2. **Dynamischer Asset-Reload:** Bei heterogenen Kombinationen (z. B. Ada Lovelace + Ampere) erkennt der Bootloader den Architekturwechsel (`is_ampere` / `is_turing`) und lädt die spezifischen Firmware-Payloads (`AD102-ASSETS` vs `GA102-ASSETS`) nach, sobald sich die Architektur gegenüber den zuletzt geladenen Assets ändert.
+3. **Fehlerbehandlung:** Schlagen bei einer sekundären Karte das Laden der Assets oder die nur lesende Vorprüfung (`GuPrepare`) fehl, wird sie übersprungen und bleibt im Werkszustand. Schlägt die eigentliche Freischaltung einer Karte fehl, bricht der Start über den normalen Fehlerpfad ab, weil die Karte dann schon verändert sein kann.
+4. **S3 Boot Script Registrierung:** Nach jeder erfolgreich entsperrten GPU wird das S3-Boot-Script registriert (beim Bootloader nur im Modus `[P]`). Ob dabei die Einträge aller Karten erhalten bleiben, ist noch nicht auf Hardware geprüft.
 5. **Console-Reconnect:** Erst nach Abschluss aller GPU-Transaktionen wird der primäre Display-Controller wieder mit dem UEFI-Console-Out-System verbunden.
 
 ---
@@ -150,9 +150,9 @@ Durch das Hinzufügen vieler einzelner Werkzeuge (`Setup-FastResume.bat`, `Toggl
 ### 9.2 Die bereinigte Struktur
 Ab v1.8.28 ist das Wurzelverzeichnis auf die wesentlichen 1-Klick-Einstiegspunkte reduziert:
 - **`Setup.bat`:** 1-Klick Einrichtung (erstellt den USB-Stick oder installiert den DXE-Treiber).
-- **`Check-GPU-Unlock.bat`:** 1-Klick CLI-Verifikation (Multi-GPU-fähig, zeigt TFLOPS, CUDA-Verhältnis, ReBAR, PCIe-Link und S3-Wake-Status).
+- **`Check-GPU-Unlock.bat`:** 1-Klick CLI-Verifikation (Multi-GPU-fähig, zeigt TFLOPS, CUDA-Verhältnis, ReBAR, PCIe-Link und den letzten Aufwachzeitpunkt von Windows).
 - **`Launch-Dashboard.bat`:** 1-Klick GUI Cockpit (vereint alle Statusanzeigen, Multi-GPU-Auswahl, Benchmark und Direkt-Buttons für alle Werkzeuge).
-- **`Update-USB.bat`:** 1-Klick Schnell-Aktualisierung für bestehende USB-Sticks (erkennt den Stick automatisch und aktualisiert Binärdateien & Skripte in 2 Sekunden).
+- **`Update-USB.bat`:** 1-Klick Schnell-Aktualisierung für bestehende USB-Sticks (schlägt den ersten Wechseldatenträger vor, fragt nach und aktualisiert dann Binärdateien & Skripte).
 
 Alle spezifischen Hilfsskripte wurden sauber nach `tools/` ausgelagert. Im Dashboard stehen sie als direkte 1-Klick-Schaltflächen zur Verfügung, sodass kein Benutzer mehr manuell nach Hilfsskripten suchen muss. Im Wurzelverzeichnis verbleiben lediglich transparente 2-Zeilen-Forwarder für vollständige Abwärtskompatibilität.
 
