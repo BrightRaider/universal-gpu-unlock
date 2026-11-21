@@ -11,7 +11,7 @@ For packaged binaries and downloads, visit [GitHub Releases](https://github.com/
 ## [v1.8.28] - 2026-11-21
 ### Multi-GPU Sequential Unlock, S3 Sleep Persistence & Script Sprawl Consolidation (refs #14, refs #15, refs #18)
 - **Verified Hardware & Community Benchmarks:**
-  * **MSI GeForce RTX 3090 24GB Community Verification:** Added verified physical benchmark on ASUS ROG STRIX B550-E GAMING (AMD Ryzen 7 5800X3D) at **105.10 TFLOPS** (FP16 Tensor, 4.80x execution throughput multiplier over stock 21.88 TFLOPS FP32 CUDA baseline, 100% unrestricted compute).
+  * **MSI GeForce RTX 3090 GAMING X TRIO 24G Community Verification:** Added verified physical benchmark on ASUS ROG STRIX B550-E GAMING (AMD Ryzen 7 5800X3D) at **105.10 TFLOPS** (FP16 Tensor, 4.80x execution throughput multiplier over stock 21.88 TFLOPS FP32 CUDA baseline, 100% unrestricted compute).
   * **Turing Series (RTX 20 / CMP) Status Confirmed Functional (refs #15, refs #18):** Promoted Turing (TU102, TU104, TU106) across documentation and `README.md` to verified and functional status. Pre-boot unlock transaction executes cleanly, and full enterprise compute throughput (>85–105 TFLOPS) is confirmed with official NVIDIA GSP firmware mode (`Toggle-Turing-GSP.bat`).
 - **Multi-GPU Sequential Unlock Engine (`src/multi_gpu.c`, `src/app.c` & `src/dxe_main.c`):**
   * Consolidated sequential multi-GPU unlocking loop into unified `GuUnlockAllGpus()` engine shared by both pre-boot loader (`BOOTX64.EFI`) and DXE driver (`AdaUnlockDxe.efi`).
