@@ -7,6 +7,8 @@ For packaged binaries and downloads, visit [GitHub Releases](https://github.com/
 ---
 
 ## [Unreleased]
+
+## [v1.8.29] - 2026-11-21
 ### Fixed
 - **Multi-GPU Plan State Reset Between GPUs (refs #19):** Fixed `EFI_ALREADY_STARTED` (`0x8000000000000014`) on secondary GPUs caused by persistent file-static `Plan` state in `src/unlock_release.c`. Added `GuUnlockPrepareNextGpu()` to safely reset `Plan` and `GuHardwareVerified` between cards when the prior GPU cleanly finished or was untouched.
 - **Headless GOP Framebuffer Preservation (refs #19):** In multi-GPU configurations, the primary display adapter is rotated to the end of the unlock queue (`devices[device_count - 1]`), ensuring secondary headless GPUs retain an active GOP framebuffer during preflight before display FLR is executed.
