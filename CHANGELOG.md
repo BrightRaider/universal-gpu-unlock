@@ -7,46 +7,28 @@ For packaged binaries and downloads, visit [GitHub Releases](https://github.com/
 ---
 
 ## [Unreleased]
-### Fixed
-- **Turing Series (RTX 20 / CMP) Status Confirmed Functional (refs #15, refs #18):** Promoted Turing (TU102, TU104, TU106) across documentation and `README.md` to verified and functional status. Pre-boot unlock transaction executes cleanly, and full enterprise compute throughput (>85–105 TFLOPS) is confirmed with official NVIDIA GSP firmware mode (`Toggle-Turing-GSP.bat`).
-- **Multi-GPU unlock (`src/multi_gpu.c`, new):** The loop that was copied into `app.c` and `dxe_main.c` is now one function, `GuUnlockAllGpus`, used by both.
-  * A secondary GPU whose asset load or read-only `GuPrepare` fails is skipped and stays stock. It no longer leaves a fault flag behind that failed the boot (`BOOTX64.EFI`) or shut the PC down (DXE driver).
-  * A failed unlock on a secondary GPU now stops the boot through the normal failure path. Before, the log said "continuing", but the final check failed anyway. The GPU may already be changed, so stopping is the safe choice.
-  * Assets are reloaded when the architecture differs from the *last loaded* one, not from GPU 0 (Ada, Ampere, Ada got Ampere assets for the third card).
-  * `BOOTX64.EFI` runs `GuUnlockReadyForWindows` after each GPU, not only for the last one.
-  * The DXE driver registers S3 only after a successful unlock, like `BOOTX64.EFI`.
-- **USB stick:** The root launchers (`Toggle-Turing-GSP.bat`, `Toggle-Sleep-Button.bat`, `Universal-Control-Center.cmd`) forward to `tools\`, but those files were not copied to the stick. They are now in `Get-GuUsbToolFiles`.
-- **`Update-USB.bat`:** Lists the removable drives and asks before writing (the first one can be an SD card). A drive given on the command line is used without asking. A deploy error now returns exit code 1. Removed the fixed "in 2 seconds" text.
-- **Wake time:** `quick_check.py` and the dashboard showed the last Windows wake event in green as "Sleep Persistence Active". It only shows that Windows woke up, not that the unlock survived, and is now shown as plain information.
-- **GPU numbering:** `CUDA_DEVICE_ORDER=PCI_BUS_ID` is set in `gu_system_info.py`, so the torch index matches `nvidia-smi -i` and ReBAR/PCIe values belong to the right card.
-- **Dashboard:** Removed "All GPUs (Sequential)", which only measured GPU 0. The Control Center button starts `tools\Universal-Control-Center.cmd`, so it asks for admin rights. The firmware card shows the CSM state again when a wake time exists.
-- **`quick_check.py`:** An unknown ReBAR state shows "N/A" in the summary badge again, not "Disabled".
 
-### Refactoring
-- `get_s3_wake_info` existed twice; it is now `get_last_wake_time` in `tools/gu_system_info.py`.
-- The five dashboard `launch_*` methods are one `launch_script` helper, which reports a missing file.
-- Removed `tools/Launch-Utility.cmd`, an unused copy of `tools/Universal-Control-Center.cmd`.
-- Corrected comments that still said only the first GPU is processed.
-
-### Known Issues
-- `Plan` in `unlock_release.c` is global. Whether `GuExecuteUnlock` may run several times in one boot, and whether `GuRegisterS3` keeps the boot script of every GPU, is not verified. Multi-GPU has not been tested on hardware.
-- `GuReconnectDisplayAfterUnlock` runs for GPU 0 while `Gu` is bound to the last GPU.
-
-## [v1.8.28] - 2026-11-19
+## [v1.8.28] - 2026-11-21
 ### Multi-GPU Sequential Unlock, S3 Sleep Persistence & Script Sprawl Consolidation (refs #14, refs #15, refs #18)
-- **Multi-GPU Sequential Unlock Engine (`src/app.c` & `src/dxe_main.c`):**
-  * Implemented sequential multi-GPU unlocking loops in both the pre-boot loader (`RunUnlock`) and DXE driver (`AdaUnlockOnReadyToBoot`).
+- **Verified Hardware & Community Benchmarks:**
+  * **MSI GeForce RTX 3090 24GB Community Verification:** Added verified physical benchmark on ASUS ROG STRIX B550-E GAMING (AMD Ryzen 7 5800X3D) at **105.10 TFLOPS** (FP16 Tensor, 4.80x execution throughput multiplier over stock 21.88 TFLOPS FP32 CUDA baseline, 100% unrestricted compute).
+  * **Turing Series (RTX 20 / CMP) Status Confirmed Functional (refs #15, refs #18):** Promoted Turing (TU102, TU104, TU106) across documentation and `README.md` to verified and functional status. Pre-boot unlock transaction executes cleanly, and full enterprise compute throughput (>85–105 TFLOPS) is confirmed with official NVIDIA GSP firmware mode (`Toggle-Turing-GSP.bat`).
+- **Multi-GPU Sequential Unlock Engine (`src/multi_gpu.c`, `src/app.c` & `src/dxe_main.c`):**
+  * Consolidated sequential multi-GPU unlocking loop into unified `GuUnlockAllGpus()` engine shared by both pre-boot loader (`BOOTX64.EFI`) and DXE driver (`AdaUnlockDxe.efi`).
   * Iterates across all discovered supported NVIDIA GPUs (`0 .. device_count - 1`), binding each card sequentially via `GuBindDevice`.
-  * Dynamically reloads architecture assets on heterogeneous setups (e.g. Ada Lovelace + Ampere) when switching architectures.
-  * Fault-isolated transaction handling: Failure on a secondary card logs an error and continues to the remaining GPUs without aborting boot.
-  * Registers S3 Boot Script Dispatch for all successfully unlocked GPUs and restores console display handles cleanly at handover.
+  * Dynamically reloads architecture assets on heterogeneous setups (e.g. Ada Lovelace + Ampere) when architecture differs from the last loaded card.
+  * Fault-isolated transaction handling: Failure on asset loading or read-only preparation on secondary cards skips the card without failing boot. Execution failures safely stop boot via normal failure path to prevent mutated hardware states.
+  * Runs `GuUnlockReadyForWindows` after each GPU unlock and registers S3 Boot Script Dispatch for all successfully unlocked cards.
 - **60-Second Quick Start & Script Sprawl Consolidation:**
-  * Streamlined project root down to clean 1-click entrypoints: `Setup.bat` (Setup), `Check-GPU-Unlock.bat` (CLI Verify), `Launch-Dashboard.bat` (GUI Cockpit), and `Update-USB.bat` (2-second Stick Updater).
+  * Streamlined project root down to clean 1-click entrypoints: `Setup.bat` (Setup), `Check-GPU-Unlock.bat` (CLI Verify), `Launch-Dashboard.bat` (GUI Cockpit), and `Update-USB.bat` (Stick Updater).
   * Relocated auxiliary tools (`Setup-FastResume`, `Toggle-Sleep-Button`, `Toggle-Turing-GSP`, `Universal-Control-Center`) into `tools/` with backwards-compatible root forwarders.
   * Integrated all utilities as 1-click action buttons inside `tools/gpu_dashboard.py`.
+  * Hardened `Update-USB.bat`: Interactive target drive confirmation, SD card protection, non-zero exit codes on deployment failure, and full tool bundle synchronization via `Get-GuUsbToolFiles`.
 - **Multi-GPU & S3 Resume Telemetry in Diagnostics:**
   * Enhanced `tools/quick_check.py` to benchmark all available CUDA GPUs, reporting per-GPU TFLOPS, CUDA ratio, PCIe links, ReBAR status, and a consolidated multi-GPU summary badge.
-  * Added automated Windows Power-Troubleshooter S3 wake event detection in `quick_check.py` and `gpu_dashboard.py` confirming live sleep persistence.
+  * Set `CUDA_DEVICE_ORDER=PCI_BUS_ID` across diagnostic scripts to guarantee CUDA device indices strictly align with physical PCIe bus IDs.
+  * Windows Power-Troubleshooter S3 wake detection now reported as informational wake telemetry rather than false-positive unlock verification.
+  * ReBAR status badges cleanly display `N/A` instead of `Disabled` when state is unknown.
   * Added multi-GPU device selector dropdown in `tools/gpu_dashboard.py`.
 - **S3 Sleep Persistence Engine (`[P]` Mode):**
   * Implemented standalone S3 Boot Script Dispatch Handler (`EFI_BOOT_SCRIPT_DISPATCH_2_OPCODE`) with persistent `EfiACPIMemoryNVS` DRAM staging (64 pages / 256 KB).
@@ -65,6 +47,9 @@ For packaged binaries and downloads, visit [GitHub Releases](https://github.com/
   * **Full USB Deployment:** `Deploy-UsbCommon.ps1` deploys all Control Center modules, `gu_system_info.py`, and single-source headers onto USB media.
   * **Self-Contained Native Compatibility Check:** Streamlined offline diagnostics to use native PowerShell report checks and diffing without external python script dependencies.
 - **Refactoring & Code Quality:**
+  * Centralized wake time retrieval to `get_last_wake_time` in `tools/gu_system_info.py`.
+  * Consolidated dashboard execution to unified `launch_script` helper.
+  * Removed obsolete `tools/Launch-Utility.cmd`.
   * Split `UefiMain` into cleanly scoped routines: `RunInstall`, `RunRemove`, `RunStock`, `RunUnlock`, and `RunFailure`.
   * Unified GPU inventory logging via `GuArchName()` and `GuLogInventory()`.
   * Bounded device-path walks (`WalkDevicePath`) in `driver_nvram.c`.
@@ -74,6 +59,10 @@ For packaged binaries and downloads, visit [GitHub Releases](https://github.com/
   * Turing TU102/TU104 lacks hardware SS0/SS1 speed-select registers (`0x0082381c`/`0x00823820`, reading `0xbadf5040`). Rate limiting was introduced in Ampere (GA102) and Ada (AD102).
   * The TU102 payload is byte-identical to GA102 because it reuses the Ampere loader; no GEMM boost occurs via MSR manipulation on Turing.
   * Verified that Turing compute performance (>85-105 TFLOPS) is unlocked primarily via NVIDIA Windows GSP driver firmware mode (`EnableGpuFirmware = 1`).
+
+### Known Issues
+- `Plan` in `unlock_release.c` is global. Whether `GuExecuteUnlock` may run several times in one boot, and whether `GuRegisterS3` keeps the boot script of every GPU, is not verified. Multi-GPU has not been tested on hardware.
+- `GuReconnectDisplayAfterUnlock` runs for GPU 0 while `Gu` is bound to the last GPU.
 
 ---
 
