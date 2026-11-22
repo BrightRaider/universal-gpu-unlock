@@ -204,11 +204,27 @@ static EFI_STATUS RunUnlock(EFI_SYSTEM_TABLE *t, EFI_HANDLE image,
 
   GuBootUnsilence();
   if (Gu.already_unlocked) {
-    GuBootSay(L" [3/4] Display Handover .................... [ OK ]\r\n"
-              L" [4/4] Hardware & S3 Persistence Status .... [ OK ]\r\n");
+    GuBootSay(L" [3/4] Display Handover .................... [ OK ]\r\n");
+    if (enable_s3) {
+      if (Gu.s3_registered) {
+        GuBootSay(L" [4/4] Hardware & S3 Persistence Status .... [ OK ]\r\n");
+      } else {
+        GuBootSay(L" [4/4] Hardware [OK] | S3 Reg .............. [ FAILED ]\r\n");
+      }
+    } else {
+      GuBootSay(L" [4/4] Hardware & S3 Persistence Status .... [ OK ]\r\n");
+    }
   } else {
-    GuBootSay(L" [3/4] Display Handover .................... [ OK ]\r\n"
-              L" [4/4] Hardware SEC2 and MSR Unlock ........ [ OK ]\r\n");
+    GuBootSay(L" [3/4] Display Handover .................... [ OK ]\r\n");
+    if (enable_s3) {
+      if (Gu.s3_registered) {
+        GuBootSay(L" [4/4] Hardware SEC2 and S3 Persistence .... [ OK ]\r\n");
+      } else {
+        GuBootSay(L" [4/4] Hardware SEC2 [OK] | S3 Reg ......... [ FAILED ]\r\n");
+      }
+    } else {
+      GuBootSay(L" [4/4] Hardware SEC2 and MSR Unlock ........ [ OK ]\r\n");
+    }
   }
 
   if (GuUnlockIsCsmVideo()) {

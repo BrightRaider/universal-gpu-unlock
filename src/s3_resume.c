@@ -6,9 +6,20 @@
 
 extern GU_ASSET GuAssets[5];
 
-INTN GuS3ExecuteResumeUnlock(GU_S3_RESUME_CONTEXT *ctx) {
-  if (!ctx || ctx->magic != GU_S3_CONTEXT_MAGIC || ctx->bar_base == 0) {
-    return -1;
+VOID EFIAPI GuS3ResumeDispatch(IN CONST VOID *This, IN VOID *Context) {
+  GU_S3_RESUME_CONTEXT *ctx = (GU_S3_RESUME_CONTEXT *)Context;
+  if (!ctx || ctx->magic != GU_S3_CONTEXT_MAGIC) {
+    /* Check if motherboard firmware passes Context as the first argument in RCX */
+    if (This && ((CONST GU_S3_RESUME_CONTEXT *)This)->magic == GU_S3_CONTEXT_MAGIC) {
+      ctx = (GU_S3_RESUME_CONTEXT *)This;
+    } else {
+      return;
+    }
+  }
+
+  if (ctx->bar_base == 0) {
+    ctx->resume_status = 2;
+    return;
   }
 
   volatile UINT32 *bar = (volatile UINT32 *)(UINTN)ctx->bar_base;
@@ -25,7 +36,7 @@ INTN GuS3ExecuteResumeUnlock(GU_S3_RESUME_CONTEXT *ctx) {
     }
     ctx->resume_status = 1;
     ctx->resume_count++;
-    return 0;
+    return;
   }
 
   /* Ada / Ampere: Full SEC2 Falcon handshake & rate-limiter unlatch */
@@ -68,21 +79,14 @@ INTN GuS3ExecuteResumeUnlock(GU_S3_RESUME_CONTEXT *ctx) {
 
   ctx->last_sec2_marker = bar[0x00840040 / 4];
   ctx->resume_count++;
-
-  return (ctx->resume_status == 1) ? 0 : -2;
 }
 
-VOID EFIAPI GuS3ResumeDispatch(IN CONST VOID *This, IN VOID *Context) {
-  GU_S3_RESUME_CONTEXT *ctx = (GU_S3_RESUME_CONTEXT *)Context;
-  if (!ctx || ctx->magic != GU_S3_CONTEXT_MAGIC) {
-    /* Check if motherboard firmware passes Context as the first argument in RCX */
-    if (This && ((CONST GU_S3_RESUME_CONTEXT *)This)->magic == GU_S3_CONTEXT_MAGIC) {
-      ctx = (GU_S3_RESUME_CONTEXT *)This;
-    } else {
-      return;
-    }
+INTN GuS3ExecuteResumeUnlock(GU_S3_RESUME_CONTEXT *ctx) {
+  if (!ctx || ctx->magic != GU_S3_CONTEXT_MAGIC || ctx->bar_base == 0) {
+    return -1;
   }
-  (VOID)GuS3ExecuteResumeUnlock(ctx);
+  GuS3ResumeDispatch(NULL, ctx);
+  return (ctx->resume_status == 1) ? 0 : -2;
 }
 
 EFI_STATUS GuS3PrepareAndRegister(EFI_SYSTEM_TABLE *t) {
@@ -99,6 +103,8 @@ EFI_STATUS GuS3PrepareAndRegister(EFI_SYSTEM_TABLE *t) {
   if (EFI_ERROR(s3_status) || !s3 || !s3->Write) {
     GuLog("GuS3PrepareAndRegister: S3 Save State protocol unavailable (%#llx)\n", (unsigned long long)s3_status);
     GuLog("GuS3PrepareAndRegister: Note: Motherboard BIOS may have ACPI S3 disabled or set to S0ix Modern Standby.\n");
+    Gu.s3_registered = FALSE;
+    Gu.s3_status = s3_status;
     return s3_status;
   }
 
@@ -113,6 +119,8 @@ EFI_STATUS GuS3PrepareAndRegister(EFI_SYSTEM_TABLE *t) {
   );
   if (EFI_ERROR(alloc_status) || !nvs_phys) {
     GuLog("GuS3PrepareAndRegister: Failed to allocate ACPI NVS pages (%#llx)\n", (unsigned long long)alloc_status);
+    Gu.s3_registered = FALSE;
+    Gu.s3_status = alloc_status;
     return alloc_status;
   }
 
@@ -155,9 +163,9 @@ EFI_STATUS GuS3PrepareAndRegister(EFI_SYSTEM_TABLE *t) {
   /* Copy the self-contained GuS3ResumeDispatch PIC machine code into the ACPI NVS buffer.
    * This guarantees that the executable code survives Windows ExitBootServices() and memory
    * reclamation even if EfiBootServicesCode / EfiLoaderCode is overwritten by the OS. */
-  memcpy(nvs_base + 0x00800, (const void *)(uintptr_t)GuS3ResumeDispatch, 0x200);
+  memcpy(nvs_base + 0x00800, (const void *)(uintptr_t)GuS3ResumeDispatch, 0x800);
 
-  /* 1. Register S3 Boot Script Dispatch 2 OpCode:
+  /* 1. Register S3 Boot Script Dispatch 2 OpCode (or Dispatch OpCode fallback):
    * Calls the NVS-resident dispatch handler with Context = nvs_phys upon motherboard S3 resume. */
   EFI_PHYSICAL_ADDRESS dispatch_entry = nvs_phys + 0x00800;
   EFI_STATUS s_dispatch = s3->Write(
@@ -166,17 +174,28 @@ EFI_STATUS GuS3PrepareAndRegister(EFI_SYSTEM_TABLE *t) {
       dispatch_entry,
       nvs_phys
   );
+  if (EFI_ERROR(s_dispatch)) {
+    s_dispatch = s3->Write(
+        s3,
+        EFI_BOOT_SCRIPT_DISPATCH_OPCODE,
+        dispatch_entry
+    );
+  }
 
-  /* 2. Register fallback MMIO write opcodes for SS0/SS1 */
+  /* 2. Register direct MMIO write opcodes for SS0/SS1 */
   UINT32 val_ss0 = ctx->val_ss0;
   UINT32 val_ss1 = ctx->val_ss1;
   UINT64 addr_ss0 = (UINT64)ctx->bar_base + 0x0082381cULL;
   UINT64 addr_ss1 = (UINT64)ctx->bar_base + 0x00823820ULL;
-  (VOID)s3->Write(s3, EFI_BOOT_SCRIPT_MEM_WRITE_OPCODE, EfiBootScriptWidthUint32, addr_ss0, (UINTN)1, &val_ss0);
-  (VOID)s3->Write(s3, EFI_BOOT_SCRIPT_MEM_WRITE_OPCODE, EfiBootScriptWidthUint32, addr_ss1, (UINTN)1, &val_ss1);
+  EFI_STATUS s_mmio0 = s3->Write(s3, EFI_BOOT_SCRIPT_MEM_WRITE_OPCODE, EfiBootScriptWidthUint32, addr_ss0, (UINTN)1, &val_ss0);
+  EFI_STATUS s_mmio1 = s3->Write(s3, EFI_BOOT_SCRIPT_MEM_WRITE_OPCODE, EfiBootScriptWidthUint32, addr_ss1, (UINTN)1, &val_ss1);
 
-  GuLog("S3 Persistence: Registered ACPI NVS Dispatch (NVS=%#llx Status=%#llx)\n",
-        (unsigned long long)nvs_phys, (unsigned long long)s_dispatch);
+  GuLog("S3 Persistence: Registered ACPI NVS Dispatch (NVS=%#llx Dispatch=%#llx MMIO=%#llx,%#llx)\n",
+        (unsigned long long)nvs_phys, (unsigned long long)s_dispatch,
+        (unsigned long long)s_mmio0, (unsigned long long)s_mmio1);
 
-  return EFI_SUCCESS;
+  Gu.s3_registered = (!EFI_ERROR(s_dispatch) || (!EFI_ERROR(s_mmio0) && !EFI_ERROR(s_mmio1)));
+  Gu.s3_status = !EFI_ERROR(s_dispatch) ? s_dispatch : s_mmio0;
+
+  return Gu.s3_registered ? EFI_SUCCESS : s_dispatch;
 }

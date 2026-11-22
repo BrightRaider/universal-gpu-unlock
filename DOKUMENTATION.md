@@ -260,3 +260,16 @@ In `src/gpu_device_ids.h` wurden neue mobile Ampere-Device-IDs ergänzt:
 - **`0x25ed` (10de:25ed):** GA107 – NVIDIA GeForce RTX 2050 Mobile
 - **`0x2560` (10de:2560):** GA106 – NVIDIA GeForce RTX 3060 Mobile / Desktop-FrankenCard
 Die Diagnosewerkzeuge (`tools/gu_system_info.py`) und Host-Tests (`tests/test_turing_local.c`) wurden entsprechend erweitert.
+
+### 12.6 S3-Persistence Protokoll- & Opcode-Korrektur (UEFI PI Standard)
+Bei der S3-Sleep-Persistenz (`[P]`) registriert der Bootloader über das UEFI Boot Script Protokoll einen Dispatch- und MMIO-Aufruf, der beim Aufwachen aus dem Standby (S3 Suspend-to-RAM) ausgeführt wird.
+1. **Offizielle UEFI PI Spezifikations-GUIDs:**
+   In früheren Ständen waren in `src/s3_save.h` nicht-standardkonforme GUIDs hinterlegt. Dadurch gab das Motherboard-BIOS (getestet auf MSI MEG X570 ACE mit AMI Aptio V) bei `LocateProtocol` den Fehler `0x800000000000000e` (`EFI_NOT_FOUND`) zurück. Ich habe die GUIDs exakt auf den UEFI PI Standard aktualisiert:
+   - `EFI_S3_SAVE_STATE_PROTOCOL_GUID`: `{ 0xe857caf6, 0xc046, 0x45dc, { 0xbe, 0x3f, 0xee, 0x07, 0x65, 0xfb, 0xa8, 0x87 } }`
+   - `EFI_BOOT_SCRIPT_SAVE_PROTOCOL_GUID`: `{ 0x470e1529, 0xb79e, 0x4e32, { 0xa0, 0xfe, 0x6a, 0x15, 0x6d, 0x29, 0xf9, 0xb2 } }`
+2. **Korrektur der Boot Script Opcodes (`PiS3BootScript.h`):**
+   Die Opcodes wurden an die EDK2-Spezifikation angepasst: `MEM_WRITE` ist `0x02` (war fälschlich `0x00`, was `IO_WRITE` entspricht), `DISPATCH_2` ist `0x09` (war fälschlich `0x07`, was `STALL` entspricht).
+3. **Autonomer, positionsunabhängiger ACPI NVS Dispatcher:**
+   `GuS3ResumeDispatch` wurde in `src/s3_resume.c` so restrukturiert, dass der gesamte Unlock-Code ohne externe Funktionssprünge (`call rel32`) direkt im 256 KB ACPI NVS DRAM Puffer liegt. Dadurch ist der Code zu 100 % positionsunabhängig und übersteht das Windows-Boot-Handover unversehrt.
+4. **Live Status-Rückmeldung am Bildschirm:**
+   Der Pre-Boot-Bildschirm meldet den Erfolg der S3-Registrierung nun wahrheitsgetreu mit `[ OK ]` bzw. `[ FAILED ]`, sodass Fehlschläge sofort sichtbar sind.

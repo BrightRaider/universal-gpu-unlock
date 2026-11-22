@@ -135,12 +135,29 @@ static void TestGuS3ResumeDispatch_Wrapper(void) {
   CHECK(ctx.resume_count == 3, "RCX parameter fallback must increment resume_count to 3");
 }
 
+static void TestGuS3GuidsAndOpcodes(void) {
+  printf("[5] Testing UEFI PI Specification S3 Protocol GUIDs & Opcodes...\n");
+  EFI_GUID s3_guid = EFI_S3_SAVE_STATE_PROTOCOL_GUID;
+  CHECK(s3_guid.Data1 == 0xe857caf6, "S3 Save State GUID Data1 must be 0xe857caf6 (UEFI PI standard)");
+  CHECK(s3_guid.Data2 == 0xc046, "S3 Save State GUID Data2 must be 0xc046");
+  CHECK(s3_guid.Data3 == 0x45dc, "S3 Save State GUID Data3 must be 0x45dc");
+
+  EFI_GUID framework_guid = EFI_BOOT_SCRIPT_SAVE_PROTOCOL_GUID;
+  CHECK(framework_guid.Data1 == 0x470e1529, "Boot Script Save GUID Data1 must be 0x470e1529 (Framework standard)");
+
+  CHECK(EFI_BOOT_SCRIPT_IO_WRITE_OPCODE == 0x00, "IO_WRITE must be 0x00");
+  CHECK(EFI_BOOT_SCRIPT_MEM_WRITE_OPCODE == 0x02, "MEM_WRITE must be 0x02");
+  CHECK(EFI_BOOT_SCRIPT_DISPATCH_OPCODE == 0x08, "DISPATCH must be 0x08");
+  CHECK(EFI_BOOT_SCRIPT_DISPATCH_2_OPCODE == 0x09, "DISPATCH_2 must be 0x09");
+}
+
 int main(void) {
   printf("=== Universal S3 Persistence Resume Engine Test Suite ===\n");
   TestGuS3ExecuteResumeUnlock_Validation();
   TestGuS3ExecuteResumeUnlock_AdaAmpere();
   TestGuS3ExecuteResumeUnlock_Turing();
   TestGuS3ResumeDispatch_Wrapper();
+  TestGuS3GuidsAndOpcodes();
 
   printf("=== ALL S3 RESUME TESTS PASSED (%u checks) [OK] ===\n", g_checks);
   return 0;

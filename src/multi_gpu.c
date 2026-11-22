@@ -64,7 +64,12 @@ EFI_STATUS GuUnlockAllGpus(EFI_SYSTEM_TABLE *t, EFI_HANDLE image,
     if (Gu.already_unlocked) {
       GuLog("%sGPU [%u/%u] is already unlocked (SS0=0x88888888, SS1=0x8); skipping hardware unlock transaction\n",
             log_prefix, (unsigned)(g + 1), (unsigned)count);
-      if (options & GU_UNLOCK_REGISTER_S3) (VOID)GuRegisterS3(t);
+      if (options & GU_UNLOCK_REGISTER_S3) {
+        EFI_STATUS s3_ret = GuRegisterS3(t);
+        if (EFI_ERROR(s3_ret)) {
+          GuLog("%s[!] S3 Persistence registration returned %#llx\n", log_prefix, (unsigned long long)s3_ret);
+        }
+      }
       (*unlocked)++;
       if (g + 1 < count && !GuUnlockPrepareNextGpu()) {
         *stage = "next-gpu-reset";
@@ -89,7 +94,12 @@ EFI_STATUS GuUnlockAllGpus(EFI_SYSTEM_TABLE *t, EFI_HANDLE image,
       return s != EFI_SUCCESS ? s : EFI_DEVICE_ERROR;
     }
 
-    if (options & GU_UNLOCK_REGISTER_S3) (VOID)GuRegisterS3(t);
+    if (options & GU_UNLOCK_REGISTER_S3) {
+      EFI_STATUS s3_ret = GuRegisterS3(t);
+      if (EFI_ERROR(s3_ret)) {
+        GuLog("%s[!] S3 Persistence registration returned %#llx\n", log_prefix, (unsigned long long)s3_ret);
+      }
+    }
 
     if (options & GU_UNLOCK_VERIFY_WINDOWS) {
       *stage = "final-Windows-verification";

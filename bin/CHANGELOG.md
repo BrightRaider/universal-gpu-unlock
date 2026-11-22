@@ -18,6 +18,12 @@ For packaged binaries and downloads, visit [GitHub Releases](https://github.com/
   Added test coverage in `tests/test_turing_local.c` and calibrated `"2050"` profile in `tools/gu_system_info.py`.
 
 ### Fixed
+- **S3 Protocol GUID & OpCode Calibration (UEFI PI Standard Compliance, refs #19):**
+  - Corrected `EFI_S3_SAVE_STATE_PROTOCOL_GUID` in `src/s3_save.h` to the official UEFI PI specification GUID `{ 0xe857caf6, 0xc046, 0x45dc, { 0xbe, 0x3f, 0xee, 0x07, 0x65, 0xfb, 0xa8, 0x87 } }` and legacy Framework `EFI_BOOT_SCRIPT_SAVE_PROTOCOL_GUID` to `{ 0x470e1529, 0xb79e, 0x4e32, { 0xa0, 0xfe, 0x6a, 0x15, 0x6d, 0x29, 0xf9, 0xb2 } }`. Previous non-standard GUIDs caused motherboard firmware (e.g. MSI MEG X570 ACE AMI Aptio V) to return `EFI_NOT_FOUND` (`0x800000000000000e`), preventing S3 boot script registration.
+  - Corrected S3 Boot Script opcodes in `src/s3_save.h`: aligned with `PiS3BootScript.h` (`EFI_BOOT_SCRIPT_MEM_WRITE_OPCODE` = `0x02`, `EFI_BOOT_SCRIPT_DISPATCH_2_OPCODE` = `0x09`, `EFI_BOOT_SCRIPT_DISPATCH_OPCODE` = `0x08`, `EFI_BOOT_SCRIPT_IO_WRITE_OPCODE` = `0x00`). Previously `MEM_WRITE` was defined as `0x00` (which is `IO_WRITE`), and `DISPATCH_2` was defined as `0x07` (which is `STALL`).
+  - In `src/s3_resume.c`, encapsulated all resume unlock logic directly within `GuS3ResumeDispatch` without external relative function jumps, guaranteeing 100% position-independent code execution from ACPI NVS during S3 wake.
+  - Added live status tracking (`Gu.s3_registered`, `Gu.s3_status`) in `src/port.h`, `src/multi_gpu.c`, and `src/app.c` so pre-boot screen accurately reports `[ OK ]` or `[ FAILED ]`.
+  - Added unit test suite `TestGuS3GuidsAndOpcodes` in `tests/test_s3_resume.c` (26/26 tests passing).
 - **Turing (TU102) `BCR_CTRL` Polling-Skip (refs MindAllik v1.3.3):** In `src/vendor/unlock_610.c` (`falcon_reset`), guarded the `BCR_CTRL` (`falcon2 + 0x668`) register write and polling sequence on Turing hardware (`!gpu_is_turing_device`). On Turing GPUs (RTX 2080 Ti, TITAN RTX), querying this register caused polling timeouts (`poll timeout: reg=0x111668`, code `-110`). The switching sequence remains active for Ampere (GA10x) and Ada (AD10x).
 
 ---

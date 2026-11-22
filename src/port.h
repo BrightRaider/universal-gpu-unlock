@@ -120,6 +120,8 @@ typedef struct {
   UINT32 flrs, mmio_writes, dma_count;
   GU_DMA *allocations;
   BOOLEAN (*display_check)(VOID);
+  BOOLEAN s3_registered;
+  EFI_STATUS s3_status;
 } GU_PLATFORM;
 extern GU_PLATFORM Gu;
 
