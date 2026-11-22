@@ -1,0 +1,24 @@
+Ada Lovelace GPU detected: Device ID 0x2684
+AD10X ADA UNIVERSAL UNLOCK v1.6.1: Volatile RAM-only override; no VBIOS flash
+GuAd104Prepare: start
+Config: OK
+Selectors: SS0=0x24044042, SS1=0x3 (fault=0)
+Registers: cold state verified (PMC=0x192000a1, SS0=0x24044042, SS1=3)
+PROM actual SHA256: e81730eb6b2ad77b8506bab14b8d41a834568578c74f67a8fdb7713851df0c79
+gpu_unlock: ROM chain: pos=0 data=0x52494350 bytes=64512 type=0 last=0
+gpu_unlock: ROM chain: pos=0xfc00 data=0x52494350 bytes=85504 type=0x3 last=0
+gpu_unlock: ROM chain: pos=0x24a00 data=0x5344504e bytes=24576 type=0xe0 last=0
+gpu_unlock: ROM chain: pos=0x2aa00 data=0x5344504e bytes=439296 type=0xe0 last=128
+gpu_unlock: ROM expansion: base=0xfc00 ext=0x24a00 adjust=0x14e00
+gpu_unlock: ROM BIT: offset=0x1b0 size=12 stride=6 tokens=19 adjust=0x14e00
+gpu_unlock: ROM ucode table: offset=0x95be8 version=1 header=6 stride=6 entries=16
+gpu_unlock: FWSEC descriptor: offset=0x43e3c ROM_bytes=1048576 header=0x32c0301
+gpu_unlock: FWSEC geometry: image_off=0x44168 size=0x10000 imem=0xf200 va=0 pa=0 dmem=0xd80 pa=0 pkc=0xb24 interface=0x1c engine=0x400 ucode=9 signatures=2 versions=0x3 bytes=768
+Config: OK
+Selectors: SS0=0x24044042, SS1=0x3 (fault=0)
+Registers: cold state verified (PMC=0x192000a1, SS0=0x24044042, SS1=3)
+GuAd104Prepare: prom_match=1 fwsec_res=0 fwsec_match=1 cfg2=1 reg2=1 ss0_stable=1
+GuAd104Prepare: SUCCESS
+Windows image staged: status=0 matches=1 SHA256 pinned
+Operator I: Requesting DXE Driver NVRAM installation
+DXE Driver successfully installed to Driver0001 / DriverOrder

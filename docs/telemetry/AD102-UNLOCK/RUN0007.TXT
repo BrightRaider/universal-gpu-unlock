@@ -1,0 +1,19 @@
+AD102 4090 SUPRIM X EXPERIMENTAL v0.5.4: hardware unvalidated; USB manual one-shot; bounded USB enumeration additions/removals; GPU ownership pinned
+GuAd104Prepare: start
+Config: OK
+Selectors: SS0=0x24044006, SS1=0x3 (fault=0)
+Registers: all 19 registers match, SS1=3 cold state verified
+gpu_unlock: ROM chain: pos=0 data=0x52494350 bytes=64512 type=0 last=0
+gpu_unlock: ROM chain: pos=0xfc00 data=0x52494350 bytes=85504 type=0x3 last=0
+gpu_unlock: ROM chain: pos=0x24a00 data=0x5344504e bytes=24576 type=0xe0 last=0
+gpu_unlock: ROM chain: pos=0x2aa00 data=0x5344504e bytes=439296 type=0xe0 last=128
+gpu_unlock: ROM expansion: base=0xfc00 ext=0x24a00 adjust=0x14e00
+gpu_unlock: ROM BIT: offset=0x1b0 size=12 stride=6 tokens=19 adjust=0x14e00
+gpu_unlock: ROM ucode table: offset=0x95be8 version=1 header=6 stride=6 entries=16
+gpu_unlock: FWSEC descriptor: offset=0x43e3c ROM_bytes=1048576 header=0x32c0301
+gpu_unlock: FWSEC geometry: image_off=0x44168 size=0x10000 imem=0xf200 va=0 pa=0 dmem=0xd80 pa=0 pkc=0xb24 interface=0x1c engine=0x400 ucode=9 signatures=2 versions=0x3 bytes=768
+Config: OK
+Selectors: SS0=0x24044006, SS1=0x3 (fault=0)
+Registers: all 19 registers match, SS1=3 cold state verified
+GuAd104Prepare: prom_match=0 fwsec_res=0 fwsec_match=1 cfg2=1 reg2=1 ss0_stable=1
+STOP: stage=read-only-cold-profile status=0x8000000000000021 mutated=0 retained=0 fault=0

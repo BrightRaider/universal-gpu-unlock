@@ -1,0 +1,40 @@
+=== Universal Multi-Gen GPU Unlock v1.8.21 (BOOTX64.EFI) ===
+Discovery: scan evaluated 48 PCI handles, 1 NVIDIA candidate(s)
+Discovery candidate [1]: DevID=0x2684 (0x268410de) loc=0:45:0:0
+PCI Multi-GPU Inventory: Discovered 1 supported NVIDIA GPU(s)
+  GPU [1/1]: DevID 0x2684 (Ada Lovelace)
+DiagnosticScan: start
+Config: OK
+Selectors: SS0=0x88888888, SS1=0x8 (fault=0)
+Selectors invalid: SS0=0x88888888, SS1=0x8 (expected SS1 <= 7)
+PROM actual SHA256: e81730eb6b2ad77b8506bab14b8d41a834568578c74f67a8fdb7713851df0c79
+gpu_unlock: ROM chain: pos=0 data=0x52494350 bytes=64512 type=0 last=0
+gpu_unlock: ROM chain: pos=0xfc00 data=0x52494350 bytes=85504 type=0x3 last=0
+gpu_unlock: ROM chain: pos=0x24a00 data=0x5344504e bytes=24576 type=0xe0 last=0
+gpu_unlock: ROM chain: pos=0x2aa00 data=0x5344504e bytes=439296 type=0xe0 last=128
+gpu_unlock: ROM expansion: base=0xfc00 ext=0x24a00 adjust=0x14e00
+gpu_unlock: ROM BIT: offset=0x1b0 size=12 stride=6 tokens=19 adjust=0x14e00
+gpu_unlock: ROM ucode table: offset=0x95be8 version=1 header=6 stride=6 entries=16
+gpu_unlock: ROM ucode entry [0/16]: app_id=0x01 offset=0x2aa54
+gpu_unlock: ROM ucode entry [1/16]: app_id=0x00 offset=0x14e00
+gpu_unlock: ROM ucode entry [2/16]: app_id=0x00 offset=0x14e00
+gpu_unlock: ROM ucode entry [3/16]: app_id=0x00 offset=0x14e00
+gpu_unlock: ROM ucode entry [4/16]: app_id=0x00 offset=0x14e00
+gpu_unlock: ROM ucode entry [5/16]: app_id=0x07 offset=0x540e8
+gpu_unlock: ROM ucode entry [6/16]: app_id=0x08 offset=0x70d2c
+gpu_unlock: ROM ucode entry [7/16]: app_id=0x00 offset=0x14e00
+gpu_unlock: ROM ucode entry [8/16]: app_id=0x45 offset=0x33b90
+gpu_unlock: ROM ucode entry [9/16]: app_id=0x85 offset=0x43e3c
+gpu_unlock: ROM ucode entry [10/16]: app_id=0x49 offset=0x63e84
+gpu_unlock: ROM ucode entry [11/16]: app_id=0x89 offset=0x6a5d8
+gpu_unlock: ROM ucode entry [12/16]: app_id=0x00 offset=0x14e00
+gpu_unlock: ROM ucode entry [13/16]: app_id=0x00 offset=0x14e00
+gpu_unlock: ROM ucode entry [14/16]: app_id=0x00 offset=0x14e00
+gpu_unlock: ROM ucode entry [15/16]: app_id=0x00 offset=0x14e00
+gpu_unlock: FWSEC descriptor: offset=0x43e3c ROM_bytes=1048576 header=0x32c0301 (version=3 size=812)
+gpu_unlock: FWSEC descriptor raw [812 bytes]: 01 03 2c 03 80 ff 00 00 24 0b 00 00 1c 00 00 00 00 00 00 00 00 f2 00 00 00 00 00 00 00 00 00 00 80 0d 00 00 00 04 09 02 03 00 49 80 a3 1f 46 72 29 7a 46 ec 95 75 f2 09 30 cc 30 2a f6 2e a5 bc 7f 1e 2f cd c2 93 66 b6 57 5a a0 1d ee 7a d8 fa a3 27 a8 36 c3 
+gpu_unlock: FWSEC geometry: image_off=0x44168 size=0x10000 imem=0xf200 va=0 pa=0 dmem=0xd80 pa=0 pkc=0xb24 interface=0x1c engine=0x400 ucode=9 signatures=2 versions=0x3 bytes=768
+DiagnosticScan: prom_ok=1 fwsec_res=0 fwsec_match=1
+GuBootLoadWindows: candidate 1 volume=0xd8122498 found '\EFI\Microsoft\Boot\bootmgfw.efi' (match #1)
+Windows image staged: status=0 matches=1 path='\EFI\Microsoft\Boot\bootmgfw.efi'
+Operator skipped: no GPU transaction, no driver release; stock Windows

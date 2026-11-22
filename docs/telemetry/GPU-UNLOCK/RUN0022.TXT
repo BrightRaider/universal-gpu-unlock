@@ -1,0 +1,13 @@
+=== Universal Multi-Gen GPU Unlock v1.8.30 (BOOTX64.EFI) ===
+Discovery: scan evaluated 48 PCI handles, 1 NVIDIA candidate(s)
+Discovery candidate [1]: DevID=0x2684 (0x268410de) loc=0:45:0:0
+PCI Multi-GPU Inventory: 1 supported NVIDIA GPU(s)
+  GPU [1/1]: DevID 0x2684 (Ada Lovelace)
+GuBootLoadWindows: candidate 1 volume=0xd8122498 found '\EFI\Microsoft\Boot\bootmgfw.efi' (match #1)
+Windows image staged: status=0 matches=1 path='\EFI\Microsoft\Boot\bootmgfw.efi'
+GuPrepare: start
+Config: OK
+Selectors: SS0=0x88888888, SS1=0x8 (fault=0)
+Selectors invalid: SS0=0x88888888, SS1=0x8 (expected SS1 <= 7)
+GuPrepare: Registers() returned FALSE
+STOP: stage=read-only-cold-profile status=0x8000000000000006 mutated=0 retained=0 fault=0

@@ -1,0 +1,8 @@
+Ada Lovelace GPU detected: Device ID 0x2684
+AD10X ADA UNIVERSAL UNLOCK v1.5: Volatile RAM-only override; no VBIOS flash
+GuAd104Prepare: start
+Config: OK
+Selectors: SS0=0x0, SS1=0x0 (fault=0)
+Selectors invalid: SS0=0x0, SS1=0x0 (expected SS1==1, 3 or 7)
+GuAd104Prepare: Registers() returned FALSE
+STOP: stage=read-only-cold-profile status=0x8000000000000006 mutated=0 retained=0 fault=0

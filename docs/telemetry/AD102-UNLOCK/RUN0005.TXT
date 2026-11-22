@@ -1,0 +1,7 @@
+AD102 4090 SUPRIM X EXPERIMENTAL v0.5.4: hardware unvalidated; USB manual one-shot; bounded USB enumeration additions/removals; GPU ownership pinned
+GuAd104Prepare: start
+Config: OK
+Selectors: SS0=0x24044012, SS1=0x3 (fault=0)
+Selectors invalid: SS0=0x24044012, SS1=0x3 (expected SS1==7)
+GuAd104Prepare: Registers() returned FALSE
+STOP: stage=read-only-cold-profile status=0x8000000000000006 mutated=0 retained=0 fault=0
