@@ -6,7 +6,7 @@ For packaged binaries and downloads, visit [GitHub Releases](https://github.com/
 
 ---
 
-## [Unreleased]
+## [v1.8.30] - 2026-11-22
 ### Fixed
 - **ESP Volume Full Guard in `[I]` Mode (refs #19):** `StageArchAssetsToVolume` in `src/driver_nvram.c` now verifies all asset file writes. If internal ESP partition runs out of space (`EFI_VOLUME_FULL`), the driver installation logs an informative message and safely falls back to USB medium registration rather than leaving a dangling broken driver on the ESP.
 - **Improved `[I]` Mode On-Screen Messaging:** Updated `RunInstall` in `src/app.c` to display a clear notice when ESP has insufficient space (~85MB for Ada/Ampere) and recommend S3 Sleep Persistence (`[P]`) or creating a 500MB FAT32 partition.
