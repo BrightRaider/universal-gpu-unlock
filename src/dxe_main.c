@@ -21,6 +21,7 @@ static const EFI_GUID ReadyToBootEventGroupGuid =
 static EFI_HANDLE mDxeImage = NULL;
 static EFI_SYSTEM_TABLE *mDxeTable = NULL;
 static EFI_EVENT mReadyToBootEvent = NULL;
+static BOOLEAN mDriverExecuted = FALSE;
 
 static VOID EFIAPI AdaUnlockOnReadyToBoot(EFI_EVENT event, VOID *context) {
   (VOID)context;
@@ -30,6 +31,7 @@ static VOID EFIAPI AdaUnlockOnReadyToBoot(EFI_EVENT event, VOID *context) {
     mReadyToBootEvent = NULL;
   }
 
+  if (mDriverExecuted) return;
   if (!mDxeImage || !mDxeTable || !mDxeTable->BootServices) return;
 
   EFI_STATUS s = GuBootOpen(mDxeImage, mDxeTable);
@@ -123,6 +125,8 @@ finish:
     GuLog("DXE-DRIVER: Succeeded for %u of %u GPU(s). Handing over to OS loader.\n",
           (unsigned)unlocked_count, (unsigned)device_count);
 
+    mDriverExecuted = TRUE;
+
     (VOID)GuBootSyncLog();
 
     if (devices[device_count - 1].handle) {
@@ -138,36 +142,31 @@ EFI_STATUS EFIAPI AdaUnlockDriverEntryPoint(EFI_HANDLE image, EFI_SYSTEM_TABLE *
   mDxeImage = image;
   mDxeTable = t;
 
-  /* Defer execution to ReadyToBoot event:
-   * Early BDS / Driver#### dispatch occurs before ConsoleOut and GOP bindings
-   * are connected on AMD TRX40 / Threadripper, multi-GPU and workstation boards.
-   * Hooking ReadyToBoot guarantees all PCIe root complexes, GOP display drivers,
-   * and console endpoints are 100% stabilized immediately prior to OS boot. */
-  EFI_STATUS s = EFI_UNSUPPORTED;
-  if (t->BootServices->CreateEventEx != NULL) {
-    s = t->BootServices->CreateEventEx(
-        EVT_NOTIFY_SIGNAL,
-        TPL_CALLBACK,
-        AdaUnlockOnReadyToBoot,
-        NULL,
-        &ReadyToBootEventGroupGuid,
-        &mReadyToBootEvent
-    );
-  }
-  if (s != EFI_SUCCESS && t->BootServices->CreateEvent != NULL) {
-    s = t->BootServices->CreateEvent(
-        EVT_SIGNAL_READY_TO_BOOT,
-        TPL_CALLBACK,
-        AdaUnlockOnReadyToBoot,
-        NULL,
-        &mReadyToBootEvent
-    );
-  }
+  /* 1. Primary Execution: Execute immediately at DriverEntryPoint BEFORE DxeSmmReadyToLock.
+   * Early BDS / Driver#### dispatch occurs when the S3 Save State Protocol table is wide open,
+   * allowing S3 boot script registration on AMI Aptio V motherboards before SMRAM lockdown. */
+  AdaUnlockOnReadyToBoot(NULL, NULL);
 
-  if (s != EFI_SUCCESS) {
-    /* Fallback: execute directly if the UEFI environment refuses event creation */
-    AdaUnlockOnReadyToBoot(NULL, NULL);
-    return EFI_SUCCESS;
+  /* 2. Fallback: If PCI devices were not yet ready in early BDS, register ReadyToBoot callback */
+  if (!mDriverExecuted) {
+    if (t->BootServices->CreateEventEx != NULL) {
+      (VOID) t->BootServices->CreateEventEx(
+          EVT_NOTIFY_SIGNAL,
+          TPL_CALLBACK,
+          AdaUnlockOnReadyToBoot,
+          NULL,
+          &ReadyToBootEventGroupGuid,
+          &mReadyToBootEvent
+      );
+    } else if (t->BootServices->CreateEvent != NULL) {
+      (VOID) t->BootServices->CreateEvent(
+          EVT_SIGNAL_READY_TO_BOOT,
+          TPL_CALLBACK,
+          AdaUnlockOnReadyToBoot,
+          NULL,
+          &mReadyToBootEvent
+      );
+    }
   }
 
   return EFI_SUCCESS;
