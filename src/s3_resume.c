@@ -90,10 +90,15 @@ EFI_STATUS GuS3PrepareAndRegister(EFI_SYSTEM_TABLE *t) {
   if (!Gu.bar_base) return EFI_NOT_READY;
 
   static EFI_GUID S3SaveStateGuid = EFI_S3_SAVE_STATE_PROTOCOL_GUID;
+  static EFI_GUID BootScriptSaveGuid = EFI_BOOT_SCRIPT_SAVE_PROTOCOL_GUID;
   EFI_S3_SAVE_STATE_PROTOCOL *s3 = NULL;
   EFI_STATUS s3_status = t->BootServices->LocateProtocol(&S3SaveStateGuid, NULL, (VOID **)&s3);
   if (EFI_ERROR(s3_status) || !s3 || !s3->Write) {
+    s3_status = t->BootServices->LocateProtocol(&BootScriptSaveGuid, NULL, (VOID **)&s3);
+  }
+  if (EFI_ERROR(s3_status) || !s3 || !s3->Write) {
     GuLog("GuS3PrepareAndRegister: S3 Save State protocol unavailable (%#llx)\n", (unsigned long long)s3_status);
+    GuLog("GuS3PrepareAndRegister: Note: Motherboard BIOS may have ACPI S3 disabled or set to S0ix Modern Standby.\n");
     return s3_status;
   }
 

@@ -10,6 +10,7 @@ GU_PLATFORM Gu;
 GU_ASSET GuAssets[5];
 size_t GuFormatV(char *d, size_t c, const char *f, va_list a) { (void)d; (void)c; (void)f; (void)a; return 0; }
 BOOLEAN GuAssetsValid(VOID) { return TRUE; }
+BOOLEAN GuIsUnlocked(VOID) { return FALSE; }
 const GU_ARCH_ASSETS *GuGetArchAssets(VOID) { return NULL; }
 VOID *GuAlloc(size_t n) { (void)n; return NULL; }
 VOID GuFree(VOID *p) { (void)p; }

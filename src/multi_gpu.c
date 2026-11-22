@@ -60,6 +60,20 @@ EFI_STATUS GuUnlockAllGpus(EFI_SYSTEM_TABLE *t, EFI_HANDLE image,
 
     GuLog("%s--- Processing GPU [%u/%u]: DevID 0x%04x (%s) ---\n", log_prefix,
           (unsigned)(g + 1), (unsigned)count, (unsigned)dev->device_id, GuArchName(dev));
+
+    if (Gu.already_unlocked) {
+      GuLog("%sGPU [%u/%u] is already unlocked (SS0=0x88888888, SS1=0x8); skipping hardware unlock transaction\n",
+            log_prefix, (unsigned)(g + 1), (unsigned)count);
+      if (options & GU_UNLOCK_REGISTER_S3) (VOID)GuRegisterS3(t);
+      (*unlocked)++;
+      if (g + 1 < count && !GuUnlockPrepareNextGpu()) {
+        *stage = "next-gpu-reset";
+        *failed = g;
+        return EFI_NOT_READY;
+      }
+      continue;
+    }
+
     s = GuExecuteUnlock(t, image, stage);
     if (Failed(s)) {
       if (!GuUnlockMutated() && !GuUnlockClaimed() && !Gu.started && !Gu.retained &&

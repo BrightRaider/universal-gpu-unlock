@@ -106,6 +106,7 @@ typedef struct {
   BOOLEAN is_turing;
   BOOLEAN fault, retained, started, quiesced, armed, owned, display_ok, saved;
   BOOLEAN profile_verified, prom_checked;
+  BOOLEAN already_unlocked;
   BOOLEAN transaction_attempted;
   BOOLEAN master_attributes_pending;
   UINT64 master_original_attributes;

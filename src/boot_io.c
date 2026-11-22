@@ -636,6 +636,12 @@ EFI_STATUS GuBootChoose(CHAR16 *choice) {
       L" >>> 30-SECOND TIMER ACTIVE - PRESS [U] TO UNLOCK <<<\r\n"
       L" (Press [Space] to pause countdown and read in peace)\r\n"
       L"=======================================================\r\n");
+  if (GuIsUnlocked()) {
+    GuBootSay(
+        L" [OK] GPU Silicon Status: ALREADY UNLOCKED (by DXE Driver in POST)\r\n"
+        L"      Pressing [P] or [U] will register S3 and boot Windows directly.\r\n"
+        L"=======================================================\r\n");
+  }
   if (hide_s3) {
     GuBootSay(L"  [U] Full GPU Unlock (RAM-only)\r\n"
               L"  [I] Install DXE Driver to internal ESP and UEFI NVRAM (Auto-boot)\r\n");

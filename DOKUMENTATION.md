@@ -187,3 +187,19 @@ Im Verzeichnis `TU102-ASSETS/` ist die Datei `v67-tu102-610.43.03.bin` mit `GA10
    reg add "HKLM\SYSTEM\CurrentControlSet\Control\Class\{4d36e968-e325-11ce-bfc1-08002be10318}\0000" /v EnableGpuFirmware /t REG_DWORD /d 1 /f
    ```
    Dies bindet `nvlddmkm.sys` an den integrierten RISC-V GSP-Coprozessor statt an den langsameren CPU-RM-Modus.
+
+
+---
+
+## 11. Silicon-Erkennung bereits entsperrter GPUs & Freeze-Schutz bei UEFI Boot (ab v1.8.31)
+
+### 11.1 Problemstellung bei vorinstalliertem DXE-Treiber
+Wurde der permanente DXE-Treiber `AdaUnlockDxe.efi` zuvor über `[I]` im UEFI-NVRAM (`Driver####`) registriert, führt das BIOS diesen Treiber bereits in einer sehr frühen POST-Phase vor dem Boot-Menü aus. Die GPU ist beim Erreichen des USB-Bootloaders `BOOTX64.EFI` bereits hardwareseitig voll entsperrt (`SS0=0x88888888, SS1=0x8`).
+In früheren Versionen führte die erneute Anforderung von `[P]` oder `[U]` im Bootloader zu einem Abbruch in `GuPrepare`: Die Kaltstart-Prüfung (`Registers`) erwartete Kaltstart-Register (`SS0 != 0x88888888`) und verweigerte die Ausführung mit `PREFLIGHT REFUSED`.
+Bei Rückgabe des Fehlerstatus an die UEFI-Firmware froren manche Mainboards (insbesondere MSI Click BIOS) auf dem Hersteller-Logo ein.
+
+### 11.2 Die v1.8.31 Lösung
+1. **Live Silicon-Erkennung (`GuIsUnlocked`):** `BOOTX64.EFI` liest BAR0 `0x82381c` und `0x823820`. Wurde die Karte bereits im POST entsperrt, wird dies sofort im Konsolenmenü als `[OK] GPU Silicon Status: ALREADY UNLOCKED (by DXE Driver in POST)` angezeigt.
+2. **Nahtlose Weiterleitung:** Bei Auswahl von `[P]` oder `[U]` wird die redundante Hardware-Transaktion übersprungen. Im Modus `[P]` wird die S3-Sleep-Persistenz registriert, und die Kontrolle wird ohne Hänger direkt an den Windows Boot Manager übergeben.
+3. **Freeze-Schutz in `RunFailure`:** Sollte eine Vorprüfung bei unberührter Hardware fehlschlagen, wird kein unkontrollierter Fehlercode an das BIOS zurückgegeben (was Hänger provoziert), sondern nach 5 Sekunden kontrolliert Windows im Standardmodus gestartet.
+4. **S3 Protocol Fallback:** `GuS3PrepareAndRegister` prüft sowohl `EFI_S3_SAVE_STATE_PROTOCOL_GUID` (PI 1.2+) als auch `EFI_BOOT_SCRIPT_SAVE_PROTOCOL_GUID` (Framework) und liefert klare Diagnoseausgaben, falls ACPI S3 im BIOS deaktiviert ist.

@@ -10,6 +10,7 @@ BOOLEAN GuFwsecMatches(const struct gpu_unlock_fwsec *);
 EFI_STATUS GuPrepare(VOID);
 BOOLEAN GuColdEntry(VOID);
 EFI_STATUS GuDiagnosticScan(VOID);
+BOOLEAN GuIsUnlocked(VOID);
 
 typedef struct {
   const CHAR16 *path;

@@ -63,14 +63,14 @@ static EFI_STATUS RunFailure(EFI_SYSTEM_TABLE *t, EFI_HANDLE image,
   GuBootSay(GuBootGetLogPath());
   GuBootSay(L"\r\n Please report this log on GitHub if unexpected:\r\n"
             L" https://github.com/BrightRaider/universal-gpu-unlock/issues\r\n\r\n"
-            L" Returning to Boot Menu in 5 seconds...\r\n");
+            L" Booting Windows in stock mode in 5 seconds...\r\n");
 
   (VOID) GuBootClose();
 
   if (t && t->BootServices && t->BootServices->Stall)
     t->BootServices->Stall(5000000);
 
-  return s;
+  return GuBootWindows();
 }
 
 /* [I]: register the DXE driver, say where it went, reboot. */
@@ -158,20 +158,35 @@ static EFI_STATUS RunUnlock(EFI_SYSTEM_TABLE *t, EFI_HANDLE image,
   if (s != EFI_SUCCESS || Gu.fault)
     return RunFailure(t, image, gpu, stage, s);
 
-  GuBootSay(
-      L"\r\n=======================================================\r\n"
-      L" UNIVERSAL GPU UNLOCK " GU_VERSION_TAG_WIDE L" - Status Monitor\r\n"
-      L"=======================================================\r\n"
-      L" [1/4] GPU and PCIe Topology Discovery ..... [ OK ]\r\n"
-      L" [2/4] Firmware Hashes and VBIOS Parse ..... [ OK ]\r\n"
-      L" [3/4] Display Handover .................... [ PENDING ]\r\n"
-      L" [4/4] Hardware SEC2 and MSR Unlock ........ [ PENDING ]\r\n\r\n"
-      L" --> Starting GPU unlock...\r\n");
+  if (Gu.already_unlocked) {
+    GuBootSay(
+        L"\r\n=======================================================\r\n"
+        L" UNIVERSAL GPU UNLOCK " GU_VERSION_TAG_WIDE L" - Status Monitor\r\n"
+        L"=======================================================\r\n"
+        L" [1/4] GPU and PCIe Topology Discovery ..... [ OK ]\r\n"
+        L" [2/4] Firmware Hashes and VBIOS Parse ..... [ OK ]\r\n"
+        L" [3/4] Hardware Silicon Status ............. [ ALREADY UNLOCKED ]\r\n");
+    if (enable_s3) {
+      GuBootSay(L" [4/4] S3 Sleep Persistence ................ [ REGISTERING ]\r\n");
+    } else {
+      GuBootSay(L" [4/4] S3 Sleep Persistence ................ [ SKIPPED ]\r\n");
+    }
+  } else {
+    GuBootSay(
+        L"\r\n=======================================================\r\n"
+        L" UNIVERSAL GPU UNLOCK " GU_VERSION_TAG_WIDE L" - Status Monitor\r\n"
+        L"=======================================================\r\n"
+        L" [1/4] GPU and PCIe Topology Discovery ..... [ OK ]\r\n"
+        L" [2/4] Firmware Hashes and VBIOS Parse ..... [ OK ]\r\n"
+        L" [3/4] Display Handover .................... [ PENDING ]\r\n"
+        L" [4/4] Hardware SEC2 and MSR Unlock ........ [ PENDING ]\r\n\r\n"
+        L" --> Starting GPU unlock...\r\n");
+  }
 
   GuBootSilence();
 
   UINTN unlocked_count = 0, failed = 0;
-  UINT32 options = GU_UNLOCK_VERIFY_WINDOWS | (enable_s3 ? GU_UNLOCK_REGISTER_S3 : 0U);
+  UINT32 options = (Gu.already_unlocked ? 0U : GU_UNLOCK_VERIFY_WINDOWS) | (enable_s3 ? GU_UNLOCK_REGISTER_S3 : 0U);
   s = GuUnlockAllGpus(t, image, gpu, device_count, options, "", &stage,
                       &unlocked_count, &failed);
   if (s != EFI_SUCCESS)
@@ -184,8 +199,13 @@ static EFI_STATUS RunUnlock(EFI_SYSTEM_TABLE *t, EFI_HANDLE image,
   }
 
   GuBootUnsilence();
-  GuBootSay(L" [3/4] Display Handover .................... [ OK ]\r\n"
-            L" [4/4] Hardware SEC2 and MSR Unlock ........ [ OK ]\r\n");
+  if (Gu.already_unlocked) {
+    GuBootSay(L" [3/4] Display Handover .................... [ OK ]\r\n"
+              L" [4/4] Hardware & S3 Persistence Status .... [ OK ]\r\n");
+  } else {
+    GuBootSay(L" [3/4] Display Handover .................... [ OK ]\r\n"
+              L" [4/4] Hardware SEC2 and MSR Unlock ........ [ OK ]\r\n");
+  }
 
   if (GuUnlockIsCsmVideo()) {
     GuBootSay(

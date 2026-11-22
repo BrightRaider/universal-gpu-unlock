@@ -148,6 +148,11 @@ static BOOLEAN Registers(UINT32 *Ss0,UINT32 *Ss1) {
     GuLog("Registers: Turing cold state verified (PMC=0x%x, arch=0x%02x, WPR2_HI=0x%x)\n", pmc, arch, wpr2_hi);
     return !Gu.fault;
   }
+  if (*Ss0 == 0x88888888U && (*Ss1 & 0xfU) == 0x8U) {
+    GuLog("Registers: GPU is already unlocked in silicon (SS0=0x88888888, SS1=0x%x)\n", *Ss1);
+    Gu.already_unlocked = TRUE;
+    return !Gu.fault;
+  }
   if(*Ss0==0xffffffff || (*Ss0&0xffff0000)==0xbadf0000 || *Ss0==0x88888888 || (*Ss1 > 7)) {
     GuLog("Selectors invalid: SS0=0x%x, SS1=0x%x (expected SS1 <= 7)\n", *Ss0, *Ss1);
     return FALSE;
@@ -256,6 +261,11 @@ EFI_STATUS GuPrepare(VOID) {
   GuFree(prom);
   if(!valid) return EFI_COMPROMISED_DATA;
   Gu.prom_checked=TRUE;
+  if (Gu.already_unlocked) {
+    Gu.profile_verified = TRUE;
+    GuLog("GuPrepare: GPU is already unlocked, profile verified for handover\n");
+    return EFI_SUCCESS;
+  }
   if(!GuLatchEntrySelectors(ss0,ss1)) {
     Gu.prom_checked=FALSE;
     GuReleaseStagedVbiosEfiImage();
@@ -293,5 +303,15 @@ EFI_STATUS GuDiagnosticScan(VOID) {
         prom_ok, fwsec_res, fwsec_match);
   GuFree(prom);
   return EFI_SUCCESS;
+}
+
+BOOLEAN GuIsUnlocked(VOID) {
+  if (!Gu.bar_base) return FALSE;
+  if (Gu.is_turing) return FALSE;
+  UINT32 pmc = GuRead32(0);
+  if (Gu.fault || pmc == 0xffffffff || (pmc & 0xffff0000) == 0xbadf0000) return FALSE;
+  UINT32 ss0 = GuRead32(0x82381c);
+  UINT32 ss1 = GuRead32(0x823820);
+  return (!Gu.fault && ss0 == 0x88888888U && (ss1 & 0xfU) == 0x8U);
 }
 

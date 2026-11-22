@@ -6,6 +6,16 @@ For packaged binaries and downloads, visit [GitHub Releases](https://github.com/
 
 ---
 
+## [v1.8.31] - 2026-11-22
+### Fixed
+- **Silicon-Aware Already-Unlocked Recognition (`[P]` and `[U]` modes) (refs #19):** When `AdaUnlockDxe.efi` is installed in UEFI NVRAM, it executes during early POST and unlocks the GPU (`SS0=0x88888888, SS1=0x8`). If the user subsequently booted `BOOTX64.EFI` from USB and selected `[P]` (or `[U]`), `Registers()` previously rejected `*Ss0 == 0x88888888` as invalid cold selectors (`STOP: stage=read-only-cold-profile status=0x8000000000000006`). Now, `Registers()` and `GuIsUnlocked()` detect when a GPU is already unlocked in hardware, set `Gu.already_unlocked = TRUE`, verify VBIOS/profile cleanly, skip redundant hardware unlock transactions, register S3 Sleep Persistence if requested (`[P]`), and hand over directly to Windows Boot Manager.
+- **MSI / OEM Splash Screen Freeze Prevention (refs #19):** `RunFailure()` previously returned `EFI_DEVICE_ERROR` / `EFI_NOT_READY` directly to the UEFI firmware when preflight checks failed on unmutated hardware. On MSI Click BIOS and several modern motherboards, returning an unhandled error from a boot option halts firmware execution and freezes on the OEM boot logo. Now, if hardware was unmutated and safe, `RunFailure()` automatically boots Windows in stock mode after 5 seconds instead of returning an unhandled error to firmware.
+- **S3 Protocol Discovery Fallback (refs #19):** `GuS3PrepareAndRegister` now checks both UEFI PI 1.2 `EFI_S3_SAVE_STATE_PROTOCOL_GUID` and legacy Framework `EFI_BOOT_SCRIPT_SAVE_PROTOCOL_GUID`, providing informative diagnostics if the motherboard BIOS has ACPI S3 disabled or set to S0ix Modern Standby.
+- **Pre-Boot Live Silicon Status Banner:** The pre-boot menu in `BOOTX64.EFI` now checks silicon registers and displays an immediate `[OK] GPU Silicon Status: ALREADY UNLOCKED (by DXE Driver in POST)` banner when the card has already been unlocked, making it clear to the operator that selecting `[P]` or `[U]` registers S3 persistence and boots Windows directly.
+
+### Added
+- **Automated Host Test for Already-Unlocked Bypass:** Added `tests/test_already_unlocked.c` to MSVC host test suite, validating detection states, Turing isolation, fault guards, and bypass behavior in `GuUnlockAllGpus()`.
+
 ## [v1.8.30] - 2026-11-22
 ### Fixed
 - **ESP Volume Full Guard in `[I]` Mode (refs #19):** `StageArchAssetsToVolume` in `src/driver_nvram.c` now verifies all asset file writes. If internal ESP partition runs out of space (`EFI_VOLUME_FULL`), the driver installation logs an informative message and safely falls back to USB medium registration rather than leaving a dangling broken driver on the ESP.
