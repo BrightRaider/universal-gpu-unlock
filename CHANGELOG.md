@@ -17,9 +17,10 @@ For packaged binaries and downloads, visit [GitHub Releases](https://github.com/
 
 ### Added
 - **Automated Host Test for Already-Unlocked Bypass:** Added `tests/test_already_unlocked.c` to MSVC host test suite, validating detection states, Turing isolation, fault guards, and bypass behavior in `GuUnlockAllGpus()`.
-- **Community Hardware Verification (RTX 3090 Ti & RTX 4090):**
+- **Community Hardware Verification (RTX 3090 Ti, RTX 4090 & RTX 2060):**
   - **EVGA GeForce RTX 3090 Ti 24GB (`10de:2203`)** on ASUS PRIME Z490-P (Intel Core i7-10700) verified by @m4ttfx: Measured baseline jumped from 65.55 TFLOPS FP16 / 66.32 TFLOPS BF16 to **132.4 TFLOPS FP16 / 136.6 TFLOPS BF16** (+102% double performance) with Resizable BAR enabled ([upstream issue #495](https://github.com/windows-GPU-UNLOCK/Windows-GPU-UNLOCK/issues/495#issuecomment-7077703728)).
   - **PNY GeForce RTX 4090 24GB (`10de:2684`)** on Gigabyte Z690 UD AC-Y1 (Intel Core i9-13900K) verified by @jacyzheng: Measured baseline jumped from 160 TFLOPS to **255.0 TFLOPS** (+59.4% boost) per `Check-GPU-Unlock.bat`, delivering an immediate 15-25% real-world speedup in ComfyUI workflows on the first try ([upstream issue #444](https://github.com/windows-GPU-UNLOCK/Windows-GPU-UNLOCK/issues/444)).
+  - **NVIDIA GeForce RTX 2060 6GB (`10de:1e89`, TU104-150 harvested)** on ASUS TUF B450-PLUS GAMING verified by @resYuto: Confirmed **`[OK] FULLY UNLOCKED!`** at **25.82 TFLOPS** (dense 4096 GEMM, 4.21x execution throughput multiplier over 6.13 TFLOPS factory FP32 baseline, 100% unrestricted compute capacity) ([#20](https://github.com/BrightRaider/universal-gpu-unlock/issues/20)).
 
 ## [v1.8.30] - 2026-11-22
 ### Fixed
