@@ -6,6 +6,22 @@ For packaged binaries and downloads, visit [GitHub Releases](https://github.com/
 
 ---
 
+## [v1.8.32] - 2026-11-22
+### Added
+- **12-MiB GFW Usable-Memory-Delta Tolerance (refs Zagitta #361):** GPU-Firmware (GFW) reports `usable_fb` with reserved apertures on high-end boards (e.g. 24,564 MiB vs 24,576 MiB physical on RTX 3090 Ti & RTX 4090 [12 MiB delta], 16,376 MiB vs 16,384 MiB on RTX 4080 [8 MiB delta], and 12,282 MiB vs 12,288 MiB on RTX 4070 SUPER [6 MiB delta]). In `src/vendor/unlock_610.c`, replaced rigid byte-equality checking in `unlock_transaction_layout()` with an aperture delta threshold (`delta_mb <= 32`), preventing `-ERANGE` (-34) preflight rejections while ensuring `mmu_lock_low` remains safely within the pre-scrubbed top 256 MiB.
+- **`ATTEMPT.FLG` Boot-Loop Safeguard (refs MindAllik v1.3.3 / v1.3.4):** Implemented an automated pre-mutation filesystem safeguard in `src/boot_io.c` (`GuCheckSafeguardFlag`, `GuSetSafeguardFlag`, `GuClearSafeguardFlag`). Before mutating hardware registers, `\GPU-UNLOCK\ATTEMPT.FLG` is staged to disk. Only after verified completion and display handover is the flag cleanly removed. If an unexpected power drop or mutation hang occurs, the next POST detects `ATTEMPT.FLG`, enters `[SAFEGUARD ACTIVE]` mode, removes the stale flag, and immediately chainloads stock factory Windows, guaranteeing immunity against boot loops.
+- **`SLOT-REVIVE` Secondary Bus Reset & GOP-Decouple Engine (refs physicsdolphin v2.1.12-rc6):** Implemented `GuSlotRevive` in `src/gpu_discovery.c` to address OEM systems (Dell/HP) and fast warm reboots where secondary PCIe slots linger in low-power states (`PMCSR != D0`) or drop off the fabric reporting `child 0xffff` / `0xffffffff`. Before asserting Secondary Bus Reset (SBR), the GOP driver is proactively decoupled via `DisconnectController()` to eliminate catastrophic firmware freezes. The upstream PCIe bridge is pulsed (2ms reset assertion, 100ms link training settling), and BAR0/BAR1 and Memory Decode attributes are restored from UEFI bookkeeping.
+- **Mobile & Laptop Hardware Database Expansion:** Expanded `GU_AMPERE_DEVICE_IDS` in `src/gpu_device_ids.h`:
+  - `0x25ec`: GA107 – NVIDIA GeForce RTX 3050 6GB Laptop
+  - `0x25ed`: GA107 – NVIDIA GeForce RTX 2050 Mobile
+  - `0x2560`: GA106 – NVIDIA GeForce RTX 3060 Mobile / Desktop-FrankenCard
+  Added test coverage in `tests/test_turing_local.c` and calibrated `"2050"` profile in `tools/gu_system_info.py`.
+
+### Fixed
+- **Turing (TU102) `BCR_CTRL` Polling-Skip (refs MindAllik v1.3.3):** In `src/vendor/unlock_610.c` (`falcon_reset`), guarded the `BCR_CTRL` (`falcon2 + 0x668`) register write and polling sequence on Turing hardware (`!gpu_is_turing_device`). On Turing GPUs (RTX 2080 Ti, TITAN RTX), querying this register caused polling timeouts (`poll timeout: reg=0x111668`, code `-110`). The switching sequence remains active for Ampere (GA10x) and Ada (AD10x).
+
+---
+
 ## [v1.8.31] - 2026-11-22
 ### Fixed
 - **Silicon-Aware Already-Unlocked Recognition (`[P]` and `[U]` modes) (refs #19):** When `AdaUnlockDxe.efi` is installed in UEFI NVRAM, it executes during early POST and unlocks the GPU (`SS0=0x88888888, SS1=0x8`). If the user subsequently booted `BOOTX64.EFI` from USB and selected `[P]` (or `[U]`), `Registers()` previously rejected `*Ss0 == 0x88888888` as invalid cold selectors (`STOP: stage=read-only-cold-profile status=0x8000000000000006`). Now, `Registers()` and `GuIsUnlocked()` detect when a GPU is already unlocked in hardware, set `Gu.already_unlocked = TRUE`, verify VBIOS/profile cleanly, skip redundant hardware unlock transactions, register S3 Sleep Persistence if requested (`[P]`), and hand over directly to Windows Boot Manager.

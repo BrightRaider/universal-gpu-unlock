@@ -185,6 +185,8 @@ static EFI_STATUS RunUnlock(EFI_SYSTEM_TABLE *t, EFI_HANDLE image,
 
   GuBootSilence();
 
+  (VOID) GuSetSafeguardFlag();
+
   UINTN unlocked_count = 0, failed = 0;
   UINT32 options = (Gu.already_unlocked ? 0U : GU_UNLOCK_VERIFY_WINDOWS) | (enable_s3 ? GU_UNLOCK_REGISTER_S3 : 0U);
   s = GuUnlockAllGpus(t, image, gpu, device_count, options, "", &stage,
@@ -197,6 +199,8 @@ static EFI_STATUS RunUnlock(EFI_SYSTEM_TABLE *t, EFI_HANDLE image,
   if (gpu[device_count - 1].handle) {
     (VOID) GuReconnectDisplayAfterUnlock(t, image, gpu[device_count - 1].handle, TRUE);
   }
+
+  (VOID) GuClearSafeguardFlag();
 
   GuBootUnsilence();
   if (Gu.already_unlocked) {
@@ -242,6 +246,28 @@ EFI_STATUS EFIAPI UefiMain(EFI_HANDLE image, EFI_SYSTEM_TABLE *t) {
     return s;
 
   GuLog("=== Universal Multi-Gen GPU Unlock %s (BOOTX64.EFI) ===\n", GU_VERSION_TAG);
+
+  /* MindAllik v1.3.3 / v1.3.4 Safeguard check: If previous attempt did not complete,
+   * bypass unlock immediately to prevent system boot loops. */
+  if (GuCheckSafeguardFlag()) {
+    GuLog("[SAFEGUARD ACTIVE] Previous unlock attempt detected (ATTEMPT.FLG present)!\n");
+    GuLog("[SAFEGUARD ACTIVE] Bypassing hardware unlock to prevent boot loop. Chainloading stock Windows.\n");
+    GuBootSay(L"\r\n=======================================================\r\n"
+              L" [SAFEGUARD ACTIVE] BOOT-LOOP PROTECTION TRIGGERED\r\n"
+              L"=======================================================\r\n"
+              L" An uncompleted GPU unlock attempt was detected (ATTEMPT.FLG).\r\n"
+              L" Safeguard active: Skipping hardware unlock and clearing flag.\r\n"
+              L" Chainloading Windows in safe factory mode in 3 seconds...\r\n");
+    (VOID) GuClearSafeguardFlag();
+    (VOID) GuBootSyncLog();
+    if (t->BootServices && t->BootServices->Stall)
+      t->BootServices->Stall(3000000);
+    s = GuBootLoadWindows();
+    if (s == EFI_SUCCESS) {
+      (VOID) GuBootClose();
+      return GuBootWindows();
+    }
+  }
 
   GU_DISCOVERED_DEVICE devices[GU_MAX_DISCOVERED_DEVICES];
   UINTN device_count = 0;

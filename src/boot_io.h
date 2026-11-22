@@ -16,3 +16,7 @@ VOID GuBootHalt(VOID);
 BOOLEAN GuBootLogOpen(VOID);
 EFI_HANDLE GuBootGetTargetEspVolume(VOID);
 const CHAR16 *GuBootGetLogPath(VOID);
+/* MindAllik v1.3.3 / v1.3.4 Boot-Loop Safeguard: ATTEMPT.FLG */
+BOOLEAN GuCheckSafeguardFlag(VOID);
+EFI_STATUS GuSetSafeguardFlag(VOID);
+EFI_STATUS GuClearSafeguardFlag(VOID);

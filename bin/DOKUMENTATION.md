@@ -1,7 +1,7 @@
 # Technische Dokumentation: Universal GPU Unlock (Multi-Gen)
 
 > **Tool:** Universal GPU Unlock  
-> **Version:** v1.8.28  
+> **Version:** v1.8.32  
 > **Architekturen:** NVIDIA Ada Lovelace (RTX 40), Ampere (RTX 30), Turing (RTX 20 / CMP)  
 > **Unterstützte Betriebssysteme:** Windows 10, Windows 11, WSL2 / Ubuntu CUDA Container  
 
@@ -223,3 +223,40 @@ Bei Rückgabe des Fehlerstatus an die UEFI-Firmware froren manche Mainboards (in
 2. **Nahtlose Weiterleitung:** Bei Auswahl von `[P]` oder `[U]` wird die redundante Hardware-Transaktion übersprungen. Im Modus `[P]` wird die S3-Sleep-Persistenz registriert, und die Kontrolle wird ohne Hänger direkt an den Windows Boot Manager übergeben.
 3. **Freeze-Schutz in `RunFailure`:** Sollte eine Vorprüfung bei unberührter Hardware fehlschlagen, wird kein unkontrollierter Fehlercode an das BIOS zurückgegeben (was Hänger provoziert), sondern nach 5 Sekunden kontrolliert Windows im Standardmodus gestartet.
 4. **S3 Protocol Fallback:** `GuS3PrepareAndRegister` prüft sowohl `EFI_S3_SAVE_STATE_PROTOCOL_GUID` (PI 1.2+) als auch `EFI_BOOT_SCRIPT_SAVE_PROTOCOL_GUID` (Framework) und liefert klare Diagnoseausgaben, falls ACPI S3 im BIOS deaktiviert ist.
+
+---
+
+## 12. Ecosystem-Erweiterungen & Hardware-Stabilität (ab v1.8.32)
+
+### 12.1 12-MiB GFW Usable-Memory-Delta Toleranz (Zagitta PR #361)
+Auf High-End-Grafikkarten (insbesondere RTX 3090 Ti und RTX 4090 mit 24 GB VRAM) meldet die GPU-Firmware (GFW) vor Treiberstart nicht die vollen 24.576 MiB, sondern exakt **24.564 MiB** (ein herstellerspezifisches Apertur-Reservierungsdelta von 12 MiB). Ähnliche Deltas existieren bei der RTX 4080 (16.384 → 16.376 MiB, 8 MiB) und RTX 4070 SUPER (12.288 → 12.282 MiB, 6 MiB).
+Strikte Byte-Gleichheitsprüfungen (`(mmu_top >> 20) == (usable_fb >> 20)`) schlugen auf manchen Plattformen mit `-ERANGE` (-34) fehl.
+In `src/vendor/unlock_610.c` habe ich eine Deltaprüfung implementiert:
+Liegt das Delta zwischen dem physikalischen MMU-Top und dem gemeldeten Framebuffer innerhalb von 32 MiB (`delta_mb <= 32`), wird die Konfiguration als gültig akzeptiert. Gleichzeitig wird validiert, dass `mmu_lock_low` innerhalb der oberen vorab bereinigten 256 MiB liegt, wodurch WPR-Kollisionen und ungültige MMU-Locks zuverlässig ausgeschlossen sind.
+
+### 12.2 `ATTEMPT.FLG` Boot-Loop Safeguard (MindAllik v1.3.3 / v1.3.4)
+Um unter allen Umständen zu verhindern, dass ein unerwarteter Systemabsturz oder Freeze während der Register-Mutationen zu einer Bootschleife führt, habe ich einen dateibasierten Safeguard integriert:
+1. Vor dem ersten hardwareseitigen Schreibzugriff legt der Loader eine Datei `\GPU-UNLOCK\ATTEMPT.FLG` auf dem ESP- bzw. USB-Laufwerk an.
+2. Erst nach erfolgreicher Verifikation und Abschluss des Display-Handovers wird die Flagge gelöscht.
+3. Findet `BOOTX64.EFI` oder `AdaUnlockDxe.efi` beim POST eine vorhandene `ATTEMPT.FLG`, schaltet das System sofort in den `[SAFEGUARD ACTIVE]`-Modus, protokolliert die Warnung, löscht die Flagge und chainloaded Windows direkt im sicheren Werkszustand.
+
+### 12.3 `SLOT-REVIVE` via Secondary Bus Reset & GOP-Decouple (physicsdolphin v2.1.12-rc6)
+Auf OEM-Systemen (Dell/HP) oder nach schnellen Warm-Reboots verharren PCIe-Slots gelegentlich im Energiesparmodus (`PMCSR != D0`) oder melden `child 0xffff` / `0xffffffff`.
+Ein Secondary Bus Reset (SBR) darf **niemals bei gebundenem GOP-Treiber** ausgeführt werden, da abbrechende MMIO-Transaktionen unweigerlich zum Firmware-Freeze führen.
+Die Implementierung in `src/gpu_discovery.c` (`GuSlotRevive`) folgt einer strikten 5-Stufen-Sequenz:
+1. **GOP-Entkopplung:** Trennung aller Display- und GOP-Treiberbindungen über `DisconnectController()`.
+2. **PMCSR D0-Zustand:** Explizites Setzen von Bits 1:0 im PMCSR auf D0 (`pmcsr & ~3U`) mit 10 ms Einschwingzeit.
+3. **Pulsieren des Secondary Bus Reset:** Auffinden der übergeordneten PCIe-Bridge, Setzen des SBR-Bits (Offset 0x3E, Bit 6) für 2 ms, Zurücknehmen und 100 ms PCIe-Link-Training.
+4. **Wiederherstellung des Bookkeepings:** Rekonstruktion von BAR0/BAR1 und Reaktivierung von Memory Decode und Bus Master im PCI Command Register.
+5. **Konfigurations-Refresh:** Erneutes Auslesen der PCI-Header zur nahtlosen Hardware-Erkennung.
+
+### 12.4 Turing (TU102) `BCR_CTRL` Polling-Skip (MindAllik v1.3.3)
+Auf Turing-Grafikkarten (RTX 2080 Ti, TITAN RTX) führt das Ansprechen des Registers `BCR_CTRL` (`falcon2 + 0x668`) in der Falcon-Reset-Routine zu einem Timeout (`poll timeout: reg=0x111668`, Fehlercode `-110`).
+In `src/vendor/unlock_610.c` wird dieser Polling-Schritt für `GU_ARCH_TURING` gezielt übersprungen. Für Ampere (GA10x) und Ada (AD10x) bleibt die Umschaltung vollständig aktiv.
+
+### 12.5 Erweiterung der Hardware-Datenbank (Mobile & Laptop GPUs)
+In `src/gpu_device_ids.h` wurden neue mobile Ampere-Device-IDs ergänzt:
+- **`0x25ec` (10de:25ec):** GA107 – NVIDIA GeForce RTX 3050 6GB Laptop
+- **`0x25ed` (10de:25ed):** GA107 – NVIDIA GeForce RTX 2050 Mobile
+- **`0x2560` (10de:2560):** GA106 – NVIDIA GeForce RTX 3060 Mobile / Desktop-FrankenCard
+Die Diagnosewerkzeuge (`tools/gu_system_info.py`) und Host-Tests (`tests/test_turing_local.c`) wurden entsprechend erweitert.

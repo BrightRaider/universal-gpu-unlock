@@ -32,7 +32,10 @@
   X(0x2501U) /* RTX 3050 OEM (GA106) */ \
   X(0x2503U) X(0x2504U) X(0x2507U) X(0x2508U) /* RTX 3060 (GA106) */ \
   X(0x2582U) /* RTX 3050 8GB (GA106) */ \
-  X(0x2520U) X(0x2560U)
+  X(0x2520U) /* RTX 3060 Mobile (GA106) */ \
+  X(0x2560U) /* RTX 3060 Mobile / Desktop-FrankenCard (GA106) */ \
+  X(0x25ecU) /* RTX 3050 6GB Laptop (GA107) */ \
+  X(0x25edU) /* RTX 2050 Mobile (GA107) */
 
 #define GU_TURING_DEVICE_IDS(X) \
   X(0x1e04U) X(0x1e07U) X(0x1e02U) /* RTX 2080 Ti, TITAN RTX (TU102) */ \

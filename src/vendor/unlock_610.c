@@ -482,7 +482,9 @@ static int falcon_reset(struct unlock_transaction_work *work, const struct falco
 		return GU_RESULT(ret);
 	if (read_bar(work, eng->base + 0xf4, &hwcfg) || inaccessible(hwcfg))
 		return GU_RESULT(-EIO);
-	if (hwcfg & (1u << 10)) {
+	/* Turing (TU102): BCR_CTRL (falcon2 + 0x668) does not support this switching sequence
+	 * and causes poll timeout: reg=0x111668 (-ETIMEDOUT / -110). Ref: MindAllik v1.3.3 */
+	if (!gpu_is_turing_device(work->pdev->device) && (hwcfg & (1u << 10))) {
 		if (read_bar(work, eng->falcon2 + 0x668, &bcr) || inaccessible(bcr))
 			return GU_RESULT(-ENODEV);
 		if (bcr & (1u << 4)) {
@@ -1019,16 +1021,33 @@ static int unlock_transaction_layout(struct unlock_transaction_work *work)
 			u64 mmu_top = mmu_hi > ~0ull - 0xffffull ? ~0ull :
 				(mmu_hi + 0xffffull) & ~0xffffull;
 			bool top_lock;
+			u64 mmu_top_mb = mmu_top >> 20;
+			u64 fb_mb = in->usable_fb >> 20;
+			u64 delta_mb = mmu_top_mb >= fb_mb ? (mmu_top_mb - fb_mb) : (fb_mb - mmu_top_mb);
 
 			in->mmu_lock_valid = mmu_hi >= in->mmu_lock_low;
-			top_lock = in->mmu_lock_valid && (mmu_top >> 20) == (in->usable_fb >> 20);
-			dev_info(&work->pdev->dev,
-				 "layout mmu: lo=%#llx hi=%#llx hi_exclusive=%#llx constrain=%u\n",
-				 (unsigned long long)in->mmu_lock_low, (unsigned long long)mmu_hi,
-				 (unsigned long long)mmu_top, top_lock);
-			if (!top_lock) {
+			/* Zagitta PR #361: Allow up to 32 MiB aperture delta between physical top and
+			 * GFW reported usable FB (e.g. 24576 vs 24564 on RTX 3090 Ti / 4090 [12 MiB delta],
+			 * 16384 vs 16376 on 4080 [8 MiB], 12288 vs 12282 on 4070S [6 MiB]).
+			 * Strict byte-equality checks reject valid hardware layouts with -ERANGE.
+			 * Also verify mmu_lock_low is within the pre-scrubbed top 256 MiB. */
+			top_lock = in->mmu_lock_valid && (delta_mb <= 32);
+			if (top_lock && in->mmu_lock_low < in->usable_fb - (256ull << 20)) {
 				dev_info(&work->pdev->dev,
-					 "mmu lock ignored: high address is not the FB top\n");
+					 "mmu lock ignored: low address (%#llx) below pre-scrubbed top 256 MiB\n",
+					 (unsigned long long)in->mmu_lock_low);
+				top_lock = false;
+			}
+			dev_info(&work->pdev->dev,
+				 "layout mmu: lo=%#llx hi=%#llx hi_exclusive=%#llx delta_mb=%llu constrain=%u\n",
+				 (unsigned long long)in->mmu_lock_low, (unsigned long long)mmu_hi,
+				 (unsigned long long)mmu_top, (unsigned long long)delta_mb, top_lock);
+			if (!top_lock) {
+				if (delta_mb > 32) {
+					dev_info(&work->pdev->dev,
+						 "mmu lock ignored: high address is not the FB top (delta %llu MiB > 32 MiB)\n",
+						 (unsigned long long)delta_mb);
+				}
 				in->mmu_lock_valid = false;
 			}
 		}

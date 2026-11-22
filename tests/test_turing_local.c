@@ -83,12 +83,20 @@ int main(void) {
   CHECK(!GuIsTuringDeviceId(0x2206U), "RTX 3080 must NOT match Turing");
   CHECK(!GuIsTuringDeviceId(0x1234U), "Unknown device must NOT match Turing");
 
+  /* New mobile Ampere device ID tests */
+  CHECK(GuIsAmpereDeviceId(0x25ecU), "RTX 3050 6GB Laptop (25ec) must match Ampere");
+  CHECK(GuIsAmpereDeviceId(0x25edU), "RTX 2050 Mobile (25ed) must match Ampere");
+  CHECK(GuIsAmpereDeviceId(0x2560U), "RTX 3060 FrankenCard (2560) must match Ampere");
+
   /* Full PCI ID matching */
   CHECK(GuIsSupportedPciId(0x1e0410deU), "RTX 2080 Ti 0x1e0410de must be supported");
   CHECK(GuIsSupportedPciId(0x1e8910deU), "RTX 2060 TU104 0x1e8910de must be supported");
   CHECK(GuIsSupportedPciId(0x1f0b10deU), "CMP 40HX 0x1f0b10de must be supported");
   CHECK(GuIsSupportedPciId(0x268410deU), "RTX 4090 0x268410de must be supported");
   CHECK(GuIsSupportedPciId(0x220610deU), "RTX 3080 0x220610de must be supported");
+  CHECK(GuIsSupportedPciId(0x25ec10deU), "RTX 3050 Laptop 0x25ec10de must be supported");
+  CHECK(GuIsSupportedPciId(0x25ed10deU), "RTX 2050 Mobile 0x25ed10de must be supported");
+  CHECK(GuIsSupportedPciId(0x256010deU), "RTX 3060 FrankenCard 0x256010de must be supported");
   CHECK(!GuIsSupportedPciId(0x1e041002U), "Non-NVIDIA vendor must be rejected");
 
   /* 2. TU102 Asset Verification */

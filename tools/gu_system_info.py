@@ -66,6 +66,7 @@ CARD_PROFILES = {
     "3060 ti": {"min_unlocked": 55.0, "threshold": 46.0, "stock_typical": 34.0},
     "3060": {"min_unlocked": 40.0, "threshold": 32.0, "stock_typical": 24.0},
     "3050": {"min_unlocked": 28.0, "threshold": 22.0, "stock_typical": 15.0},
+    "2050": {"min_unlocked": 22.0, "threshold": 18.0, "stock_typical": 13.0},
     # Turing Architecture (sm_75): 2nd-gen Tensor Cores with cuBLAS FP32 Accumulator
     # Theoretical Peak = SMs * 512 ops/cycle * Boost GHz (FP32 accumulate HMMA)
     "titan rtx": {"min_unlocked": 50.0, "threshold": 45.0, "stock_typical": 32.0},

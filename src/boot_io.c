@@ -258,6 +258,79 @@ EFI_STATUS GuBootOpen(EFI_HANDLE image, EFI_SYSTEM_TABLE *t) {
   return b->SetWatchdogTimer(0, 0, 0, NULL);
 }
 
+/* MindAllik v1.3.3 / v1.3.4 Boot-Loop Safeguard: ATTEMPT.FLG
+ * Staged before hardware mutation, cleared on clean handoff.
+ * Prevents system boot loops if register mutation ever hangs. */
+BOOLEAN GuCheckSafeguardFlag(VOID) {
+  if (!Root)
+    return FALSE;
+
+  EFI_FILE_PROTOCOL *f = NULL;
+  EFI_STATUS s = Root->Open(Root, &f, L"\\GPU-UNLOCK\\ATTEMPT.FLG", EFI_FILE_MODE_READ, 0);
+  if (s != EFI_SUCCESS || !f) {
+    s = Root->Open(Root, &f, L"\\AD102-UNLOCK\\ATTEMPT.FLG", EFI_FILE_MODE_READ, 0);
+  }
+
+  if (s == EFI_SUCCESS && f) {
+    (VOID)f->Close(f);
+    return TRUE;
+  }
+  return FALSE;
+}
+
+EFI_STATUS GuSetSafeguardFlag(VOID) {
+  if (!Root)
+    return EFI_DEVICE_ERROR;
+
+  EFI_FILE_PROTOCOL *f = NULL;
+  EFI_STATUS s = Root->Open(Root, &f, L"\\GPU-UNLOCK\\ATTEMPT.FLG",
+                            EFI_FILE_MODE_READ | EFI_FILE_MODE_WRITE | EFI_FILE_MODE_CREATE, 0);
+  if (s != EFI_SUCCESS || !f) {
+    s = Root->Open(Root, &f, L"\\AD102-UNLOCK\\ATTEMPT.FLG",
+                   EFI_FILE_MODE_READ | EFI_FILE_MODE_WRITE | EFI_FILE_MODE_CREATE, 0);
+  }
+
+  if (s == EFI_SUCCESS && f) {
+    static const CHAR8 marker[] = "GPU_UNLOCK_ATTEMPT_ACTIVE\r\n";
+    UINTN len = sizeof(marker) - 1;
+    (VOID)f->Write(f, &len, (VOID *)marker);
+    (VOID)f->Flush(f);
+    (VOID)f->Close(f);
+    GuLog("Safeguard: Staged ATTEMPT.FLG before hardware mutation\n");
+    return EFI_SUCCESS;
+  }
+  GuLog("Safeguard: Warning: unable to stage ATTEMPT.FLG (s=%#llx)\n", (unsigned long long)s);
+  return s;
+}
+
+EFI_STATUS GuClearSafeguardFlag(VOID) {
+  if (!Root)
+    return EFI_DEVICE_ERROR;
+
+  EFI_STATUS s = EFI_NOT_FOUND;
+  EFI_FILE_PROTOCOL *f = NULL;
+
+  s = Root->Open(Root, &f, L"\\GPU-UNLOCK\\ATTEMPT.FLG",
+                 EFI_FILE_MODE_READ | EFI_FILE_MODE_WRITE, 0);
+  if (s == EFI_SUCCESS && f) {
+    s = f->Delete(f);
+    GuLog("Safeguard: Cleaned \\GPU-UNLOCK\\ATTEMPT.FLG after verified handoff (status=%#llx)\n",
+          (unsigned long long)s);
+    return s;
+  }
+
+  s = Root->Open(Root, &f, L"\\AD102-UNLOCK\\ATTEMPT.FLG",
+                 EFI_FILE_MODE_READ | EFI_FILE_MODE_WRITE, 0);
+  if (s == EFI_SUCCESS && f) {
+    s = f->Delete(f);
+    GuLog("Safeguard: Cleaned \\AD102-UNLOCK\\ATTEMPT.FLG after verified handoff (status=%#llx)\n",
+          (unsigned long long)s);
+    return s;
+  }
+
+  return EFI_SUCCESS;
+}
+
 static EFI_STATUS ReadFileData(EFI_FILE_PROTOCOL *root, const CHAR16 *name,
                                UINTN min_size, UINTN max_size, UINTN *file_size,
                                VOID **data) {

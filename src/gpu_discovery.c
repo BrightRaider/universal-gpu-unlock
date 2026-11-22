@@ -45,6 +45,110 @@ static int ReadPciIdentity(void *opaque, size_t index, GU_GPU_RECORD *record) {
   return 0;
 }
 
+#ifndef GU_DISCOVERY_HOST_TEST
+/* physicsdolphin v2.1.12-rc6 SLOT-REVIVE:
+ * Secondary Bus Reset (SBR) & GOP-Decouple sequence for OEM systems (Dell/HP)
+ * or fast warm reboots where PCIe slots linger in PMCSR != D0 or child 0xffff.
+ * CRITICAL: GOP must always be decoupled via DisconnectController before SBR,
+ * otherwise missing link transactions freeze UEFI firmware completely. */
+static VOID GuSlotRevive(EFI_BOOT_SERVICES *bs, EFI_HANDLE handle,
+                         EFI_PCI_IO_PROTOCOL *io, UINTN seg, UINTN bus,
+                         UINTN dev, UINTN fun, UINT32 config[64]) {
+  if (!bs || !handle || !io || !config) return;
+
+  GuLog("SLOT-REVIVE: Initiating PCIe revival on seg=%u bus=%u dev=%u fun=%u (DevID=0x%08x cmd=0x%04x)\n",
+        (unsigned)seg, (unsigned)bus, (unsigned)dev, (unsigned)fun, config[0], (unsigned)(config[1] & 0xffff));
+
+  /* Step 1: Disconnect GOP / Display drivers first to avoid firmware freeze during SBR / power state switch */
+  if (bs->DisconnectController) {
+    (VOID)bs->DisconnectController(handle, NULL, NULL);
+  }
+
+  /* Step 2: Traverse capabilities to find PCI Power Management and force PMCSR -> D0 */
+  UINT8 cap_ptr = (UINT8)(config[0x34 / 4] & 0xff);
+  UINTN steps = 0;
+  while (cap_ptr >= 0x40 && cap_ptr <= 0xfc && (cap_ptr & 3) == 0 && ++steps < 48) {
+    UINT8 cap_id = 0, next_ptr = 0;
+    UINT16 pmcsr = 0;
+    if (EFI_ERROR(io->Pci.Read(io, EfiPciIoWidthUint8, cap_ptr, 1, &cap_id))) break;
+    if (EFI_ERROR(io->Pci.Read(io, EfiPciIoWidthUint8, cap_ptr + 1, 1, &next_ptr))) break;
+    if (cap_id == 0x01) { /* EFI_PCI_CAPABILITY_ID_PMI */
+      if (!EFI_ERROR(io->Pci.Read(io, EfiPciIoWidthUint16, cap_ptr + 4, 1, &pmcsr))) {
+        if ((pmcsr & 3U) != 0) {
+          UINT16 new_pmcsr = (UINT16)(pmcsr & ~3U);
+          GuLog("SLOT-REVIVE: Waking device from D%u to D0 (PMCSR: 0x%04x -> 0x%04x)\n",
+                (unsigned)(pmcsr & 3U), (unsigned)pmcsr, (unsigned)new_pmcsr);
+          (VOID)io->Pci.Write(io, EfiPciIoWidthUint16, cap_ptr + 4, 1, &new_pmcsr);
+          if (bs->Stall) bs->Stall(10000); /* 10ms D3hot->D0 recovery time */
+        }
+      }
+      break;
+    }
+    cap_ptr = next_ptr;
+  }
+
+  /* Step 3: If still unresponsive or reporting child 0xffff, issue Secondary Bus Reset on upstream bridge */
+  UINT32 probe_id = 0;
+  (VOID)io->Pci.Read(io, EfiPciIoWidthUint32, 0, 1, &probe_id);
+  if (bus > 0 && (probe_id == 0xffffffffU || (probe_id & 0xffffU) == 0xffffU) &&
+      bs->LocateHandleBuffer && bs->HandleProtocol && bs->FreePool) {
+    EFI_HANDLE *bridge_handles = NULL;
+    UINTN bridge_count = 0;
+    EFI_STATUS br_s = bs->LocateHandleBuffer(ByProtocol, &PciGuid, NULL, &bridge_count, &bridge_handles);
+    if (!EFI_ERROR(br_s) && bridge_handles) {
+      for (UINTN b_idx = 0; b_idx < bridge_count; b_idx++) {
+        EFI_PCI_IO_PROTOCOL *bridge_io = NULL;
+        if (EFI_ERROR(bs->HandleProtocol(bridge_handles[b_idx], &PciGuid, (VOID **)&bridge_io)) || !bridge_io)
+          continue;
+        UINT8 hdr_type = 0, sec_bus = 0;
+        (VOID)bridge_io->Pci.Read(bridge_io, EfiPciIoWidthUint8, 0x0e, 1, &hdr_type);
+        if ((hdr_type & 0x7fU) == 0x01) { /* PCI-to-PCI Bridge */
+          (VOID)bridge_io->Pci.Read(bridge_io, EfiPciIoWidthUint8, 0x19, 1, &sec_bus);
+          if (sec_bus == bus) {
+            UINT16 bctrl = 0;
+            (VOID)bridge_io->Pci.Read(bridge_io, EfiPciIoWidthUint16, 0x3e, 1, &bctrl);
+            GuLog("SLOT-REVIVE: Upstream bridge on bus %u found; asserting SBR (BridgeCtrl: 0x%04x)\n",
+                  (unsigned)sec_bus, (unsigned)bctrl);
+            UINT16 sbr_set = (UINT16)(bctrl | 0x0040U);
+            (VOID)bridge_io->Pci.Write(bridge_io, EfiPciIoWidthUint16, 0x3e, 1, &sbr_set);
+            if (bs->Stall) bs->Stall(2000); /* 2ms reset assertion per PCI spec */
+            UINT16 sbr_clear = (UINT16)(bctrl & ~0x0040U);
+            (VOID)bridge_io->Pci.Write(bridge_io, EfiPciIoWidthUint16, 0x3e, 1, &sbr_clear);
+            if (bs->Stall) bs->Stall(100000); /* 100ms link training settling time */
+            break;
+          }
+        }
+      }
+      (VOID)bs->FreePool(bridge_handles);
+    }
+  }
+
+  /* Step 4: Restore BAR attributes and command decode from UEFI bookkeeping */
+  if (config[4] != 0 && config[4] != 0xffffffffU) {
+    (VOID)io->Pci.Write(io, EfiPciIoWidthUint32, 0x10, 1, &config[4]);
+  }
+  if (config[5] != 0 && config[5] != 0xffffffffU) {
+    (VOID)io->Pci.Write(io, EfiPciIoWidthUint32, 0x14, 1, &config[5]);
+  }
+  if (io->Attributes) {
+    UINT64 supported = 0;
+    if (!EFI_ERROR(io->Attributes(io, EfiPciIoAttributeOperationSupported, 0, &supported))) {
+      if (supported & EFI_PCI_IO_ATTRIBUTE_MEMORY) {
+        (VOID)io->Attributes(io, EfiPciIoAttributeOperationEnable, EFI_PCI_IO_ATTRIBUTE_MEMORY, NULL);
+      }
+    }
+  }
+  UINT16 restore_cmd = (UINT16)((config[1] & 0xffffU) | 0x0006U);
+  (VOID)io->Pci.Write(io, EfiPciIoWidthUint16, 0x04, 1, &restore_cmd);
+  if (bs->Stall) bs->Stall(5000);
+
+  /* Step 5: Refresh config space */
+  (VOID)io->Pci.Read(io, EfiPciIoWidthUint32, 0, 64, config);
+  GuLog("SLOT-REVIVE: Post-revive check: DevID=0x%08x cmd=0x%04x bar0=0x%08x\n",
+        config[0], (unsigned)(config[1] & 0xffff), config[4]);
+}
+#endif
+
 EFI_STATUS GuDiscoverAllGpus(EFI_HANDLE image, EFI_SYSTEM_TABLE *table,
                              GU_DISCOVERED_DEVICE *devices, UINTN max_devices,
                              UINTN *out_count) {
@@ -120,9 +224,19 @@ EFI_STATUS GuDiscoverAllGpus(EFI_HANDLE image, EFI_SYSTEM_TABLE *table,
     if (EFI_ERROR(s) || config[0] != p->pci_id ||
         config[0x2c / 4] != p->subsystem_id ||
         (config[2] >> 16) != p->class_code) {
-      GuLog("Discovery candidate [%zu] rejected: config header mismatch (cmd=0x%x rom=0x%x)\n",
-            i + 1, (unsigned)(config[1] & 0xffff), config[0x30 / 4]);
-      continue;
+#ifndef GU_DISCOVERY_HOST_TEST
+      if (config[0] == 0xffffffffU || (config[0] & 0xffffU) == 0xffffU) {
+        GuLog("Discovery candidate [%zu]: Link unresponsive / child 0xffff; attempting SLOT-REVIVE\n", i + 1);
+        GuSlotRevive(table->BootServices, (EFI_HANDLE)p->handle, io, seg, bus, dev, fun, config);
+      }
+#endif
+      if (config[0] != p->pci_id ||
+          config[0x2c / 4] != p->subsystem_id ||
+          (config[2] >> 16) != p->class_code) {
+        GuLog("Discovery candidate [%zu] rejected: config header mismatch (cmd=0x%x rom=0x%x)\n",
+              i + 1, (unsigned)(config[1] & 0xffff), config[0x30 / 4]);
+        continue;
+      }
     }
 
     /* Headless / secondary compute card activation: if the card has no display outputs
@@ -146,10 +260,36 @@ EFI_STATUS GuDiscoverAllGpus(EFI_HANDLE image, EFI_SYSTEM_TABLE *table,
     }
 
     if (!GuCheckConfig(config, seg, bus, dev, fun, &caps)) {
+#ifndef GU_DISCOVERY_HOST_TEST
+      /* Check if rejected due to PMCSR != D0 */
+      UINT8 p_ptr = (UINT8)(config[0x34 / 4] & 0xff);
+      BOOLEAN not_d0 = FALSE;
+      UINTN steps = 0;
+      while (p_ptr >= 0x40 && p_ptr <= 0xfc && (p_ptr & 3) == 0 && ++steps < 48) {
+        UINT8 cap_id = (UINT8)(config[p_ptr / 4] >> ((p_ptr & 3) * 8));
+        if (cap_id == 0x01) { /* PMI */
+          UINT16 pmcsr = (UINT16)(config[(p_ptr + 4) / 4] >> (((p_ptr + 4) & 3) * 8));
+          if ((pmcsr & 3U) != 0) not_d0 = TRUE;
+          break;
+        }
+        p_ptr = (UINT8)(config[p_ptr / 4] >> (((p_ptr & 3) + 1) * 8));
+      }
+      if (not_d0) {
+        GuLog("Discovery candidate [%zu]: PMCSR != D0; attempting SLOT-REVIVE\n", i + 1);
+        GuSlotRevive(table->BootServices, (EFI_HANDLE)p->handle, io, seg, bus, dev, fun, config);
+        if (GuCheckConfig(config, seg, bus, dev, fun, &caps)) {
+          GuLog("Discovery candidate [%zu]: Successfully revived to D0!\n", i + 1);
+          goto candidate_accepted;
+        }
+      }
+#endif
       GuLog("Discovery candidate [%zu] rejected: config check failed (cmd=0x%x rom=0x%x)\n",
             i + 1, (unsigned)(config[1] & 0xffff), config[0x30 / 4]);
       continue;
     }
+#ifndef GU_DISCOVERY_HOST_TEST
+candidate_accepted:
+#endif
 
     GU_DISCOVERED_DEVICE *d = &devices[discovered];
     d->handle = (EFI_HANDLE)p->handle;

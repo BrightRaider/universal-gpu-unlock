@@ -37,6 +37,16 @@ static VOID EFIAPI AdaUnlockOnReadyToBoot(EFI_EVENT event, VOID *context) {
 
   GuLog("=== Universal Multi-Gen GPU Unlock %s (AdaUnlockDxe.efi) ===\n", GU_VERSION_TAG);
 
+  /* MindAllik v1.3.3 / v1.3.4 Safeguard check: If previous attempt did not complete,
+   * bypass unlock immediately to prevent system boot loops. */
+  if (GuCheckSafeguardFlag()) {
+    GuLog("DXE-DRIVER: [SAFEGUARD ACTIVE] ATTEMPT.FLG detected! Skipping unlock to prevent boot loop.\n");
+    (VOID) GuClearSafeguardFlag();
+    (VOID) GuBootSyncLog();
+    (VOID) GuBootClose();
+    return;
+  }
+
   const char *stage = "dxe-discover";
   GU_DISCOVERED_DEVICE devices[GU_MAX_DISCOVERED_DEVICES];
   UINTN device_count = 0, unlocked_count = 0, failed = 0;
@@ -65,12 +75,16 @@ static VOID EFIAPI AdaUnlockOnReadyToBoot(EFI_EVENT event, VOID *context) {
 
   GuBootSay(L"[Universal GPU Unlock] Performing pre-boot hardware unlock...\r\n");
 
+  (VOID) GuSetSafeguardFlag();
+
   s = GuUnlockAllGpus(mDxeTable, mDxeImage, devices, device_count, GU_UNLOCK_REGISTER_S3,
                       "DXE-DRIVER: ", &stage, &unlocked_count, &failed);
   if (s != EFI_SUCCESS) {
     GuLog("DXE-DRIVER: GPU [%u/%u] failed\n", (unsigned)(failed + 1), (unsigned)device_count);
     goto finish;
   }
+
+  (VOID) GuClearSafeguardFlag();
 
   stage = "dxe-finish";
   GuLog("DXE-DRIVER: TRANSACTION OK: %u of %u GPU(s) unlocked, hardware readbacks passed!\n",
