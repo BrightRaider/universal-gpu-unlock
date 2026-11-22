@@ -18,8 +18,8 @@ For packaged binaries and downloads, visit [GitHub Releases](https://github.com/
 ### Added
 - **Automated Host Test for Already-Unlocked Bypass:** Added `tests/test_already_unlocked.c` to MSVC host test suite, validating detection states, Turing isolation, fault guards, and bypass behavior in `GuUnlockAllGpus()`.
 - **Community Hardware Verification (RTX 3090 Ti & RTX 4090):**
-  - **EVGA GeForce RTX 3090 Ti 24GB (`10de:2203`)** on ASUS PRIME Z490-P (Intel Core i7-10700) verified by @m4ttfx: Measured baseline jumped from 65.55 TFLOPS FP16 / 66.32 TFLOPS BF16 to **132.4 TFLOPS FP16 / 136.6 TFLOPS BF16** (+102% double performance) with Resizable BAR enabled (upstream issue #495).
-  - **PNY GeForce RTX 4090 24GB (`10de:2684`)** on Gigabyte Z690 UD AC-Y1 (Intel Core i9-13900K) verified by @jacyzheng: Measured baseline jumped from 160 TFLOPS to **255.0 TFLOPS** (+59.4% boost) per `Check-GPU-Unlock.bat`, delivering an immediate 15-25% real-world speedup in ComfyUI workflows on the first try (upstream issue #444).
+  - **EVGA GeForce RTX 3090 Ti 24GB (`10de:2203`)** on ASUS PRIME Z490-P (Intel Core i7-10700) verified by [@m4ttfx](https://github.com/m4ttfx): Measured baseline jumped from 65.55 TFLOPS FP16 / 66.32 TFLOPS BF16 to **132.4 TFLOPS FP16 / 136.6 TFLOPS BF16** (+102% double performance) with Resizable BAR enabled ([upstream issue #495](https://github.com/windows-GPU-UNLOCK/Windows-GPU-UNLOCK/issues/495#issuecomment-7077703728)).
+  - **PNY GeForce RTX 4090 24GB (`10de:2684`)** on Gigabyte Z690 UD AC-Y1 (Intel Core i9-13900K) verified by [@jacyzheng](https://github.com/jacyzheng): Measured baseline jumped from 160 TFLOPS to **255.0 TFLOPS** (+59.4% boost) per `Check-GPU-Unlock.bat`, delivering an immediate 15-25% real-world speedup in ComfyUI workflows on the first try ([upstream issue #444](https://github.com/windows-GPU-UNLOCK/Windows-GPU-UNLOCK/issues/444)).
 
 ## [v1.8.30] - 2026-11-22
 ### Fixed
