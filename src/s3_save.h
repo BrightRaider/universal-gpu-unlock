@@ -59,7 +59,8 @@ typedef struct {
   UINT8  function;          /* PCI Function */
   UINT8  is_ampere;         /* 1 if Ampere, 0 if Ada, 0 if Turing */
   UINT8  is_turing;         /* 1 if Turing */
-  UINT8  reserved[5];
+  UINT32 pci_cmd_port_addr; /* Precalculated 0xCF8 address for GPU PCI Command Register */
+  UINT8  reserved[1];       /* Reserved alignment padding */
 
   /* Staged ACPI NVS payload physical DMA addresses & sizes */
   EFI_PHYSICAL_ADDRESS booter_dma;
@@ -81,3 +82,17 @@ typedef struct {
   UINT32 last_sec2_marker;  /* Readback of SEC2 marker register */
 } GU_S3_RESUME_CONTEXT;
 #pragma pack(pop)
+
+/* Context field byte offsets for machine code generation */
+#define GU_S3_CTX_OFF_MAGIC         0x00
+#define GU_S3_CTX_OFF_BAR_BASE      0x08
+#define GU_S3_CTX_OFF_IS_AMPERE     0x19
+#define GU_S3_CTX_OFF_IS_TURING     0x1A
+#define GU_S3_CTX_OFF_PCI_CMD_ADDR  0x1B
+#define GU_S3_CTX_OFF_BOOTER_DMA    0x20
+#define GU_S3_CTX_OFF_BOOTER_SZ     0x28
+#define GU_S3_CTX_OFF_VAL_SS0       0x50
+#define GU_S3_CTX_OFF_VAL_SS1       0x54
+#define GU_S3_CTX_OFF_STATUS        0x58
+#define GU_S3_CTX_OFF_COUNT         0x5C
+#define GU_S3_CTX_OFF_SEC2_MARKER   0x60

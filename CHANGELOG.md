@@ -6,6 +6,20 @@ For packaged binaries and downloads, visit [GitHub Releases](https://github.com/
 
 ---
 
+## [v1.8.34] - 2026-11-22
+### Fixed
+- **Low-Memory (<1MB) ACPI S3 Resume Trampoline (addresses #19):**
+  - **Real-Mode 1MB Addressing Fix:** EDK2 / AMI Aptio V firmware executes the S3 waking vector in 16-bit real mode via a paragraph segment:offset far jump (`shrd ebx, ecx, 20; and ecx, 0xf; mov bx, cx; jmp bx:0`). In v1.8.33, placing the trampoline in high ACPI NVS (`>0xDC000000`) caused the BIOS to truncate the upper 16 bits of the paragraph segment, jumping to conventional low memory and freezing the system on wake. In v1.8.34, the trampoline is explicitly allocated in low memory (`<0x000A0000` conventional memory below 640KB, fallback `<0x00100000` below 1MB) via `AllocatePages(AllocateMaxAddress, EfiACPIMemoryNVS, 1, &low_tramp_phys)` so the segment fits cleanly in 16 bits without truncation.
+  - **Trampoline Struct Member Offsets Fix:** Aligned all context offsets in the generated machine code (`booter_dma` at `0x20`, `booter_size` at `0x28`, `val_ss0` at `0x50`, `val_ss1` at `0x54`, `resume_status` at `0x58`, `resume_count` at `0x5C`, `last_sec2_marker` at `0x60`) with `GU_S3_RESUME_CONTEXT` and introduced `GU_S3_CTX_OFF_*` definitions verified by compile-time and host test assertions (`TestGuS3ResumeContextOffsets`).
+  - **32-Bit Near Branch Displacements:** Replaced 8-bit short conditional jumps (`0x74 rel8`) with 32-bit near conditional jumps (`0x0F 0x84 rel32`) for `.skip_unlock` and `.turing_path`, eliminating branch displacement overflow across long payload spans.
+  - **PCI Command Register Restore (MSE + BME):** During S3 resume, PCIe power states can leave the GPU PCI Command register with Memory Space Enable (bit 1) and Bus Master Enable (bit 2) cleared. The trampoline now restores bits 1 and 2 directly via standard x86 I/O ports `0x0CF8` / `0x0CFC` prior to accessing BAR0 or triggering Falcon DMA.
+  - **Direct Real-Mode Return & Windows Handoff:** In the transition from 32-bit protected mode back to real mode, the trampoline loads selector `0x20` (configured with base = `low_tramp_phys`), clears `CR0.PE`, far-jumps to real mode within the low page, restores the original BIOS stack pointer (`SS:SP`), clears all general-purpose registers (`EAX`..`EBP`), and executes an indirect far jump `jmp far ptr cs:[0x30]` directly into Windows `HalpRMStub`.
+  - **Shadow FACS Warm-Reset Detection:** Tagged Shadow FACS `Reserved[0..3]` with signature `GU_SHADOW_FACS_SIGNATURE` (`0x53554753U` "SGUS") and stored original `real_facs_phys` in `Reserved[4..11]`. On warm reboots, `GuAcpiLocateFadtAndFacs` recovers the true hardware Real FACS, completely eliminating recursive shadow table nesting.
+  - **32-Bit Vector Enforced:** Cleared bit 1 of `Flags` (`Flags &= ~0x00000002U`) and cleared `XFirmwareWakingVector = 0` in both Real and Shadow FACS tables, strictly enforcing Windows to supply its waking vector via 32-bit `FirmwareWakingVector`.
+  - **Expanded Test Suite:** Updated `tests/test_s3_resume.c` with 77 comprehensive checks (struct offsets, opcodes, jump displacements, warm reset recovery, and low trampoline bounds) all passing under MSVC (`MSVC_HOST_TESTS=PASS`).
+
+---
+
 ## [v1.8.33] - 2026-11-22
 ### Added
 - **Universal ACPI FACS Shadow Trampoline S3 Persistence (refs #19):** Implemented in `src/s3_facs.c` and `src/s3_facs.h`. On modern AMD AM4 and AM5 platforms running AMI Aptio V firmware (such as MSI MEG X570 ACE with AGESA / Sinkclose mitigations), the BIOS signals `gEfiDxeSmmReadyToLockProtocolGuid` before the BDS phase, locking the S3 Save State table in SMRAM and rejecting third-party `s3->Write()` calls with `EFI_OUT_OF_RESOURCES` (`0x8000000000000009`). The new universal Tier-2 persistence engine bypasses the sealed SMM LockBox entirely:

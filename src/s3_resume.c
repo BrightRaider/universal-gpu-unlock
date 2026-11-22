@@ -113,6 +113,35 @@ EFI_STATUS GuS3PrepareAndRegister(EFI_SYSTEM_TABLE *t) {
   UINT8 *nvs_base = (UINT8 *)(UINTN)nvs_phys;
   memset(nvs_base, 0, 64 * 4096);
 
+  /* Allocate 1 low page (<1MB) of EfiACPIMemoryNVS for S3 Resume Trampoline */
+  EFI_PHYSICAL_ADDRESS low_tramp_phys = 0x0009FFFFULL;
+  EFI_STATUS tramp_alloc = t->BootServices->AllocatePages(
+      AllocateMaxAddress,
+      EfiACPIMemoryNVS,
+      1,
+      &low_tramp_phys
+  );
+  if (EFI_ERROR(tramp_alloc) || !low_tramp_phys) {
+    low_tramp_phys = 0x000FFFFFULL;
+    tramp_alloc = t->BootServices->AllocatePages(
+        AllocateMaxAddress,
+        EfiACPIMemoryNVS,
+        1,
+        &low_tramp_phys
+    );
+  }
+  if (EFI_ERROR(tramp_alloc) || !low_tramp_phys) {
+    GuLog("GuS3PrepareAndRegister: Failed to allocate low (<1MB) ACPI NVS page (%#llx)\n",
+          (unsigned long long)tramp_alloc);
+    t->BootServices->FreePages(nvs_phys, 64);
+    Gu.s3_registered = FALSE;
+    Gu.s3_status = tramp_alloc;
+    return tramp_alloc;
+  }
+
+  UINT8 *low_tramp_base = (UINT8 *)(UINTN)low_tramp_phys;
+  memset(low_tramp_base, 0, 4096);
+
   GU_S3_RESUME_CONTEXT *ctx = (GU_S3_RESUME_CONTEXT *)nvs_base;
   ctx->magic = GU_S3_CONTEXT_MAGIC;
   ctx->version = 1;
@@ -122,6 +151,22 @@ EFI_STATUS GuS3PrepareAndRegister(EFI_SYSTEM_TABLE *t) {
   ctx->is_turing = Gu.is_turing;
   ctx->val_ss0 = 0x88888888U;
   ctx->val_ss1 = 0x00000008U;
+
+  /* Resolve PCI BDF location to configure Command register upon S3 wake */
+  if (Gu.pci && Gu.pci->GetLocation) {
+    UINTN seg = 0, bus = 0, dev = 0, fun = 0;
+    EFI_STATUS s_loc = Gu.pci->GetLocation(Gu.pci, &seg, &bus, &dev, &fun);
+    if (!EFI_ERROR(s_loc)) {
+      ctx->segment = (UINT16)seg;
+      ctx->bus = (UINT8)bus;
+      ctx->device = (UINT8)dev;
+      ctx->function = (UINT8)fun;
+      ctx->pci_cmd_port_addr = 0x80000004U |
+                               ((UINT32)bus << 16) |
+                               ((UINT32)dev << 11) |
+                               ((UINT32)fun << 8);
+    }
+  }
 
   /* Staging offsets within the 256 KB NVS allocation */
   ctx->booter_dma = nvs_phys + 0x01000;
@@ -193,7 +238,7 @@ EFI_STATUS GuS3PrepareAndRegister(EFI_SYSTEM_TABLE *t) {
    * Rewrites FADT->FirmwareCtrl to Shadow FACS and hooks Real FACS->FirmwareWakingVector. */
   GuLog("S3 Persistence: Engaging Universal ACPI FACS Shadow Trampoline Intercept...\n");
   GU_ACPI_FACS_INFO facs_info;
-  EFI_STATUS facs_status = GuAcpiInstallShadowFacs(t, ctx, nvs_base, nvs_phys, &facs_info);
+  EFI_STATUS facs_status = GuAcpiInstallShadowFacs(t, ctx, nvs_base, nvs_phys, low_tramp_base, low_tramp_phys, &facs_info);
   if (!EFI_ERROR(facs_status) && facs_info.found) {
     GuLog("S3 Persistence: Universal ACPI FACS Trampoline armed successfully!\n");
     Gu.s3_registered = TRUE;

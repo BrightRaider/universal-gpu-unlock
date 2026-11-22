@@ -1,7 +1,7 @@
 # Technische Dokumentation: Universal GPU Unlock (Multi-Gen)
 
 > **Tool:** Universal GPU Unlock  
-> **Version:** v1.8.32  
+> **Version:** v1.8.34  
 > **Architekturen:** NVIDIA Ada Lovelace (RTX 40), Ampere (RTX 30), Turing (RTX 20 / CMP)  
 > **Unterstützte Betriebssysteme:** Windows 10, Windows 11, WSL2 / Ubuntu CUDA Container  
 
@@ -288,3 +288,50 @@ Bei der S3-Sleep-Persistenz (`[P]`) registriert der Bootloader über das UEFI Bo
    `GuS3ResumeDispatch` wurde in `src/s3_resume.c` so restrukturiert, dass der gesamte Unlock-Code ohne externe Funktionssprünge (`call rel32`) direkt im 256 KB ACPI NVS DRAM Puffer liegt. Dadurch ist der Code zu 100 % positionsunabhängig und übersteht das Windows-Boot-Handover unversehrt.
 4. **Live Status-Rückmeldung am Bildschirm:**
    Der Pre-Boot-Bildschirm meldet den Erfolg der S3-Registrierung nun wahrheitsgetreu mit `[ OK ]` bzw. `[ FAILED ]`, sodass Fehlschläge sofort sichtbar sind.
+
+---
+
+## 13. Universelle ACPI FACS Shadow Trampoline Architektur für S3 Standby (ab v1.8.33 / v1.8.34)
+
+### 13.1 Das Problem: Versiegelter SMM LockBox bei AMI Aptio V auf AMD AM4/AM5
+Auf modernen AMD AM4- und AM5-Mainboards (wie dem MSI MEG X570 ACE mit AGESA 1.2.0.Cb / Sinkclose-Sicherheitsupdates) signalisiert die Firmware das Protokoll `gEfiDxeSmmReadyToLockProtocolGuid` bereits vor der BDS-Phase (Boot Device Selection).
+Dadurch wird die S3 Save State Tabelle im SMRAM unwiderruflich gesperrt. Jeder Versuch eines Drittanbieter-Bootloaders oder DXE-Treibers, via `s3->Write()` Einträge zu registrieren, wird mit `EFI_OUT_OF_RESOURCES` (`0x8000000000000009`) abgewiesen.
+Bisherige Ansätze führten dazu, dass der S3 Standby ("Energie sparen" / Suspend-to-RAM) den GPU-Unlock beim Aufwachen verlor oder das System auf S4 (Ruhezustand) angewiesen war.
+
+### 13.2 Das FACS Shadowing Prinzip
+Um den gesperrten SMM LockBox vollständig zu umgehen, setzt Universal GPU Unlock ab v1.8.33 auf einen universellen ACPI FACS Shadow Intercept:
+1. **FADT-Auffindung:** Der Loader durchsucht die UEFI Configuration Table nach der ACPI RSDP und iteriert über XSDT/RSDT, um die `FACP` (Fixed ACPI Description Table) zu lokalisieren.
+2. **Shadow FACS Allokation:** In persistentem `EfiACPIMemoryNVS` DRAM wird eine Kopie der Firmware-FACS (Firmware ACPI Control Structure) angelegt.
+3. **FADT-Umleitung:** Die FADT-Felder `FirmwareCtrl` und `XFirmwareCtrl` werden auf die Shadow FACS umgebogen, und die FADT-Prüfsumme wird neu berechnet (0 mod 256).
+4. **Waking Vector Abfangen:** Windows (`hal.dll` / `ACPI.sys`) schreibt seinen Aufwachvektor (`HalpRMStub`) in die ihm bekannte Shadow FACS. Die echte Hardware-FACS bleibt unangetastet.
+5. **Real FACS Hook:** `RealFACS->FirmwareWakingVector` wird auf ein maschinencodebasiertes Resume-Trampoline umgebogen.
+
+### 13.3 Die v1.8.34 Low-Memory (< 1 MB) Trampoline Lösung
+Bei ersten Hardwaretests von v1.8.33 wachte das System aus dem S3-Schlaf auf, die Bildschirme blieben jedoch schwarz (erst nach einem Reset-Tastendruck bootete Windows über den Hybrid-Sleep-Fallback).
+Eine forensische Analyse der EDK2/AMI Aptio V Firmware (`BootScriptExecutorDxe`) deckte die Ursache auf:
+Die Firmware führt den S3 Waking Vector im **16-Bit Real Mode** über einen Paragraphen-Segment:Offset Far-Jump aus:
+```nasm
+mov ecx, [ebp + 8]   ; FirmwareWakingVector
+shrd ebx, ecx, 20
+and ecx, 0xf
+mov bx, cx
+mov [@jmp_addr + 1], ebx
+retf
+BITS 16
+@jmp_addr: jmp 0x0:0x0 ; 16-bit far jump
+```
+Lag das Trampolin im hohen NVS-Speicher (`> 1 MB`, z. B. `0xDC638300`), wurde das Segment auf 16 Bit abgeschnitten (`0x3830:0x0000 = 0x00038300`), und die CPU stürzte im konventionellen RAM ab.
+
+In **v1.8.34** habe ich die Architektur umfassend überarbeitet und perfektioniert:
+1. **Low-Memory Allokation (< 1 MB):**
+   Das Trampolin wird via `AllocatePages(AllocateMaxAddress, EfiACPIMemoryNVS, 1, &low_tramp_phys)` explizit im konventionellen Speicher unterhalb von 640 KB (`< 0x000A0000`, Fallback `< 0x00100000`) allokiert. Dadurch ist das Segment `<= 0x9000` und passt ohne jedes Abschneiden exakt in 16 Bit.
+2. **GPU PCI Command Register Wiederherstellung (MSE + BME):**
+   Nach dem S3-Aufwachen befindet sich die GPU hardwareseitig im D3cold-Zustand, sodass das PCI Command Register auf 0 zurückgesetzt ist. Das Trampolin stellt Memory Space Enable (Bit 1) und Bus Master Enable (Bit 2) direkt über die x86-I/O-Ports `0x0CF8` und `0x0CFC` wieder her, bevor auf BAR0 zugegriffen oder Falcon DMA gestartet wird.
+3. **Struktur-Offset-Synchronisation & 32-Bit Rel32 Sprünge:**
+   Alle Member-Offsets in `GU_S3_RESUME_CONTEXT` wurden präzise ausgerichtet (`booter_dma` 0x20, `booter_size` 0x28, `val_ss0` 0x50, `val_ss1` 0x54, `resume_status` 0x58, `resume_count` 0x5C, `last_sec2_marker` 0x60) und durch automatisierte Host-Tests (`TestGuS3ResumeContextOffsets`) verifiziert. Vorwärtssprünge wurden von 8-Bit `rel8` auf 32-Bit `0x0F 0x84 rel32` umgestellt.
+4. **Saubere Real-Mode-Rückkehr & Windows-Handoff:**
+   Nach Durchführung des Unlocks schaltet das Trampolin über einen dedizierten 16-Bit Protected Mode Code-Deskriptor (Selector 0x20 mit Basis = `low_tramp_phys`), löscht `CR0.PE`, springt in den 16-Bit Real Mode, stellt den originalen BIOS-Stack (`SS:SP`) wieder her, nullt alle Register und springt via `jmp far ptr cs:[0x30]` direkt in Windows `HalpRMStub`.
+5. **Warm-Boot-Resilienz (Shadow FACS Tagging):**
+   Die Shadow FACS wird in `Reserved[0..3]` mit der Signatur `GU_SHADOW_FACS_SIGNATURE` (`0x53554753U` "SGUS") markiert und speichert die echte `RealFACS`-Adresse in `Reserved[4..11]`. Bei einem Warmstart oder Reset erkennt der Loader die bestehende Shadow FACS und stellt die originale Firmware-FACS wieder her, anstatt Schattenstrukturen rekursiv zu verschachteln.
+6. **Erzwingung des 32-Bit Wake Vectors:**
+   Bit 1 in den FACS-`Flags` (64-Bit Wake Supported) sowie `XFirmwareWakingVector` werden in beiden FACS-Tabellen genullt, sodass Windows ACPI garantiert den 32-Bit Real-Mode Waking Vector verwendet.

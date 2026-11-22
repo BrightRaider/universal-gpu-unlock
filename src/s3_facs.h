@@ -14,9 +14,10 @@
   { 0xeb9d2d30, 0x2d88, 0x11d3, { 0x9a, 0x16, 0x00, 0x90, 0x27, 0x3f, 0xc1, 0x4d } }
 
 /* Signatures */
-#define GU_ACPI_RSDP_SIGNATURE 0x2052545020445352ULL /* "RSD PTR " */
-#define GU_ACPI_FADT_SIGNATURE 0x50434146U           /* "FACP" */
-#define GU_ACPI_FACS_SIGNATURE 0x53434146U           /* "FACS" */
+#define GU_ACPI_RSDP_SIGNATURE    0x2052545020445352ULL /* "RSD PTR " */
+#define GU_ACPI_FADT_SIGNATURE    0x50434146U           /* "FACP" */
+#define GU_ACPI_FACS_SIGNATURE    0x53434146U           /* "FACS" */
+#define GU_SHADOW_FACS_SIGNATURE  0x53554753U           /* "SGUS" */
 
 #pragma pack(push, 1)
 typedef struct {
@@ -47,7 +48,7 @@ EFI_STATUS GuAcpiLocateFadtAndFacs(
  * 1. Clones Real FACS into Shadow FACS in ACPI NVS memory.
  * 2. Rewrites FADT->FirmwareCtrl to point to Shadow FACS.
  * 3. Recalculates FADT table checksum (mandatory for Windows ACPI.sys).
- * 4. Generates the 16-bit/32-bit dual-mode S3 resume trampoline in ACPI NVS.
+ * 4. Generates the 16-bit/32-bit dual-mode S3 resume trampoline in low (<1MB) ACPI NVS.
  * 5. Hooks Real FACS->FirmwareWakingVector to point to the trampoline.
  */
 EFI_STATUS GuAcpiInstallShadowFacs(
@@ -55,6 +56,8 @@ EFI_STATUS GuAcpiInstallShadowFacs(
     IN GU_S3_RESUME_CONTEXT *Context,
     IN VOID *NvsBuffer,
     IN EFI_PHYSICAL_ADDRESS NvsPhys,
+    IN VOID *LowTrampBuffer,
+    IN EFI_PHYSICAL_ADDRESS LowTrampPhys,
     OUT GU_ACPI_FACS_INFO *Info
 );
 

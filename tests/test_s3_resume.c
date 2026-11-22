@@ -17,6 +17,7 @@
 #include "../src/s3_resume.h"
 #include "../src/port.h"
 #include "../src/compat/compat.h"
+#include <stddef.h>
 
 GU_PLATFORM Gu;
 GU_ASSET GuAssets[5];
@@ -33,6 +34,23 @@ static unsigned int g_checks = 0;
     exit(1); \
   } \
 } while(0)
+
+static void TestGuS3ResumeContextOffsets(void) {
+  printf("[0] Testing GU_S3_RESUME_CONTEXT struct offsets & alignment...\n");
+  CHECK(sizeof(GU_S3_RESUME_CONTEXT) == 100, "GU_S3_RESUME_CONTEXT size must be 100 bytes");
+  CHECK(offsetof(GU_S3_RESUME_CONTEXT, magic) == GU_S3_CTX_OFF_MAGIC, "magic offset");
+  CHECK(offsetof(GU_S3_RESUME_CONTEXT, bar_base) == GU_S3_CTX_OFF_BAR_BASE, "bar_base offset");
+  CHECK(offsetof(GU_S3_RESUME_CONTEXT, is_ampere) == GU_S3_CTX_OFF_IS_AMPERE, "is_ampere offset");
+  CHECK(offsetof(GU_S3_RESUME_CONTEXT, is_turing) == GU_S3_CTX_OFF_IS_TURING, "is_turing offset");
+  CHECK(offsetof(GU_S3_RESUME_CONTEXT, pci_cmd_port_addr) == GU_S3_CTX_OFF_PCI_CMD_ADDR, "pci_cmd_port_addr offset");
+  CHECK(offsetof(GU_S3_RESUME_CONTEXT, booter_dma) == GU_S3_CTX_OFF_BOOTER_DMA, "booter_dma offset");
+  CHECK(offsetof(GU_S3_RESUME_CONTEXT, booter_size) == GU_S3_CTX_OFF_BOOTER_SZ, "booter_size offset");
+  CHECK(offsetof(GU_S3_RESUME_CONTEXT, val_ss0) == GU_S3_CTX_OFF_VAL_SS0, "val_ss0 offset");
+  CHECK(offsetof(GU_S3_RESUME_CONTEXT, val_ss1) == GU_S3_CTX_OFF_VAL_SS1, "val_ss1 offset");
+  CHECK(offsetof(GU_S3_RESUME_CONTEXT, resume_status) == GU_S3_CTX_OFF_STATUS, "resume_status offset");
+  CHECK(offsetof(GU_S3_RESUME_CONTEXT, resume_count) == GU_S3_CTX_OFF_COUNT, "resume_count offset");
+  CHECK(offsetof(GU_S3_RESUME_CONTEXT, last_sec2_marker) == GU_S3_CTX_OFF_SEC2_MARKER, "last_sec2_marker offset");
+}
 
 /* Mock 16MB MMIO window for BAR0 */
 #define MOCK_BAR_DWORDS (0x1000000 / 4)
@@ -227,7 +245,12 @@ static void TestGuAcpiFacsDiscoveryAndPatching(void) {
   /* Setup mock 256 KB NVS buffer for Shadow FACS and Trampoline */
   UINT8 mock_nvs[4096];
   memset(mock_nvs, 0, sizeof(mock_nvs));
-  EFI_PHYSICAL_ADDRESS mock_nvs_phys = 0xdc5d8000ULL;
+  EFI_PHYSICAL_ADDRESS mock_nvs_phys = (EFI_PHYSICAL_ADDRESS)(uintptr_t)mock_nvs;
+
+  /* Setup mock 4 KB Low Trampoline Buffer (<1MB) */
+  UINT8 mock_low_tramp[4096];
+  memset(mock_low_tramp, 0, sizeof(mock_low_tramp));
+  EFI_PHYSICAL_ADDRESS mock_low_tramp_phys = (EFI_PHYSICAL_ADDRESS)(uintptr_t)mock_low_tramp;
 
   GU_S3_RESUME_CONTEXT ctx;
   memset(&ctx, 0, sizeof(ctx));
@@ -235,12 +258,13 @@ static void TestGuAcpiFacsDiscoveryAndPatching(void) {
   ctx.bar_base = 0xfb000000ULL;
   ctx.val_ss0 = 0x88888888U;
   ctx.val_ss1 = 0x00000008U;
+  ctx.pci_cmd_port_addr = 0x80000004U;
 
   /* Install Shadow FACS */
-  s = GuAcpiInstallShadowFacs(&mock_st, &ctx, mock_nvs, mock_nvs_phys, &info);
+  s = GuAcpiInstallShadowFacs(&mock_st, &ctx, mock_nvs, mock_nvs_phys, mock_low_tramp, mock_low_tramp_phys, &info);
   CHECK(s == EFI_SUCCESS, "GuAcpiInstallShadowFacs must return EFI_SUCCESS");
   CHECK(info.shadow_facs_phys == mock_nvs_phys + 0x00200, "Shadow FACS physical address must be +0x200");
-  CHECK(info.trampoline_phys == mock_nvs_phys + 0x00300, "Trampoline physical address must be +0x300");
+  CHECK(info.trampoline_phys == mock_low_tramp_phys, "Trampoline physical address must be mock_low_tramp_phys (<1MB)");
 
   /* Verify FADT was redirected to Shadow FACS */
   CHECK(mock_fadt.FirmwareCtrl == (UINT32)(mock_nvs_phys + 0x00200), "FADT FirmwareCtrl must point to Shadow FACS");
@@ -252,9 +276,12 @@ static void TestGuAcpiFacsDiscoveryAndPatching(void) {
   for (UINT32 i = 0; i < mock_fadt.Header.Length; i++) sum = (UINT8)(sum + p[i]);
   CHECK(sum == 0, "Updated FADT checksum must be 0 mod 256");
 
-  /* Verify Real FACS was hooked to point to Trampoline */
-  CHECK(mock_facs.FirmwareWakingVector == (UINT32)(mock_nvs_phys + 0x00300), "Real FACS FirmwareWakingVector must point to Trampoline");
+  /* Verify Real FACS was hooked to point to Low Trampoline */
+  CHECK(mock_facs.FirmwareWakingVector == (UINT32)mock_low_tramp_phys, "Real FACS FirmwareWakingVector must point to Low Trampoline");
   CHECK(mock_facs.XFirmwareWakingVector == 0, "Real FACS XFirmwareWakingVector must be cleared");
+
+  /* Verify bit 1 (64-bit wake supported) is cleared in both tables */
+  CHECK((mock_facs.Flags & 2U) == 0, "Real FACS 64-bit wake flag must be cleared");
 
   /* Verify Shadow FACS retains identical signature and hardware signature */
   EFI_ACPI_2_0_FIRMWARE_ACPI_CONTROL_STRUCTURE *shadow_facs =
@@ -262,7 +289,15 @@ static void TestGuAcpiFacsDiscoveryAndPatching(void) {
   CHECK(shadow_facs->Signature == GU_ACPI_FACS_SIGNATURE, "Shadow FACS signature must be 'FACS'");
   CHECK(shadow_facs->HardwareSignature == 0x12345678U, "Shadow FACS hardware signature must match original");
   CHECK(shadow_facs->FirmwareWakingVector == 0, "Shadow FACS FirmwareWakingVector initialized to 0");
-  printf("[6] Discovery & Shadow FACS Patching: OK!\n");
+  CHECK((shadow_facs->Flags & 2U) == 0, "Shadow FACS 64-bit wake flag must be cleared");
+
+  /* Verify warm reset recovery: re-running discovery when FADT points to Shadow FACS recovers Real FACS */
+  GU_ACPI_FACS_INFO info_warm;
+  s = GuAcpiLocateFadtAndFacs(&mock_st, &info_warm);
+  CHECK(s == EFI_SUCCESS, "Warm reset discovery must succeed");
+  CHECK(info_warm.real_facs == &mock_facs, "Warm reset must recover original Real FACS table");
+  CHECK(info_warm.real_facs_phys == (EFI_PHYSICAL_ADDRESS)(uintptr_t)&mock_facs, "Warm reset must recover original Real FACS address");
+  printf("[6] Discovery & Shadow FACS Patching (including Warm Reset): OK!\n");
   fflush(stdout);
 }
 
@@ -270,13 +305,14 @@ static void TestGuAcpiBuildTrampolineCode(void) {
   printf("[7] Testing S3 Resume Trampoline Machine Code Generation...\n");
   fflush(stdout);
 
-  UINT8 buffer[1024];
-  EFI_PHYSICAL_ADDRESS tramp_phys = 0xdc5d8300ULL;
+  UINT8 buffer[4096];
+  EFI_PHYSICAL_ADDRESS tramp_phys = 0x00088000ULL;
   EFI_PHYSICAL_ADDRESS ctx_phys = 0xdc5d8000ULL;
   EFI_PHYSICAL_ADDRESS shadow_facs_phys = 0xdc5d8200ULL;
 
   UINT32 bytes = GuAcpiBuildTrampolineCode(buffer, sizeof(buffer), tramp_phys, ctx_phys, shadow_facs_phys);
   CHECK(bytes > 0, "Trampoline builder must generate non-zero bytes");
+  CHECK(bytes <= 1024, "Trampoline code must fit within 1024 bytes");
 
   /* 1. Check Preamble: cli, cld */
   CHECK(buffer[0] == 0xFA, "Preamble must start with CLI (0xFA)");
@@ -294,18 +330,26 @@ static void TestGuAcpiBuildTrampolineCode(void) {
   CHECK(gdt[1] == 0x00CF9A000000FFFFULL, "GDT[1] must be 32-bit Code (0x08)");
   CHECK(gdt[2] == 0x00CF92000000FFFFULL, "GDT[2] must be 32-bit Data (0x10)");
   CHECK(gdt[3] == 0x000092000000FFFFULL, "GDT[3] must be 16-bit Data (0x18)");
-  CHECK(gdt[4] == 0x00009A000000FFFFULL, "GDT[4] must be 16-bit Code (0x20)");
 
-  /* 4. Check Far Return opcode at end of 16-bit return stub */
-  /* Look for RETF (0xCB) */
-  BOOLEAN found_retf = FALSE;
-  for (UINT32 i = 0x160; i < 0x200; i++) {
-    if (buffer[i] == 0xCB) {
-      found_retf = TRUE;
+  /* Check 16-bit Code Descriptor (Selector 0x20): Base must be tramp_phys */
+  UINT32 desc4_base = (UINT32)(((gdt[4] >> 16) & 0xFFFFULL) | (((gdt[4] >> 32) & 0xFFULL) << 16) | (((gdt[4] >> 56) & 0xFFULL) << 24));
+  CHECK(desc4_base == (UINT32)tramp_phys, "GDT[4] base must match TrampolinePhys");
+
+  /* 4. Check 16-bit Protected Mode stub at +0x220 */
+  CHECK(buffer[0x220] == 0x0F && buffer[0x221] == 0x20 && buffer[0x222] == 0xC0, "PM stub: mov eax, cr0");
+  CHECK(buffer[0x223] == 0x24 && buffer[0x224] == 0xFE, "PM stub: and al, 0xFE");
+  CHECK(buffer[0x225] == 0x0F && buffer[0x226] == 0x22 && buffer[0x227] == 0xC0, "PM stub: mov cr0, eax");
+
+  /* 5. Check 16-bit Real Mode Return stub at +0x240 */
+  /* ljmp cs:[0x30] (0x2E, 0xFF, 0x2E, 0x30, 0x00) */
+  BOOLEAN found_ljmp_indirect = FALSE;
+  for (UINT32 i = 0x240; i < bytes - 4; i++) {
+    if (buffer[i] == 0x2E && buffer[i+1] == 0xFF && buffer[i+2] == 0x2E && buffer[i+3] == 0x30 && buffer[i+4] == 0x00) {
+      found_ljmp_indirect = TRUE;
       break;
     }
   }
-  CHECK(found_retf, "Return stub must terminate with RETF (0xCB)");
+  CHECK(found_ljmp_indirect, "Real mode return stub must end with ljmp cs:[0x30]");
   printf("[7] Trampoline Generation: OK!\n");
   fflush(stdout);
 }
@@ -314,6 +358,7 @@ int main(void) {
   setvbuf(stdout, NULL, _IONBF, 0);
   printf("=== Universal S3 Persistence Resume Engine Test Suite ===\n");
   fflush(stdout);
+  TestGuS3ResumeContextOffsets();
   TestGuS3ExecuteResumeUnlock_Validation();
   TestGuS3ExecuteResumeUnlock_AdaAmpere();
   TestGuS3ExecuteResumeUnlock_Turing();
