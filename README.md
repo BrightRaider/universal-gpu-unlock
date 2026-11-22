@@ -206,7 +206,8 @@ All version releases, bug fixes, and device expansions are maintained in the sep
 ├── tools/
 │   ├── quick_check.py           <- Core GEMM benchmark, ReBAR, UEFI & PCIe diagnostic engine
 │   ├── gpu_dashboard.py         <- Modern Tkinter GUI status monitor & live benchmark
-│   └── gu_system_info.py        <- Shared firmware/ReBAR checks and GPU profiles for both
+│   ├── gu_system_info.py        <- Shared firmware/ReBAR checks and GPU profiles for both
+│   └── optional-turing-rebar/   <- Experimental ReBarUEFI guide (STRICTLY NO SUPPORT, use at own risk)
 └── CHANGELOG.md                 <- Complete release and version history
 ```
 

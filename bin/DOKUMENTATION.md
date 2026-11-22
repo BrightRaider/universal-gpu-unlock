@@ -200,6 +200,13 @@ Im Verzeichnis `TU102-ASSETS/` ist die Datei `v67-tu102-610.43.03.bin` mit `GA10
    Bfloat16-Tensorkerne wurden von NVIDIA erst ab Ampere (`sm_80` / `sm_86`) eingeführt. Auf Turing läuft BF16 ausschließlich über langsame CUDA-Kern-Software-Emulation (~3,5 TFLOPS). Die Diagnosewerkzeuge weisen nun explizit darauf hin.
 4. **GSP-Firmware-Version:**
    Die GSP-Firmware im Windows-Treiber muss **nicht** mit der im UEFI-Paket verwendeten Version (`610.43.03`) übereinstimmen. Die Pre-Boot-Initialisierung im UEFI ist flüchtig; der Windows-Treiber lädt beim Booten seine eigene GSP-Firmware. Jeder unterstützte NVIDIA-Treiber (560.xx, 570.xx, 572.xx) funktioniert einwandfrei.
+5. **ReBAR auf Turing (ReBarUEFI) & Striktes Support-Disclaimer:**
+   Turing-Grafikkarten besitzen ab Werk kein ReBAR-fähiges vBIOS, weshalb BAR1 standardmäßig auf 256 MB verbleibt. Enthusiasten können das externe Open-Source-Projekt ReBarUEFI (xCuri0) nutzen, um das PCIe-Fenster zu vergrößern.
+   > [!CAUTION]
+   > **STRIKTES SUPPORT-DISCLAIMER (KEIN SUPPORT FÜR REBARUEFI):**
+   > * Das Universal GPU Unlock Projekt leistet **KEINERLEI TECHNISCHEN SUPPORT, HILFESTELLUNG ODER GEWÄHRLEISTUNG** für ReBarUEFI oder das Modifizieren/Flashen von Mainboard-BIOS-ROMs!
+   > * Der GPU-Unlock läuft auf BAR0 und erzielt auch ohne ReBAR bereits **100 % der vollen physikalischen Rechenleistung** (25,82 TFLOPS auf RTX 2060). ReBAR optimiert nur PCIe-Transferzeiten, erhöht aber nicht die Rohrechenleistung der Tensorkerne.
+   > * Eine optionale Anleitung und ein Starter befinden sich in `tools/optional-turing-rebar/`.
 
 
 ---

@@ -742,7 +742,8 @@
                                     <TextBlock Text="&#x1F527; Hardware Driver &amp; Power Utilities:" FontWeight="Bold" FontSize="12" Foreground="#F9E2AF" VerticalAlignment="Center"/>
                                     <StackPanel Orientation="Horizontal" Grid.Column="1">
                                         <Button Name="BtnToggleTuringGsp" Content="&#x1F3AE; Toggle Turing GSP Mode" Padding="10,5" Margin="0,0,8,0" Background="#A6E3A1" Foreground="#11111B" FontWeight="Bold" Cursor="Hand"/>
-                                        <Button Name="BtnToggleSleepButton" Content="&#x1F4A4; Toggle Sleep Button" Padding="10,5" Background="#313244" Foreground="#CDD6F4" Cursor="Hand"/>
+                                        <Button Name="BtnToggleSleepButton" Content="&#x1F4A4; Toggle Sleep Button" Padding="10,5" Margin="0,0,8,0" Background="#313244" Foreground="#CDD6F4" Cursor="Hand"/>
+                                        <Button Name="BtnOpenTuringReBar" Content="&#x26A0;&#xFE0F; Turing ReBAR (No Support)" Padding="10,5" Background="#313244" Foreground="#FAB387" Cursor="Hand" ToolTip="Experimental third-party ReBarUEFI guide (Zero support provided, use strictly at your own risk)"/>
                                     </StackPanel>
                                 </Grid>
                             </StackPanel>

@@ -1231,6 +1231,31 @@ if ($btnToggleSleepButton) {
     })
 }
 
+$btnOpenTuringReBar = $window.FindName("BtnOpenTuringReBar")
+if ($btnOpenTuringReBar) {
+    $btnOpenTuringReBar.Add_Click({
+        $disclaimer = @"
+========================================================================
+[!] [!] [!] EXPERIMENTAL THIRD-PARTY UTILITY DISCLAIMER [!] [!] [!]
+========================================================================
+
+ABSOLUTELY NO SUPPORT PROVIDED! USE STRICTLY AT YOUR OWN RISK!
+
+1. The Universal GPU Unlock project provides ZERO technical support
+   for motherboard BIOS modification, BIOS flashing, or ReBarUEFI.
+2. Do NOT open GitHub issues or bug reports regarding ReBarUEFI.
+3. Your GPU rate-limiter unlock is ALREADY 100% active and running at
+   peak compute TFLOPS without ReBAR.
+
+Do you want to open the official ReBarUEFI upstream repository and guide?
+"@
+        $res = [System.Windows.MessageBox]::Show($disclaimer, "Turing ReBAR - NO SUPPORT DISCLAIMER", [System.Windows.MessageBoxButton]::YesNo, [System.Windows.MessageBoxImage]::Warning)
+        if ($res -eq [System.Windows.MessageBoxResult]::Yes) {
+            Start-Process "https://github.com/xCuri0/ReBarUEFI"
+        }
+    })
+}
+
 # Load Initial Data
 Refresh-AuditData
 Refresh-PreflightData
