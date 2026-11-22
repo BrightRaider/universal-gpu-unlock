@@ -451,8 +451,13 @@ class GpuUnlockApp(tk.Tk):
                     profile = prof
                     break
             if profile is None:
-                threshold = props.multi_processor_count * 1.35 if (props.major == 8 and props.minor == 9) else props.multi_processor_count * 1.15
-                profile = {"min_unlocked": threshold * 1.15, "threshold": threshold, "stock_typical": threshold * 0.75}
+                if props.major == 8 and props.minor == 9:
+                    threshold = props.multi_processor_count * 1.35
+                elif props.major == 7 and props.minor == 5:
+                    threshold = props.multi_processor_count * 0.65
+                else:
+                    threshold = props.multi_processor_count * 1.15
+                profile = {"min_unlocked": threshold * 1.15, "threshold": threshold, "stock_typical": threshold * 0.70}
 
             def bench(dtype, runs=20, warmup=5):
                 a = torch.randn((size, size), dtype=dtype, device=device)

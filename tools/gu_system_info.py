@@ -66,15 +66,17 @@ CARD_PROFILES = {
     "3060 ti": {"min_unlocked": 55.0, "threshold": 46.0, "stock_typical": 34.0},
     "3060": {"min_unlocked": 40.0, "threshold": 32.0, "stock_typical": 24.0},
     "3050": {"min_unlocked": 28.0, "threshold": 22.0, "stock_typical": 15.0},
-    "titan rtx": {"min_unlocked": 115.0, "threshold": 95.0, "stock_typical": 65.0},
-    "2080 ti": {"min_unlocked": 105.0, "threshold": 85.0, "stock_typical": 54.0},
-    "2080 super": {"min_unlocked": 80.0, "threshold": 65.0, "stock_typical": 42.0},
-    "2080": {"min_unlocked": 72.0, "threshold": 60.0, "stock_typical": 38.0},
-    "2070 super": {"min_unlocked": 65.0, "threshold": 52.0, "stock_typical": 34.0},
-    "2070": {"min_unlocked": 55.0, "threshold": 45.0, "stock_typical": 29.0},
-    "2060 super": {"min_unlocked": 50.0, "threshold": 42.0, "stock_typical": 27.0},
-    "2060": {"min_unlocked": 42.0, "threshold": 35.0, "stock_typical": 22.0},
-    "cmp 50hx": {"min_unlocked": 105.0, "threshold": 85.0, "stock_typical": 54.0},
+    # Turing Architecture (sm_75): 2nd-gen Tensor Cores with cuBLAS FP32 Accumulator
+    # Theoretical Peak = SMs * 512 ops/cycle * Boost GHz (FP32 accumulate HMMA)
+    "titan rtx": {"min_unlocked": 50.0, "threshold": 45.0, "stock_typical": 32.0},
+    "2080 ti": {"min_unlocked": 45.0, "threshold": 40.0, "stock_typical": 28.0},
+    "2080 super": {"min_unlocked": 35.0, "threshold": 31.0, "stock_typical": 22.0},
+    "2080": {"min_unlocked": 32.0, "threshold": 28.0, "stock_typical": 20.0},
+    "2070 super": {"min_unlocked": 28.0, "threshold": 25.0, "stock_typical": 18.0},
+    "2070": {"min_unlocked": 24.0, "threshold": 21.0, "stock_typical": 15.0},
+    "2060 super": {"min_unlocked": 23.0, "threshold": 20.0, "stock_typical": 14.0},
+    "2060": {"min_unlocked": 20.0, "threshold": 18.0, "stock_typical": 13.0},
+    "cmp 50hx": {"min_unlocked": 34.0, "threshold": 30.0, "stock_typical": 22.0},
 }
 
 

@@ -106,18 +106,18 @@ def evaluate_gpu(dev_idx, dev_count, fw_str):
         elif props.major == 8 and props.minor == 6:
             threshold = sm_count * 1.15
         elif props.major == 7 and props.minor == 5:
-            threshold = sm_count * 1.15
+            threshold = sm_count * 0.65
         else:
             threshold = sm_count * 1.0
-        profile = {"min_unlocked": threshold * 1.15, "threshold": threshold, "stock_typical": threshold * 0.75}
+        profile = {"min_unlocked": threshold * 1.15, "threshold": threshold, "stock_typical": threshold * 0.70}
 
     size = 4096
 
     # 1. Primary Benchmark: FP16 Tensor Cores
     ms_fp16, tflops_fp16 = benchmark_gemm(device, torch.float16, size=size, warmup=8, runs=25)
 
-    # 2. Secondary Benchmark: BF16 Tensor Cores (Ampere / Ada)
-    has_bf16 = hasattr(torch.cuda, "is_bf16_supported") and torch.cuda.is_bf16_supported()
+    # 2. Secondary Benchmark: BF16 Tensor Cores (Ampere / Ada sm_80+ only; Turing sm_75 lacks hardware BF16)
+    has_bf16 = props.major >= 8 and hasattr(torch.cuda, "is_bf16_supported") and torch.cuda.is_bf16_supported()
     if has_bf16:
         ms_bf16, tflops_bf16 = benchmark_gemm(device, torch.bfloat16, size=size, warmup=4, runs=15)
     else:
@@ -169,6 +169,8 @@ def evaluate_gpu(dev_idx, dev_count, fw_str):
     print(f"  [1] FP16 Tensor Cores   : {tflops_fp16:>6.2f} TFLOPS ({ms_fp16:.3f} ms)  -> Primary Rate-Limiter Metric")
     if has_bf16:
         print(f"  [2] BF16 Tensor Cores   : {tflops_bf16:>6.2f} TFLOPS ({ms_bf16:.3f} ms)  -> Bfloat16 AI Training Format")
+    elif props.major == 7:
+        print(f"  [2] BF16 Tensor Cores   :    N/A (Turing {arch} lacks hardware BF16; Ampere/Ada sm_80+ only)")
     if has_tf32:
         print(f"  [3] TF32 Tensor Cores   : {tflops_tf32:>6.2f} TFLOPS ({ms_tf32:.3f} ms)  -> Ampere/Ada 19-bit Format")
     print(f"  [4] FP32 CUDA Control   : {tflops_fp32:>6.2f} TFLOPS ({ms_fp32:.3f} ms)  -> Standard Physical Control")

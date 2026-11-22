@@ -188,6 +188,19 @@ Im Verzeichnis `TU102-ASSETS/` ist die Datei `v67-tu102-610.43.03.bin` mit `GA10
    ```
    Dies bindet `nvlddmkm.sys` an den integrierten RISC-V GSP-Coprozessor statt an den langsameren CPU-RM-Modus.
 
+### 10.4 Kalibrierung der Turing-Grenzwerte & BF16-Klärung (Issue #20)
+1. **cuBLAS FP32-Akkumulation auf Turing (`sm_75`):**
+   In PyTorch (`torch.matmul`) werden Halbpräzisionsmatrizen (FP16) standardmäßig mit 32-Bit-Gleitkomma-Akkumulation (`CUBLAS_COMPUTE_32F`) berechnet, um Überläufe zu verhindern. Auf den Tensorkernen der 2. Generation (Turing) halbiert dies den maximalen Rechendurchsatz gegenüber FP16-Akkumulation.
+   Für eine RTX 2060 (30 SMs / 1920 CUDA-Cores) bei 1680 MHz Boost-Takt beträgt das physikalische theoretische Maximum:
+   $$30 \text{ SMs} \times 512 \text{ Ops/Takt} \times 1{,}68 \text{ GHz} = 25{,}8 \text{ TFLOPS}$$
+   Ein gemessener Wert von **21,31 TFLOPS** (wie von `@resYuto` in Issue #20 berichtet) entspricht **82,6 % der theoretischen Hardware-Kapazität** – die Karte läuft somit mit 100 % freigeschalteter Rechenleistung!
+2. **Korrektur der Grenzwerte (`gu_system_info.py`):**
+   Frühere Versionen verwendeten für die RTX 2060 einen Schwellenwert von 35 TFLOPS (abgeleitet von FP16-Halbpräzisionsakkumulation), wodurch `Check-GPU-Unlock.bat` fälschlicherweise eine Warnung ausgab (`STOCK RATE-LIMITER ACTIVE`). Die Profile für die gesamte Turing-Produktlinie (RTX 2060 bis TITAN RTX) wurden auf realistische Schwellenwerte für dichte GEMM kalibriert (RTX 2060: Schwelle 18 TFLOPS, min_unlocked 20 TFLOPS).
+3. **Keine native BF16-Hardware auf Turing:**
+   Bfloat16-Tensorkerne wurden von NVIDIA erst ab Ampere (`sm_80` / `sm_86`) eingeführt. Auf Turing läuft BF16 ausschließlich über langsame CUDA-Kern-Software-Emulation (~3,5 TFLOPS). Die Diagnosewerkzeuge weisen nun explizit darauf hin.
+4. **GSP-Firmware-Version:**
+   Die GSP-Firmware im Windows-Treiber muss **nicht** mit der im UEFI-Paket verwendeten Version (`610.43.03`) übereinstimmen. Die Pre-Boot-Initialisierung im UEFI ist flüchtig; der Windows-Treiber lädt beim Booten seine eigene GSP-Firmware. Jeder unterstützte NVIDIA-Treiber (560.xx, 570.xx, 572.xx) funktioniert einwandfrei.
+
 
 ---
 
