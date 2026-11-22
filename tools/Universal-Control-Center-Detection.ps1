@@ -14,9 +14,18 @@ function Get-Sha256Hash([string]$Path) {
 }
 
 
+function Get-SystemWindowsEspPartition {
+    try {
+        $part = Get-Partition -ErrorAction SilentlyContinue | Where-Object { $_.IsSystem -or $_.GptType -eq '{c12a7328-f81f-11d2-ba4b-00a0c93ec93b}' } | Select-Object -First 1
+        return $part
+    } catch { Write-Verbose "Ignored: $($_.Exception.Message)" }
+    return $null
+}
+
+
 function Get-SystemWindowsEspGuid {
     try {
-        $part = Get-Partition | Where-Object { $_.IsSystem } | Select-Object -First 1
+        $part = Get-SystemWindowsEspPartition
         if ($part -and $part.Guid) {
             $g = [regex]::Match($part.Guid, '[0-9a-fA-F-]{36}')
             if ($g.Success) { return $g.Value }
@@ -284,6 +293,31 @@ function Get-PreflightChecks {
         Status = 'PASS'
         Title  = "Universal Deployment Engine"
         Detail = "Universal Dynamic Dispatch active. Zero compilation required. $espMsg"
+    }
+
+    # 8. Windows EFI System Partition (ESP) Storage & Persistence Check
+    $espPart = Get-SystemWindowsEspPartition
+    $espMb = if ($espPart -and $espPart.Size) { [math]::Round($espPart.Size / 1MB) } else { 0 }
+    $espStatus = 'PASS'
+    $espDetail = ""
+    if ($espMb -gt 0) {
+        if ($espMb -lt 250) {
+            $espStatus = 'WARN'
+            $espDetail = "Windows EFI Partition: ${espMb} MB (Standard 100MB OEM ESP). Option [I] requires ~85MB free for Ada/Ampere GSP firmware (Turing needs ~28MB). Recommended: Use Option [P] (S3 Sleep Persistence - no ESP space needed) or create a dedicated 500MB FAT32 partition."
+        } else {
+            $espStatus = 'PASS'
+            $espDetail = "Windows EFI Partition: ${espMb} MB (Sufficient space for stickless [I] driver)."
+        }
+    } else {
+        $espStatus = 'NOTICE'
+        $espDetail = "EFI Partition size could not be determined. Option [P] (S3 Sleep) is recommended for zero-space persistence."
+    }
+
+    $checks['EspSize'] = @{
+        Status = $espStatus
+        Title  = "Windows EFI Partition (ESP) Storage"
+        Detail = $espDetail
+        SizeMb = $espMb
     }
 
     return $checks

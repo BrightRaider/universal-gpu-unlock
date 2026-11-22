@@ -242,6 +242,8 @@ $btnAssetsGuide = $window.FindName('BtnAssetsGuide')
 $iconLlvm = $window.FindName('IconLlvm')
 $txtDetailLlvm = $window.FindName('TxtDetailLlvm')
 $btnInstallLlvm = $window.FindName('BtnInstallLlvm')
+$iconEspSize = $window.FindName('IconEspSize')
+$txtDetailEspSize = $window.FindName('TxtDetailEspSize')
 
 # Tab 3
 $comboUsbDrives = $window.FindName('ComboUsbDrives')
@@ -252,6 +254,7 @@ $chkHideS3 = $window.FindName('ChkHideS3')
 $txtUsbRouteInfo = $window.FindName('TxtUsbRouteInfo')
 $txtUsbCompilerInfo = $window.FindName('TxtUsbCompilerInfo')
 $txtUsbEspInfo = $window.FindName('TxtUsbEspInfo')
+$txtUsbEspNotice = $window.FindName('TxtUsbEspNotice')
 $txtUsbCaptureStatus = $window.FindName('TxtUsbCaptureStatus')
 $usbProgressOverlay = $window.FindName('UsbProgressOverlay')
 $usbProgressBar = $window.FindName('UsbProgressBar')
@@ -446,6 +449,26 @@ function Refresh-PreflightData {
         $txtDetailLlvm.Text = "Universal Zero-Compile Dispatch active: Pre-compiled, Authenticode-signed Universal binaries (BOOTX64.EFI & AdaUnlockDxe.efi) ready in bin/. No LLVM or compiler required!"
         if ($btnInstallLlvm) { $btnInstallLlvm.Visibility = [System.Windows.Visibility]::Collapsed }
     }
+
+    # Windows EFI System Partition (ESP) Check
+    if ($iconEspSize -and $txtDetailEspSize) {
+        $espCheck = $checks['EspSize']
+        if ($espCheck) {
+            $txtDetailEspSize.Text = $espCheck.Detail
+            if ($espCheck.Status -eq 'PASS') {
+                $iconEspSize.Text = "[OK]"
+                $iconEspSize.Foreground = [System.Windows.Media.Brushes]::LightGreen
+            }
+            elseif ($espCheck.Status -eq 'WARN') {
+                $iconEspSize.Text = "[!]"
+                $iconEspSize.Foreground = [System.Windows.Media.Brushes]::Gold
+            }
+            else {
+                $iconEspSize.Text = "[i]"
+                $iconEspSize.Foreground = [System.Windows.Media.Brushes]::SkyBlue
+            }
+        }
+    }
 }
 
 function Show-UsbProgressOverlay([string]$Title, [string]$Detail) {
@@ -497,8 +520,18 @@ function Update-UsbTabInfo {
         }
 
         $espGuid = Get-SystemWindowsEspGuid
+        $espPart = Get-SystemWindowsEspPartition
+        $espMb = if ($espPart -and $espPart.Size) { [math]::Round($espPart.Size / 1MB) } else { 0 }
         if ($txtUsbEspInfo) {
-            $txtUsbEspInfo.Text = "System Windows ESP: $(if ($espGuid) { "{$espGuid}" } else { "Not Detected" })"
+            $txtUsbEspInfo.Text = "System Windows ESP: $(if ($espGuid) { "{$espGuid}" } else { "Not Detected" })$(if ($espMb -gt 0) { " (${espMb} MB)" } else { "" })"
+        }
+        if ($txtUsbEspNotice) {
+            if ($espMb -gt 0 -and $espMb -lt 250) {
+                $txtUsbEspNotice.Text = "[!] Standard 100MB ESP: Option [I] requires ~85MB free for Ada/Ampere (~28MB for Turing). Recommended: Option [P] (S3 Sleep - zero ESP space) or create a dedicated 500MB FAT32 partition."
+                $txtUsbEspNotice.Visibility = [System.Windows.Visibility]::Visible
+            } else {
+                $txtUsbEspNotice.Visibility = [System.Windows.Visibility]::Collapsed
+            }
         }
 
         if ($txtUsbCaptureStatus) {
@@ -835,7 +868,8 @@ $btnDeployUsb.Add_Click({
         $letter = $selected.Substring(0, 1)
 
         $s3Desc = if ($chkHideS3 -and $chkHideS3.IsChecked) { "Hidden (Clean [U/I/R/S] boot prompt)" } else { "Visible (Full [U/P/I/R/S] prompt with experimental S3 persistence [P])" }
-        $confirm = [System.Windows.MessageBox]::Show("Deploy Universal GPU Unlock to USB drive $letter`:`\?`n`n- Universal BOOTX64.EFI & AdaUnlockDxe.efi`n- Universal Firmware Assets (AD102-ASSETS)`n- S3 Persistence Menu: $s3Desc`n`nExisting user files on the USB drive will be preserved.", "Confirm Universal 1-Click Deployment", [System.Windows.MessageBoxButton]::YesNo, [System.Windows.MessageBoxImage]::Question)
+        $espNoticeMsg = if ($espMb -gt 0 -and $espMb -lt 250) { "`n`n[!] Notice: Windows ESP is $espMb MB (Standard 100MB OEM). Option [I] requires ~85MB free for Ada/Ampere (~28MB for Turing). Option [P] (S3 Sleep) is recommended (bypasses ESP space limits)!" } else { "" }
+        $confirm = [System.Windows.MessageBox]::Show("Deploy Universal GPU Unlock to USB drive $letter`:`\?`n`n- Universal BOOTX64.EFI & AdaUnlockDxe.efi`n- Universal Firmware Assets (AD102/GA102/TU102)`n- S3 Persistence Menu: $s3Desc$espNoticeMsg`n`nExisting user files on the USB drive will be preserved.", "Confirm Universal 1-Click Deployment", [System.Windows.MessageBoxButton]::YesNo, [System.Windows.MessageBoxImage]::Question)
         if ($confirm -eq [System.Windows.MessageBoxResult]::Yes) {
             Show-UsbProgressOverlay -Title "Deploying Universal Unlock to USB..." -Detail "Copying pre-compiled signed UEFI binaries, firmware assets, and setup scripts to $letter`:\. Please wait..."
             try {
@@ -843,7 +877,7 @@ $btnDeployUsb.Add_Click({
                 $res = Deploy-ToUsb -Letter $letter
                 Write-GuiLog "Deployment completed: $($res.Status)"
                 Hide-UsbProgressOverlay
-                [System.Windows.MessageBox]::Show("Universal GPU Unlock deployed successfully to $letter`:`\!`n`nYour USB drive is now ready to unlock your GPU on boot.`n`nReboot your PC and press your Boot Menu key (ASUS F8 / Gigabyte F12 / MSI F11 / ASRock F11) to boot.", "Deployment Successful", [System.Windows.MessageBoxButton]::OK, [System.Windows.MessageBoxImage]::Information) | Out-Null
+                [System.Windows.MessageBox]::Show("Universal GPU Unlock deployed successfully to $letter`:`\!`n`nYour USB drive is now ready to unlock your GPU on boot.`n`nReboot your PC and press your Boot Menu key (ASUS F8 / Gigabyte F12 / MSI F11 / ASRock F11) to boot.`n`nPersistence Tip: If your Windows ESP is 100MB, use Option [P] (S3 Sleep) for zero-space persistence without USB reboots!", "Deployment Successful", [System.Windows.MessageBoxButton]::OK, [System.Windows.MessageBoxImage]::Information) | Out-Null
             }
             catch {
                 Hide-UsbProgressOverlay

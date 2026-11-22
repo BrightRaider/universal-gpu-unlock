@@ -363,6 +363,21 @@
                                 <Button Name="BtnInstallLlvm" Grid.Column="2" Visibility="Collapsed"/>
                             </Grid>
                         </Border>
+
+                        <!-- Item 7: Windows EFI System Partition (ESP) Storage -->
+                        <Border Background="#252538" CornerRadius="6" Padding="14" Margin="0,0,0,10" BorderBrush="#313244" BorderThickness="1">
+                            <Grid>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="Auto"/>
+                                    <ColumnDefinition Width="*"/>
+                                </Grid.ColumnDefinitions>
+                                <TextBlock Name="IconEspSize" Grid.Column="0" Text="[OK]" FontSize="16" FontWeight="Bold" Foreground="#A6E3A1" VerticalAlignment="Center" Margin="0,0,14,0"/>
+                                <StackPanel Grid.Column="1" VerticalAlignment="Center">
+                                    <TextBlock Text="Windows EFI System Partition (ESP) Storage" FontWeight="Bold" FontSize="13" Foreground="#CDD6F4"/>
+                                    <TextBlock Name="TxtDetailEspSize" Text="Checking..." FontSize="12" Foreground="#A6ADC8" TextWrapping="Wrap"/>
+                                </StackPanel>
+                            </Grid>
+                        </Border>
                     </StackPanel>
                 </ScrollViewer>
             </TabItem>
@@ -387,6 +402,7 @@
                                     <TextBlock Name="TxtUsbRouteInfo" Text="Route: Detecting..." Foreground="#CDD6F4" Margin="0,2"/>
                                     <TextBlock Name="TxtUsbCompilerInfo" Text="Toolchain: Detecting..." Foreground="#A6ADC8" Margin="0,2"/>
                                     <TextBlock Name="TxtUsbEspInfo" Text="Windows ESP: Detecting..." Foreground="#A6ADC8" Margin="0,2"/>
+                                    <TextBlock Name="TxtUsbEspNotice" Text="" Foreground="#F9E2AF" FontSize="11" Margin="0,2" TextWrapping="Wrap" Visibility="Collapsed"/>
                                     <TextBlock Name="TxtUsbCaptureStatus" Text="Hardware Captures on USB: Select a drive below" FontWeight="SemiBold" Foreground="#89DCEB" Margin="0,4,0,0"/>
                                 </StackPanel>
                             </Border>
@@ -459,7 +475,9 @@
                         <Border Background="#252538" CornerRadius="6" Padding="14" Margin="0,0,0,14" BorderBrush="#313244" BorderThickness="1">
                             <StackPanel>
                                 <TextBlock Text="Dedicated ESP Partition Prerequisites:" FontWeight="Bold" FontSize="13" Foreground="#F9E2AF" Margin="0,0,0,8"/>
-                                <TextBlock Text="* Must be a separate GPT FAT32 partition of at least 1 GiB." Foreground="#CDD6F4" Margin="0,2"/>
+                                <TextBlock Text="* Must be a separate GPT FAT32 partition (500 MB - 1 GiB recommended)." Foreground="#CDD6F4" Margin="0,2"/>
+                                <TextBlock Text="* Standard Windows 100 MB ESP has insufficient free space (~30-50 MB free) for ~85 MB Ada/Ampere GSP firmware (Turing needs ~28 MB)." Foreground="#F9E2AF" Margin="0,2"/>
+                                <TextBlock Text="* Alternatively use Option [P] (S3 Sleep Persistence) - zero ESP space required!" Foreground="#A6E3A1" Margin="0,2"/>
                                 <TextBlock Text="* Must NEVER be the primary Windows EFI partition." Foreground="#CDD6F4" Margin="0,2"/>
                                 <TextBlock Text="* Must be assigned a temporary drive letter (e.g. U:)." Foreground="#CDD6F4" Margin="0,2"/>
                             </StackPanel>

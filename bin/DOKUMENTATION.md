@@ -41,6 +41,7 @@ Standardmäßig erstellt das Windows-Setup eine exakt 100 MB große EFI-Systempa
   1. **Option `[P]` (S3 Sleep Persistence - Empfohlen):** Wer den Rechner nicht herunterfährt, sondern den Standby (S3 Suspend-to-RAM) nutzt, benötigt `[I]` überhaupt nicht. Einmalig per USB entsperren – der im ACPI NVS residente Dispatcher stellt den Unlock beim Aufwachen in unter 3 Sekunden wieder her, ganz ohne ESP-Speicherplatzbedarf.
   2. **Eigene FAT32-Partition (500 MB):** Auf einer internen NVMe/SATA-SSD wird eine kleine 500-MB-FAT32-Partition angelegt (in Issue [#19](https://github.com/BrightRaider/universal-gpu-unlock/issues/19) durch `speechsyndev` verifiziert). Das UEFI-BIOS mountet diese Partition automatisch, und `[I]` legt Treiber und Assets dort ab.
   3. **ESP vergrößern:** Die bestehende ESP mit einem Partitionstool von 100 MB auf 500 MB erweitern.
+* **Automatische Erkennung in Setup & Control Center:** Sowohl `Setup.bat` (`Setup-AdaUnlock.ps1`) als auch das Universal Control Center (in den Reitern *Pre-Flight Safety*, *USB Unlock Deployer* und *Internal ESP Setup*) erkennen die Größe der Windows-ESP automatisch und weisen bei einer Standard-100-MB-Partition direkt auf Option `[P]` hin.
 
 ---
 
