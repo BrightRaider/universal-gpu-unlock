@@ -236,7 +236,8 @@ static EFI_STATUS RunUnlock(EFI_SYSTEM_TABLE *t, EFI_HANDLE image,
         L"\r\n");
   }
 
-  GuBootSay(L" Handing over control to Windows Boot Manager...\r\n\r\n");
+  GuBootSay(L" Handing over control to Windows Boot Manager in 3 seconds...\r\n\r\n");
+  t->BootServices->Stall(3000000);
 
   GuLog("TRANSACTION OK: %u of %u GPU(s) unlocked, hardware readbacks passed!\n",
         (unsigned)unlocked_count, (unsigned)device_count);
