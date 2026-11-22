@@ -7,6 +7,13 @@ For packaged binaries and downloads, visit [GitHub Releases](https://github.com/
 ---
 
 ## [Unreleased]
+### Fixed
+- **ESP Volume Full Guard in `[I]` Mode (refs #19):** `StageArchAssetsToVolume` in `src/driver_nvram.c` now verifies all asset file writes. If internal ESP partition runs out of space (`EFI_VOLUME_FULL`), the driver installation logs an informative message and safely falls back to USB medium registration rather than leaving a dangling broken driver on the ESP.
+- **Improved `[I]` Mode On-Screen Messaging:** Updated `RunInstall` in `src/app.c` to display a clear notice when ESP has insufficient space (~85MB for Ada/Ampere) and recommend S3 Sleep Persistence (`[P]`) or creating a 500MB FAT32 partition.
+
+### Added
+- **Turing Standalone Edition (`Universal_GPU_Unlock_Turing_v1.8.29.zip`):** Dedicated lightweight package (~16MB compressed, ~28MB uncompressed) containing only Turing TU102/TU104/TU106 assets and signed EFI binaries, designed specifically to fit standard 100MB OEM EFI partitions.
+- **ESP Space Preflight Check in Setup:** `Setup-AdaUnlock.ps1` automatically detects standard 100MB Windows EFI partitions, warns about option `[I]` space limitations, and highlights option `[P]` (S3 Sleep) as the recommended zero-space persistence path.
 
 ## [v1.8.29] - 2026-11-21
 ### Fixed

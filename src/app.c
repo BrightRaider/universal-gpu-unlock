@@ -87,7 +87,8 @@ static EFI_STATUS RunInstall(EFI_HANDLE image, EFI_SYSTEM_TABLE *t) {
   } else if (s == EFI_SUCCESS) {
     GuLog("DXE Driver registered on the USB drive (Driver#### / DriverOrder)\n");
     GuBootSay(L"\r\n\r\n[OK] AdaUnlock DXE Driver registered in UEFI NVRAM, on this USB drive.\r\n"
-              L"The internal ESP was not available. Keep the USB drive connected.\r\n"
+              L"[!] NOTE: The internal ESP was unavailable or had insufficient space for assets (~85MB).\r\n"
+              L"Keep the USB drive connected (or use [P] S3 Sleep / create a 500MB FAT32 partition).\r\n"
               L"Rebooting system in 3 seconds...\r\n");
   } else {
     GuLog("ERROR: Failed to install DXE Driver: %#llx\n", (unsigned long long)s);

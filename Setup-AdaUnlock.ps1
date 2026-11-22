@@ -42,6 +42,21 @@ if ($gpus) {
     Write-Host "  [NOTE] Target GPU not found in current device list (Setup can still proceed)." -ForegroundColor Yellow
 }
 
+# 2b. Check Windows EFI System Partition (ESP) size
+try {
+    $esp = Get-Partition -ErrorAction SilentlyContinue | Where-Object { $_.GptType -eq '{c12a7328-f81f-11d2-ba4b-00a0c93ec93b}' } | Select-Object -First 1
+    if ($esp) {
+        $espMb = [math]::Round($esp.Size / 1MB)
+        if ($espMb -lt 250) {
+            Write-Host "  [!] Notice: Windows EFI Partition is ${espMb} MB (standard 100MB ESP)." -ForegroundColor Yellow
+            Write-Host "      Option [I] (Stickless DXE Driver) requires ~85MB free space for Ada/Ampere assets." -ForegroundColor DarkYellow
+            Write-Host "      Recommended: Use Option [P] (S3 Sleep Persistence - no ESP space needed) or create a 500MB FAT32 partition." -ForegroundColor DarkYellow
+        } else {
+            Write-Host "  [OK] Windows EFI Partition: ${espMb} MB (sufficient space for stickless [I] driver)." -ForegroundColor Green
+        }
+    }
+} catch { Write-Verbose "ESP check skipped: $($_.Exception.Message)" }
+
 Write-Host ""
 Write-Host "[2/4] Scanning for USB Flash Drives..." -ForegroundColor Cyan
 
@@ -240,6 +255,11 @@ Write-Host "   - SECURE BOOT (Easiest): Set Secure Boot to [Disabled] (or OS Typ
 Write-Host "   - SECURE BOOT (Optional): In BIOS -> Key Management -> 'Append db', select 'AdaUnlock_SecureBoot.cer'."
 Write-Host "4. Press 'U' at the boot prompt (executes in 300ms), and Windows will launch with full tensor power!"
 Write-Host "5. In Windows, double-click Check-GPU-Unlock.bat to verify 100% compute throughput (>200 TFLOPS)!"
+Write-Host "6. PERSISTENCE OPTIONS (Never need USB reboot):" -ForegroundColor Yellow
+Write-Host "   - OPTION [P] (Recommended): S3 Sleep Persistence! Unlock once via USB, then use Sleep/Standby." -ForegroundColor Cyan
+Write-Host "     When waking from sleep, your GPU stays 100% unlocked with zero USB reboots (bypasses ESP space limits)!" -ForegroundColor Gray
+Write-Host "   - OPTION [I] (Stickless EFI Driver): Deploys driver to internal NVMe-ESP. Requires ~85MB free space." -ForegroundColor Cyan
+Write-Host "     (If ESP is standard 100MB OEM, resize to 500MB or create a dedicated 500MB FAT32 partition)." -ForegroundColor Gray
 Write-Host "   (Optional: Launch Universal-Control-Center.cmd if you wish to inspect detailed hardware telemetry)."
 Write-Host ""
 Write-Host "Press any key to exit..."

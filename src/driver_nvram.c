@@ -224,9 +224,10 @@ static EFI_STATUS CopyFileBetweenVolumes(EFI_BOOT_SERVICES *bs,
   return s;
 }
 
-static VOID StageArchAssetsToVolume(EFI_BOOT_SERVICES *bs, EFI_HANDLE src_vol, EFI_HANDLE dst_vol) {
+static BOOLEAN StageArchAssetsToVolume(EFI_BOOT_SERVICES *bs, EFI_HANDLE src_vol, EFI_HANDLE dst_vol) {
   const GU_ARCH_ASSETS *arch = GuGetArchAssets();
-  if (!arch || !src_vol || !dst_vol || src_vol == dst_vol) return;
+  if (!arch || !src_vol || !dst_vol || src_vol == dst_vol) return TRUE;
+  BOOLEAN all_ok = TRUE;
 
   for (UINTN i = 0; i < GU_ASSET_COUNT; i++) {
     const CHAR16 *path = arch->entries[i].path;
@@ -242,10 +243,17 @@ static VOID StageArchAssetsToVolume(EFI_BOOT_SERVICES *bs, EFI_HANDLE src_vol, E
         for (UINTN k = 0; k < dir_len; k++) dir[k] = path[k];
         dir[dir_len] = 0;
         const CHAR16 *name = slash + 1;
-        (VOID)CopyFileBetweenVolumes(bs, src_vol, path, dst_vol, dir, name);
+        EFI_STATUS s = CopyFileBetweenVolumes(bs, src_vol, path, dst_vol, dir, name);
+        if (s != EFI_SUCCESS) {
+          all_ok = FALSE;
+          GuLog("StageArchAssetsToVolume: failed to stage %s to ESP (s=%#llx)%s\n",
+                arch->entries[i].name, (unsigned long long)s,
+                s == EFI_VOLUME_FULL ? " [VOLUME FULL: requires ~85MB free for Ada/Ampere, ~30MB for Turing]" : "");
+        }
       }
     }
   }
+  return all_ok;
 }
 
 static EFI_HANDLE LocateInternalEspVolume(EFI_BOOT_SERVICES *bs) {
@@ -322,11 +330,14 @@ EFI_STATUS GuInstallDriverOption(EFI_HANDLE image, EFI_SYSTEM_TABLE *t) {
     s = CopyFileBetweenVolumes(bs, loaded->DeviceHandle, src_driver_path,
                                esp_vol, L"\\EFI\\Drivers", L"AdaUnlockDxe.efi");
     if (s == EFI_SUCCESS) {
-      install_vol = esp_vol;
-      is_internal = TRUE;
-      GuLog("GuInstallDriverOption: Successfully deployed AdaUnlockDxe.efi to Internal ESP\\EFI\\Drivers\n");
       /* Also stage active architecture assets to the Internal ESP */
-      StageArchAssetsToVolume(bs, loaded->DeviceHandle, esp_vol);
+      if (StageArchAssetsToVolume(bs, loaded->DeviceHandle, esp_vol)) {
+        install_vol = esp_vol;
+        is_internal = TRUE;
+        GuLog("GuInstallDriverOption: Successfully deployed AdaUnlockDxe.efi and assets to Internal ESP\\EFI\\Drivers\n");
+      } else {
+        GuLog("GuInstallDriverOption: Warning: ESP has insufficient free space for firmware assets (requires ~85MB for Ada/Ampere, ~30MB for Turing). Falling back to USB medium.\n");
+      }
     } else {
       GuLog("GuInstallDriverOption: Warning: ESP copy failed (s=%#llx), falling back to USB medium\n",
             (unsigned long long)s);
