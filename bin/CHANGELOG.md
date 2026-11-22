@@ -1,0 +1,649 @@
+# Changelog - Universal Multi-Gen GPU Unlock
+
+All notable changes, architectural improvements, and device expansions for Universal GPU Unlock are documented here.
+
+For packaged binaries and downloads, visit [GitHub Releases](https://github.com/BrightRaider/universal-gpu-unlock/releases).
+
+---
+
+## [v1.8.31] - 2026-11-22
+### Fixed
+- **Silicon-Aware Already-Unlocked Recognition (`[P]` and `[U]` modes) (refs #19):** When `AdaUnlockDxe.efi` is installed in UEFI NVRAM, it executes during early POST and unlocks the GPU (`SS0=0x88888888, SS1=0x8`). If the user subsequently booted `BOOTX64.EFI` from USB and selected `[P]` (or `[U]`), `Registers()` previously rejected `*Ss0 == 0x88888888` as invalid cold selectors (`STOP: stage=read-only-cold-profile status=0x8000000000000006`). Now, `Registers()` and `GuIsUnlocked()` detect when a GPU is already unlocked in hardware, set `Gu.already_unlocked = TRUE`, verify VBIOS/profile cleanly, skip redundant hardware unlock transactions, register S3 Sleep Persistence if requested (`[P]`), and hand over directly to Windows Boot Manager.
+- **MSI / OEM Splash Screen Freeze Prevention (refs #19):** `RunFailure()` previously returned `EFI_DEVICE_ERROR` / `EFI_NOT_READY` directly to the UEFI firmware when preflight checks failed on unmutated hardware. On MSI Click BIOS and several modern motherboards, returning an unhandled error from a boot option halts firmware execution and freezes on the OEM boot logo. Now, if hardware was unmutated and safe, `RunFailure()` automatically boots Windows in stock mode after 5 seconds instead of returning an unhandled error to firmware.
+- **S3 Protocol Discovery Fallback (refs #19):** `GuS3PrepareAndRegister` now checks both UEFI PI 1.2 `EFI_S3_SAVE_STATE_PROTOCOL_GUID` and legacy Framework `EFI_BOOT_SCRIPT_SAVE_PROTOCOL_GUID`, providing informative diagnostics if the motherboard BIOS has ACPI S3 disabled or set to S0ix Modern Standby.
+- **Turing Architecture (sm_75) Tensor Core Profile Calibration (refs #20):** `CARD_PROFILES` and `quick_check.py` previously evaluated Turing GPUs using theoretical half-precision accumulation profiles (e.g. >35–42 TFLOPS threshold for RTX 2060). However, PyTorch `torch.matmul` defaults to `CUBLAS_COMPUTE_32F` (FP32 accumulation) on Turing 2nd-gen Tensor Cores, which has a physical silicon peak of ~25.8 TFLOPS on 30 SMs (TU104-150 / TU106). This caused `Check-GPU-Unlock.bat` to output a false-positive `[WARNING] STOCK RATE-LIMITER ACTIVE!` on fully unlocked cards operating at >82% theoretical peak (such as 21.31 TFLOPS on RTX 2060). Calibrated Turing profiles across `tools/gu_system_info.py`, `tools/quick_check.py`, and `tools/gpu_dashboard.py` to match real-world cuBLAS FP32-accumulation throughput, and added explicit messaging clarifying that Turing hardware lacks native BF16 Tensor Cores (Ampere/Ada sm_80+ only).
+- **Universal Control Center Script & Partition Parsing (refs #19):** Resolved string interpolation parsing error in `tools/Universal-Control-Center.ps1` line 528 and fixed partition drive letter selection syntax in `tools/Create-Unlock-Partition.ps1`.
+- **Pre-Boot Live Silicon Status Banner:** The pre-boot menu in `BOOTX64.EFI` now checks silicon registers and displays an immediate `[OK] GPU Silicon Status: ALREADY UNLOCKED (by DXE Driver in POST)` banner when the card has already been unlocked, making it clear to the operator that selecting `[P]` or `[U]` registers S3 persistence and boots Windows directly.
+
+### Added
+- **Automated Host Test for Already-Unlocked Bypass:** Added `tests/test_already_unlocked.c` to MSVC host test suite, validating detection states, Turing isolation, fault guards, and bypass behavior in `GuUnlockAllGpus()`.
+- **Community Hardware Verification (RTX 3090 Ti & RTX 4090):**
+  - **EVGA GeForce RTX 3090 Ti 24GB (`10de:2203`)** on ASUS PRIME Z490-P (Intel Core i7-10700) verified by @m4ttfx: Measured baseline jumped from 65.55 TFLOPS FP16 / 66.32 TFLOPS BF16 to **132.4 TFLOPS FP16 / 136.6 TFLOPS BF16** (+102% double performance) with Resizable BAR enabled (upstream issue #495).
+  - **PNY GeForce RTX 4090 24GB (`10de:2684`)** on Gigabyte Z690 UD AC-Y1 (Intel Core i9-13900K) verified by @jacyzheng: Measured baseline jumped from 160 TFLOPS to **255.0 TFLOPS** (+59.4% boost) per `Check-GPU-Unlock.bat`, delivering an immediate 15-25% real-world speedup in ComfyUI workflows on the first try (upstream issue #444).
+
+## [v1.8.30] - 2026-11-22
+### Fixed
+- **ESP Volume Full Guard in `[I]` Mode (refs #19):** `StageArchAssetsToVolume` in `src/driver_nvram.c` now verifies all asset file writes. If internal ESP partition runs out of space (`EFI_VOLUME_FULL`), the driver installation logs an informative message and safely falls back to USB medium registration rather than leaving a dangling broken driver on the ESP.
+- **Improved `[I]` Mode On-Screen Messaging:** Updated `RunInstall` in `src/app.c` to display a clear notice when ESP has insufficient space (~85MB for Ada/Ampere) and recommend S3 Sleep Persistence (`[P]`) or creating a 500MB FAT32 partition.
+
+### Added
+- **Architecture-Aware Selective Staging for Turing (refs #19):** Option `[I]` in the unified package automatically stages only the ~28MB Turing firmware assets (`TU102-ASSETS`) on Turing systems, enabling stickless DXE driver installation directly onto standard 100MB Windows EFI partitions without requiring partition resizing.
+- **ESP Space Preflight Check in Setup & Control Center:** `Setup-AdaUnlock.ps1` and Universal Control Center (Pre-Flight Safety Tab, USB Deployer Tab & Internal ESP Tab) automatically detect standard 100MB Windows EFI partitions, warn about option `[I]` space limitations, and highlight option `[P]` (S3 Sleep) as the recommended zero-space persistence path.
+- **1-Click 512MB FAT32 Partition Creator (`Create-Unlock-Partition.bat`):** Added automated helper script and Control Center button to safely shrink an internal SSD volume by 512MB and format a dedicated FAT32 ESP volume (`GPU_UNLOCK`), providing permanent stickless UEFI persistence for Ada/Ampere cards on systems with 100MB OEM ESPs without third-party software.
+
+## [v1.8.29] - 2026-11-21
+### Fixed
+- **Multi-GPU Plan State Reset Between GPUs (refs #19):** Fixed `EFI_ALREADY_STARTED` (`0x8000000000000014`) on secondary GPUs caused by persistent file-static `Plan` state in `src/unlock_release.c`. Added `GuUnlockPrepareNextGpu()` to safely reset `Plan` and `GuHardwareVerified` between cards when the prior GPU cleanly finished or was untouched.
+- **Headless GOP Framebuffer Preservation (refs #19):** In multi-GPU configurations, the primary display adapter is rotated to the end of the unlock queue (`devices[device_count - 1]`), ensuring secondary headless GPUs retain an active GOP framebuffer during preflight before display FLR is executed.
+- **Stale Multi-GPU Inventory Log Message:** Removed outdated log warning in `src/gpu_discovery.c` that falsely claimed only GPU [1/N] is processed.
+
+### Added
+- **Automated Multi-GPU Preflight Host Test:** Added `tests/test_multi_gpu_second_preflight.c` validating plan clearing and rejection guards across multi-GPU passes.
+- **Community Hardware Verification (refs #19):** Added verified physical benchmark for dual Ampere setup on ASUS TUF GAMING Z590-PLUS WIFI (Intel i5-11600K) running HP OEM RTX 3090 24GB + EVGA RTX 3060 12GB achieving 86.0 TFLOPS and 49.6 TFLOPS respectively.
+
+## [v1.8.28] - 2026-11-21
+### Multi-GPU Sequential Unlock, S3 Sleep Persistence & Script Sprawl Consolidation (refs #14, refs #15, refs #18)
+- **Verified Hardware & Community Benchmarks:**
+  * **MSI GeForce RTX 3090 GAMING X TRIO 24G Community Verification:** Added verified physical benchmark on ASUS ROG STRIX B550-E GAMING (AMD Ryzen 7 5800X3D) at **105.10 TFLOPS** (FP16 Tensor, 4.80x execution throughput multiplier over stock 21.88 TFLOPS FP32 CUDA baseline, 100% unrestricted compute).
+  * **Turing Series (RTX 20 / CMP) Status Confirmed Functional (refs #15, refs #18):** Promoted Turing (TU102, TU104, TU106) across documentation and `README.md` to verified and functional status. Pre-boot unlock transaction executes cleanly, and full enterprise compute throughput (>85–105 TFLOPS) is confirmed with official NVIDIA GSP firmware mode (`Toggle-Turing-GSP.bat`).
+- **Multi-GPU Sequential Unlock Engine (`src/multi_gpu.c`, `src/app.c` & `src/dxe_main.c`):**
+  * Consolidated sequential multi-GPU unlocking loop into unified `GuUnlockAllGpus()` engine shared by both pre-boot loader (`BOOTX64.EFI`) and DXE driver (`AdaUnlockDxe.efi`).
+  * Iterates across all discovered supported NVIDIA GPUs (`0 .. device_count - 1`), binding each card sequentially via `GuBindDevice`.
+  * Dynamically reloads architecture assets on heterogeneous setups (e.g. Ada Lovelace + Ampere) when architecture differs from the last loaded card.
+  * Fault-isolated transaction handling: Failure on asset loading or read-only preparation on secondary cards skips the card without failing boot. Execution failures safely stop boot via normal failure path to prevent mutated hardware states.
+  * Runs `GuUnlockReadyForWindows` after each GPU unlock and registers S3 Boot Script Dispatch for all successfully unlocked cards.
+- **60-Second Quick Start & Script Sprawl Consolidation:**
+  * Streamlined project root down to clean 1-click entrypoints: `Setup.bat` (Setup), `Check-GPU-Unlock.bat` (CLI Verify), `Launch-Dashboard.bat` (GUI Cockpit), and `Update-USB.bat` (Stick Updater).
+  * Relocated auxiliary tools (`Setup-FastResume`, `Toggle-Sleep-Button`, `Toggle-Turing-GSP`, `Universal-Control-Center`) into `tools/` with backwards-compatible root forwarders.
+  * Integrated all utilities as 1-click action buttons inside `tools/gpu_dashboard.py`.
+  * Hardened `Update-USB.bat`: Interactive target drive confirmation, SD card protection, non-zero exit codes on deployment failure, and full tool bundle synchronization via `Get-GuUsbToolFiles`.
+- **Multi-GPU & S3 Resume Telemetry in Diagnostics:**
+  * Enhanced `tools/quick_check.py` to benchmark all available CUDA GPUs, reporting per-GPU TFLOPS, CUDA ratio, PCIe links, ReBAR status, and a consolidated multi-GPU summary badge.
+  * Set `CUDA_DEVICE_ORDER=PCI_BUS_ID` across diagnostic scripts to guarantee CUDA device indices strictly align with physical PCIe bus IDs.
+  * Windows Power-Troubleshooter S3 wake detection now reported as informational wake telemetry rather than false-positive unlock verification.
+  * ReBAR status badges cleanly display `N/A` instead of `Disabled` when state is unknown.
+  * Added multi-GPU device selector dropdown in `tools/gpu_dashboard.py`.
+- **S3 Sleep Persistence Engine (`[P]` Mode):**
+  * Implemented standalone S3 Boot Script Dispatch Handler (`EFI_BOOT_SCRIPT_DISPATCH_2_OPCODE`) with persistent `EfiACPIMemoryNVS` DRAM staging (64 pages / 256 KB).
+  * Hardened PIC execution: Staged positions-independent `GuS3ResumeDispatch` machine code (331 bytes, 0 relocations) directly into the ACPI NVS buffer (`nvs_base + 0x00800`), guaranteeing code survival across Windows `ExitBootServices()` and OS memory reclamation.
+  * Resilient parameter handling: Supports standard UEFI PI dispatch calls (`RDX` Context) and BIOS firmware variants passing Context in `RCX`.
+  * Standalone wake unlock engine: Automatically kicks Falcon SEC2, validates halt, latches rate-limiter selectors SS0 (`0x88888888`) and SS1 (`0x00000008`), and cleanly quiesces SEC2.
+- **Bootloader & NVRAM Hardening:**
+  * **Halt countdown:** A key press during "Rebooting in …" now reboots immediately instead of wrapping the unsigned counter.
+  * **Halt screen:** Accurately states that the GPU may be partially changed and that the reboot resets it to factory stock.
+  * **`[I]` message:** Accurately indicates whether the driver was deployed to the internal NVMe-ESP or registered on the USB drive via `GuDriverInstalledOnEsp()`.
+  * **`[I]` without a valid source:** If ESP copy fails and the stick only has the driver under `\EFI\BOOT`, `[I]` now halts cleanly with `EFI_NOT_FOUND` instead of registering dangling NVRAM entries.
+  * **Diagnostic scan:** Runs only for `[S]` and timeout, after menu selection. Read faults no longer block stock Windows boots, and `[U]` avoids redundant 1 MiB PROM reads.
+  * **Boot menu:** `[P]` is hidden when S3 is unavailable, and pause prompt lists only active options.
+- **Control Center & USB Deployment:**
+  * **Single-Source GPU IDs:** Control Center and setup scripts now dynamically parse `src/gpu_device_ids.h`.
+  * **Full USB Deployment:** `Deploy-UsbCommon.ps1` deploys all Control Center modules, `gu_system_info.py`, and single-source headers onto USB media.
+  * **Self-Contained Native Compatibility Check:** Streamlined offline diagnostics to use native PowerShell report checks and diffing without external python script dependencies.
+- **Refactoring & Code Quality:**
+  * Centralized wake time retrieval to `get_last_wake_time` in `tools/gu_system_info.py`.
+  * Consolidated dashboard execution to unified `launch_script` helper.
+  * Removed obsolete `tools/Launch-Utility.cmd`.
+  * Split `UefiMain` into cleanly scoped routines: `RunInstall`, `RunRemove`, `RunStock`, `RunUnlock`, and `RunFailure`.
+  * Unified GPU inventory logging via `GuArchName()` and `GuLogInventory()`.
+  * Bounded device-path walks (`WalkDevicePath`) in `driver_nvram.c`.
+  * Consolidated MSVC host tests table in `tests/Run-MsvcHostTests.ps1` with 8/8 automated test suites passing (`MSVC_HOST_TESTS=PASS`).
+  * Updated CI Linux workflow to build and run `tests/test_turing_local.c` with gcc and clang.
+- **Turing Architecture Documentation (Issue #15 Analysis):**
+  * Turing TU102/TU104 lacks hardware SS0/SS1 speed-select registers (`0x0082381c`/`0x00823820`, reading `0xbadf5040`). Rate limiting was introduced in Ampere (GA102) and Ada (AD102).
+  * The TU102 payload is byte-identical to GA102 because it reuses the Ampere loader; no GEMM boost occurs via MSR manipulation on Turing.
+  * Verified that Turing compute performance (>85-105 TFLOPS) is unlocked primarily via NVIDIA Windows GSP driver firmware mode (`EnableGpuFirmware = 1`).
+
+### Known Issues
+- `Plan` in `unlock_release.c` is global. Whether `GuExecuteUnlock` may run several times in one boot, and whether `GuRegisterS3` keeps the boot script of every GPU, is not verified. Multi-GPU has not been tested on hardware.
+- `GuReconnectDisplayAfterUnlock` runs for GPU 0 while `Gu` is bound to the last GPU.
+
+---
+
+## [v1.8.27] - 2026-11-19
+### Headless & Uninitialized Compute Accelerator Activation (addresses #18)
+- **Headless & Secondary GPU PCI Memory Space Activation (addresses #18):**
+  * Relaxed PCI Command register check in `src/checks.c` (`GuCheckConfig`): Dedicated displayless compute accelerators (such as CMP 40HX or secondary GPUs booted behind AMD/Intel iGPUs) that start with `cmd=0x0` / `rom=0x0` are no longer rejected during discovery.
+  * Added automated PCI Memory Space decode activation (`EFI_PCI_IO_ATTRIBUTE_MEMORY`) in `src/gpu_discovery.c`: When a candidate GPU starts with unmapped memory decoding (`cmd=0x0`), memory decoding is dynamically enabled via the `PciIo` protocol so BAR0 MMIO and VBIOS firmware reads succeed.
+  * Added discovery mock unit test in `tests/test_gpu_discovery.c` verifying automated memory decode activation on headless cards.
+  * Restructured README Quickstart Guide with all bootloader modes (`[U]`, `[P]`, `[I]`, `[R]`, `[S]`, `[Space]`), clean troubleshooting tip, and dedicated Secure Boot instructions.
+
+## [v1.8.26] - 2026-11-18
+### NVIDIA CMP 40HX (TU106) Expansion (addresses #18)
+- **NVIDIA CMP 40HX Support (`0x1F0B`) (addresses #18):**
+  * Added PCI Device ID `0x1F0B` (`TU106-100-A1` Crypto Mining Processor) to `GU_TURING_DEVICE_IDS` in `src/gpu_device_ids.h`.
+  * Enables discovery, VBIOS ROM parsing, and preflight transaction evaluation for CMP 40HX cards in `BOOTX64.EFI` and `AdaUnlockDxe.efi`.
+  * Updated companion detection engine (`tools/Universal-Control-Center-Detection.ps1`) to properly recognize CMP 40HX as Turing TU106.
+  * Extended Turing test suite (`tests/test_turing_local.c`) with positive validation checks for `0x1f0b` and full PCI ID `0x1f0b10de`.
+
+## [v1.8.25] - 2026-11-17
+### Turing TU104 Expansion & Full Diagnostics Edition (addresses #15)
+- **GeForce RTX 2060 (TU104) Support (`0x1E89`) (addresses #15):**
+  * Added PCI Device ID `0x1E89` (`TU104-150-KC-A1` harvested die variant of the GeForce RTX 2060) to `GU_TURING_DEVICE_IDS` in `src/gpu_device_ids.h`.
+  * Enables discovery, VBIOS ROM parsing, and preflight diagnostic scanning for TU104-based RTX 2060 cards in `BOOTX64.EFI` and `AdaUnlockDxe.efi`.
+- **Resizable BAR (ReBAR) Deep Detection:**
+  * Checks BAR1 memory aperture vs total VRAM via NVML / `nvidia-smi`.
+  * Signals `[OK] ENABLED (Full VRAM)` in green or `[!] DISABLED (256 MiB restricted)` in bold signal red.
+  * Displays an explicit pro-tuning alert explaining `Above 4G Decoding` and `ReBAR Support` BIOS settings to unlock the remaining +10% to +15% memory throughput.
+- **PCIe Link Quality & Bottleneck Diagnostics:**
+  * Checks negotiated PCIe link generation and lane width (`pcie.link.gen.max`, `pcie.link.width.max`).
+  * Alerts users if a defective riser cable, oxidized slot contact, or chipset secondary slot restricts the GPU to `x4` or `x1` lanes.
+- **One-Click Clipboard Badge Sharing:**
+  * Automatically formats a concise markdown badge and copies it to the Windows clipboard via native `clip.exe`:
+    `[UNLOCKED] NVIDIA GeForce RTX 4090: 231.3 TFLOPS | ReBAR: 32768MB (Active) | PCIe: Gen4 x16 | BIOS: UEFI (Pure)`
+  * Ready to paste directly into GitHub Issues, Discord, or Reddit.
+- **Fast-Resume & Idle Relock Guard (`Setup-FastResume.bat` & Dashboard):**
+  * One-click configuration for Windows Full Hibernation (`powercfg /h /type full`).
+  * Generates a 1-click desktop shortcut (`Fast-Unlock-Sleep.lnk`) to suspend the PC while keeping the GPU rate-limiter unlock active in RAM across sessions without re-entering UEFI boot menus.
+  * **Idle Relock Guard (PCIe ASPM & Runtime D3 Protection):** Configures Windows power policies (`powercfg linkstatepr 0`) and sets driver `RMDisableRtd3 = 1` across NVIDIA class devices to prevent aggressive ACPI D3cold / GCOFF power-gating during display standby or idle timeouts. Essential for gaming laptops (NVIDIA Optimus / hybrid graphics) and secondary compute cards. Fully reversible anytime via `Setup-FastResume.bat --revert` or the GUI dashboard toggle.
+- **cuBLASLt Heuristic Autotuning & AI Performance Pro-Tip:**
+  * Enabled `torch.backends.cudnn.benchmark = True` in GEMM benchmark engines.
+  * Added pro-tip guidance in `tools/quick_check.py` and `tools/gpu_dashboard.py` detailing how to avoid stock heuristic bottlenecks in PyTorch and ComfyUI, unlocking up to +15% to +35% additional real-world matrix throughput.
+- **Modern Dark-Themed GUI Dashboard (`Launch-Dashboard.bat` & `.pyw`):**
+  * Built using pure standard library `tkinter` (zero external pip packages required).
+  * Real-time hardware identity, firmware mode, ReBAR status, and interactive background GEMM benchmark with digital TFLOPS gauge.
+- **Turing (TU102 / TU104) Test Suite (`tests/test_turing_local.c`):**
+  * Validates all Turing Device IDs (including `0x1E89`), booter payload geometries, and `TU102-ASSETS` file integrity.
+  * Integrated directly into `tests/Run-MsvcHostTests.ps1`.
+
+## [v1.8.24] - 2026-11-11
+### Pre-Boot CSM Detection Warning & Comprehensive Diagnostics (refs #17)
+- **On-Screen UEFI Warning for Legacy CSM:**
+  * When `GuUnlockIsCsmVideo()` detects legacy CSM video routing (`attrs & (VGA_MEMORY | VGA_IO)`), `BOOTX64.EFI` now displays an explicit on-screen warning prior to handing over control to Windows Boot Manager.
+  * Directs users whose systems boot with low resolution or Code 43 to disable CSM in BIOS Setup to establish pure native UEFI and enable Resizable BAR.
+- **Python Status Checker Diagnostics (`tools/quick_check.py`):**
+  * When CUDA initialization fails, displays a structured troubleshooting checklist explaining Device Manager Code 43, `msinfo32` UEFI verification, and the CSM BIOS toggle.
+- **Setup & Documentation Alignment:**
+  * Added mandatory CSM-disabled requirement and Resizable BAR pro-tip to `Setup-AdaUnlock.ps1`, `README.md`, and `docs/OPERATIONS_AND_PERSISTENCE.md`.
+
+## [v1.8.23] - 2026-11-11
+### Legacy CSM Video Handover & Two-Layer Display Recovery (addresses #17)
+- **Automatic Legacy CSM (`CsmVideo`) Detection:**
+  * Detects CSM legacy video environments during preflight via VGA decoding attributes (`EFI_PCI_IO_ATTRIBUTE_VGA_MEMORY | EFI_PCI_IO_ATTRIBUTE_VGA_IO`, e.g. `0x718` on ASRock A520M-HVS) and compact legacy video thunks before `ClaimRestore` touches PCI attributes.
+  * Disables post-FLR `ConnectController(pci_handle)` calls on CSM platforms in both `BOOTX64.EFI` and `AdaUnlockDxe.efi`, preventing UEFI firmware hangs inside legacy `CsmVideo->Start()`.
+- **Layer 1: Native VBIOS Option ROM GOP Binding:**
+  * Stages GPU VBIOS UEFI GOP driver (`type=0x3` PCI Expansion ROM, e.g. `pos=0xfe00 bytes=92672` on RTX 3080) from PROM during `GuPrepare()`.
+  * Decompresses via `EFI_DECOMPRESS_PROTOCOL` when compressed, validates PE image format, loads and starts the driver via UEFI Boot Services, and selectively invokes `DriverBinding->Start()` specifically on the target GPU.
+  * Reconnects only pure child GOP handles (never `pci_handle` with `PciIo`), ensuring display output is recovered directly on native hardware.
+- **Layer 2: Safe Headless Fallback GOP:**
+  * If physical Option ROM GOP is unavailable or cannot produce a linear GOP, installs a synthetic 1024x768 32-bit BGRA `EFI_GRAPHICS_OUTPUT_PROTOCOL` allocated in `EfiReservedMemoryType` (`<= 0xFFFFFFFF`).
+  * Prevents Windows Boot Manager (`bootmgfw.efi`) and OS loader (`winload.efi`) from falling back to broken Legacy `INT 10h` BIOS interrupts, allowing Windows to boot cleanly straight to `nvlddmkm.sys`.
+- **USB Log Sync Guarantee:**
+  * Added `GuBootSyncLog()` to flush and reopen active USB log files immediately before risky firmware and handover transitions.
+- **Unified Display Handover & Host Unit Tests:**
+  * Consolidated display reconnect routines between `app.c` and `dxe_main.c` into `GuReconnectDisplayAfterUnlock()`.
+  * Added `tests/test_csm_handover.c` to MSVC host test runner (`tests/Run-MsvcHostTests.ps1`) verifying CSM detection, Option ROM parsing, Layer 1 binding, and Layer 2 fallback GOP.
+
+### Tests & CI
+- **New MSVC host tests:** `tests/test_driver_nvram.c` covers `[I]`, `[R]` and the self-disable after a failed DXE unlock: free slot, foreign entries, unreadable `DriverOrder`, internal ESP copy and USB fallback. `tests/test_boot_select.c` covers the Windows volume ranking and the `BootOrder` preference. `tests/test_csm_handover.c` covers CSM video detection, Option ROM parsing, Layer 1 binding, and Layer 2 synthetic fallback GOP. Run them with `tests/Run-MsvcHostTests.ps1`.
+- **CI:** The workflow now runs on every push and pull request that touches `src/` or `tests/`. It also builds `BOOTX64.EFI` and `AdaUnlockDxe.efi` (unsigned) and runs the MSVC host tests.
+
+### Fixed
+- **No shutdown loop after a failed DXE unlock:** After a failure that touched the GPU, `AdaUnlockDxe.efi` now takes its own entry out of `DriverOrder` (`GuDisableDriverOption`) before it shuts down. The next boot runs without the unlock instead of failing again, which matters for an install on the internal ESP. `[I]` enables the driver again, `[R]` removes it. `driver_nvram.c` is now part of the DXE build.
+- **ESP copy replaces old files:** An existing copy on the ESP is deleted before the new one is written, so a smaller new driver no longer leaves stale bytes at the end. An incomplete write now counts as a failed copy and falls back to the USB drive. This also applies to the firmware assets.
+- **NVRAM checked before copying:** `[I]` reads `DriverOrder` and the `Driver####` slots before it copies anything to the ESP, so a failure no longer leaves a driver file without an entry.
+
+### Hardening
+- `DMA_BIT_MASK(64)` no longer shifts by 64, which is undefined behavior. All current callers use 32, so behavior is unchanged.
+- Removed a duplicate `/fixed:no` from `src/Build-Gpu-Topology-Diagnostic.ps1`.
+
+### Documentation
+- `docs/OPERATIONS_AND_PERSISTENCE.md`: Claims reduced to observed results. `[I]` now describes the internal ESP install and the USB fallback. Verification status for Ampere and Turing follows the issues.
+- `README.md`: New "Build & Tests" section. Turing marked as in testing ([#15](https://github.com/BrightRaider/universal-gpu-unlock/issues/15)), and the safety, anti-cheat and test-bench claims reduced to what was observed. The `[I]` description now covers the USB fallback and the self-disable.
+
+---
+
+## [v1.8.22] - 2026-11-10
+### Boot Selection Timeout Extension to 30 Seconds
+- **Boot Countdown Timeout Extended:**
+  * Increased the boot selection prompt countdown from 15 seconds to **30 seconds** (`GU_BOOT_TIMEOUT_SEC 30U`).
+  * Compensates for high-refresh-rate DisplayPort and HDMI monitors that take 3–5 seconds to synchronize pixel clocks during early UEFI text-mode initialization, ensuring users have ample time to read options and select their desired mode.
+
+---
+
+## [v1.8.21] - 2026-11-10
+### Redundant Handle-Graph Scan Elimination & Console Reconnect (Addresses #17)
+- **Elimination of Redundant Post-Close Handle Scan (Addresses #17):**
+  * Resolved boot stall on ASRock AM4 UEFI firmware during the final handover check (`GuUnlockReadyForWindows`).
+  * In `v1.8.20`, after `GuUnlockFinish()` had already closed `PciIo` and validated the entire device graph via `Snapshot(&Current)` and `Expected(3, FALSE)`, `GuUnlockReadyForWindows()` performed a second full scan of all UEFI handles and protocol databases. On ASRock A520M-HVS, querying hundreds of handles a second time after protocol close caused the firmware to hang.
+  * Removed the redundant second `Snapshot(&Current)` from `GuUnlockReadyForWindows()`, transitioning execution immediately from verified PCI config stability into GOP display reconnection.
+- **Direct Console Splitter Reconnect:**
+  * Added proactive recursive reconnection of `SystemTable->ConsoleOutHandle` in addition to the GPU device handle, ensuring UEFI text console multiplexers and physical display links are synchronized prior to launching Windows Boot Manager (`bootmgfw.efi`).
+
+---
+
+## [v1.8.20] - 2026-11-10
+### Post-Protocol-Close MMIO Bus Freeze Resolution & Display Link Handover (Addresses #17)
+- **Pre-Close Hardware Register Verification (Addresses #17):**
+  * Resolved platform bus freeze and black screen on AMD/Aptio V systems where `GuUnlockReadyForWindows()` performed volatile MMIO reads (`GuRead32(0)`) after `GuUnlockFinish()` had closed `PciIoProtocol`.
+  * On UEFI platforms like AMI Aptio V, closing `PciIoProtocol` unmaps PCIe memory decode and triggers a PCIe Master Abort / CPU bus hang if dereferencing raw BAR physical pointers.
+  * Moved all silicon register readbacks (`chip`, `cpu`, `hi`, `ss0`, `ss1`, `readout`, `plm`) into `GuVerifyHardwareRegisters()`, executing strictly while the device is exclusively claimed and MMIO decode is active.
+  * `GuUnlockReadyForWindows()` now verifies the pre-validated hardware state and PCI configuration space via `Pci.Read` without unsafe post-close MMIO dereferences.
+- **Reliable Display Reconnection Execution:**
+  * Because the MMIO bus freeze is eliminated, `ConnectController(devices[g].handle, NULL, NULL, TRUE)`, the 200ms physical link training stall, and console reset now reliably execute and re-engage the UEFI GOP driver before launching Windows Boot Manager (`bootmgfw.efi`).
+
+---
+
+## [v1.8.19] - 2026-11-10
+### Post-Unlock UEFI GOP Display Controller Reconnection & Windows Handover (Addresses #17)
+- **Post-Unlock UEFI GOP Display Controller Reconnection (Addresses #17):**
+  * Resolved "no more video output / screen not recognized" after successful hardware unlock reported by @KaengiSchmaengi on ASRock A520M-HVS with Gainward RTX 3080 Phoenix.
+  * In `src/app.c` (`reconnect-display` stage), after silicon verification passes 100% (`SS0=0x88888888`, `SS1=0x8`), proactively reconnects all primary display controllers via `ConnectController(devices[g].handle, NULL, NULL, TRUE)`.
+  * Added 200ms link-training stall (`Stall(200000)`) and `ConOut->Reset()` to ensure physical DisplayPort / HDMI clocks and TMDS/DP link training are stabilized before printing the completion status and handing over control to Windows Boot Manager (`bootmgfw.efi`).
+  * In `src/dxe_main.c`, mirrored the recursive `ConnectController()` and display link-training stabilization in the DXE Driver prior to OS loader dispatch.
+- **Universal Control Center UTF-8 Mojibake Resolution:**
+  * Replaced raw UTF-8 Unicode glyphs with robust XML numeric character entities (`&#x2714;`, `&#x26A1;`, etc.) in `Universal-Control-Center.xaml` and native character escapes in `Universal-Control-Center.ps1`, eliminating `âœ”` rendering artifacts across all Windows system locales.
+
+---
+
+## [v1.8.18] - 2026-11-10
+### Pre-FLR Bus Master Quiescence Drift Tolerance & Halt Display Reconnection (Addresses #17)
+- **Pre-FLR Bus Master Quiescence Drift Tolerance (Addresses #17):**
+  * Resolved `PCI config drift refused: offset=0x4 captured=0x100007 now=0x100003 bits=0x4 flrs=0` (`Release check failed: config-drift`, `unlock_610.c:1764 error=-16`) reported by @KaengiSchmaengi on ASRock A520M-HVS with Gainward RTX 3080 Phoenix.
+  * In `ConfigStable()` (`src/unlock_release.c`), added explicit tolerance for bit 2 (`PCI_COMMAND_MASTER`) in Command Register Dword 1 (offset 0x4) during pre-FLR quiescence. Right before PCIe Function Level Reset, `pci_clear_master()` legitimately clears Bus Master (`0x100007` → `0x100003`) to ensure bus quiescence; this single bit is now recognized as expected drift prior to FLR.
+  * Note: In silicon, the RTX 3080 hardware unlock completed 100% (`SS0=0x88888888`, `SS1=0x8`); tolerating this intentional pre-FLR bus master quiescence clears the final gate to PCIe FLR and Windows Boot Manager handover.
+- **Halt Console Output & Keystroke Drain Fix (Addresses #17):**
+  * Resolved invisible halt screen / flashing underscore when `GuBootHalt()` was entered while UEFI GOP was detached.
+  * In `src/app.c` (`failed:` label), proactively reconnects the primary display controller via `ConnectController()` and resets `ConOut` prior to calling `GuBootHalt()`, ensuring the diagnostic box and countdown are visibly rendered on physical monitors.
+  * In `GuBootHalt()` (`src/boot_io.c`), drained buffered keystrokes from `ConIn` prior to starting the countdown loop, preventing queued keypresses from prematurely aborting the 15-second reboot countdown.
+  * In `GuPrintCountdownPrompt()` (`src/boot_io.c`), formatted initial tick prompt without a leading carriage return to ensure crisp rendering across all UEFI terminal implementations.
+
+---
+
+## [v1.8.17] - 2026-11-10
+### UEFI Bus Master Attribute Synchronization & Live Boot Menu Countdown (Addresses #17)
+- **UEFI Bus Master Attribute Synchronization (Addresses #17):**
+  * Resolved `Bus Master enable failed: status=0x8000000000000007 command=0x3 readback=0xffff managed=0` (`failure unlock_610.c:1356 unlock_transaction_fwsec error=-5`) reported by @KaengiSchmaengi on ASRock A520M-HVS with Gainward RTX 3080.
+  * In `GuEnableMaster()` (`src/port.c`), decoupled the verification of active IO/Memory decoding from the cached Bus Master attribute state. On platforms where Bus Master was cleared prior to region claiming, `GuEnableMaster()` now cleanly re-enables Bus Master via both UEFI `Attributes()` and direct PCI config assertions without failing on cached attribute desync.
+  * In `GuClearMaster()` (`src/port.c`), added proactive `EfiPciIoAttributeOperationDisable` attribute calls even when invoked outside a managed block, ensuring the UEFI protocol driver's cached state stays in exact synchronization with hardware PCI config space.
+- **Boot Menu Live Countdown & Transparent Halt Diagnostic Banner:**
+  * Replaced the static 30-second timeout in `GuBootChoose()` (`src/boot_io.c`) with a snappy 15-second live countdown ticking down visibly every second (`15s` → `00s`).
+  * On timeout or preflight refusal, automatically prints the exact diagnostic log filename on the USB drive (`\GPU-UNLOCK\RUNxxxx.TXT`) and the GitHub Issues URL before booting stock Windows.
+  * In `GuBootHalt()`, replaced the silent black-screen hang with a structured on-screen diagnostic box confirming the safe stock state of the hardware, pointing to the USB log file, and running an automatic 15-second reboot countdown (press any key to reboot immediately).
+
+---
+
+## [v1.8.16] - 2026-11-10
+### Pre-Claim Transaction Bus Master Quiescence Alignment (Addresses #17)
+- **Pre-Claim Transaction Bus Master Quiescence Alignment (Addresses #17):**
+  * Resolved `failure unlock_610.c:1151 unlock_transaction_claim error=-16` reported by @KaengiSchmaengi on ASRock A520M-HVS with Gainward RTX 3080.
+  * In `unlock_transaction_claim()` (`src/vendor/unlock_610.c`), when the GPU is initialized at boot with PCI Bus Master enabled (`Command = 0x07`), gracefully clear Bus Master via `pci_clear_master(work->pdev)` before acquiring the memory region.
+  * Preserved `work->original_cmd` to guarantee the motherboard's native Command state (`0x07`) is faithfully restored at the end of the transaction upon handover to Windows.
+
+---
+
+## [v1.8.15] - 2026-11-10
+### AMI Aptio V Display Consumers Topology & Post-Enable Bus Master Alignment (Addresses #17)
+- **AMI Aptio V Display Consumers Topology Alignment (Addresses #17):**
+  * Resolved `Preflight failed at Consumers(): 0x800000000000000f` reported by @KaengiSchmaengi on ASRock A520M-HVS with Gainward RTX 3080 (`pci=1 child=0 idle=0 text=1 virtual=1 gfx=1`).
+  * In `Consumers()` (`src/unlock_release.c`), eliminated the artificial requirement `(child < 1 && idle < 1)` when `Plan.gop` is already selected and verified on the target GPU. On single-display AMI Aptio V platforms where the firmware binds GOP directly without creating separate `PathGuid` child handles on the PCI controller, the console display consumer is now cleanly validated.
+  * In `Consumers()` edge matching, expanded child controller recognition to accept `PciGuid` along with `PathGuid`.
+- **ClaimRestore & Release Post-Enable Bus Master Preservation (Addresses #17):**
+  * In `ClaimRestore()` (`src/unlock_release.c`), aligned the post-enable attribute assertion to preserve `EFI_PCI_IO_ATTRIBUTE_BUS_MASTER` when initialized at boot by motherboard POST.
+  * In `GuUnlockReleased()`, aligned `bus-master` and `attributes-extra` checks to accept Bus Master when part of the card's boot-time profile.
+
+---
+
+## [v1.8.14] - 2026-11-10
+### ASRock & AMD Preflight ReadConfig Bus Master Alignment & Turing GSP Utilities (Addresses #17, refs #15)
+- **ASRock & AMD AM4 Preflight ReadConfig & Bus Master Alignment (Addresses #17):**
+  * Resolved `Preflight failed at ReadConfig(): 0x8000000000000003` reported by @KaengiSchmaengi on ASRock A520M-HVS with Gainward RTX 3080.
+  * In `ReadConfig()` (`src/unlock_release.c`), eliminated the restrictive assertion `|| (c[1] & 4)` that rejected GPUs initialized by motherboard POST with Bus Master enabled.
+  * In `GuUnlockPreflight()`, updated `decode` attribute computation to dynamically include `EFI_PCI_IO_ATTRIBUTE_BUS_MASTER` when active at boot, preventing decode check mismatches.
+  * In `DecodeMask()` and `ClaimRestore()`, dynamically tolerates preexisting Bus Master attributes on platforms where UEFI firmware sets Bus Master during early POST.
+  * In `GuEnableBusMaster()` and `GuDisableBusMaster()` (`src/port.c`), gracefully handles preexisting Bus Master attributes without faulting on pre-asserted states or command writebacks.
+- **Turing GSP Firmware Mode Toggle Utility (refs #15):**
+  * Added `Toggle-Turing-GSP.bat` for 1-click configuration of `EnableGpuFirmware = 1` in Windows Registry, allowing Turing (RTX 2080 Ti / TITAN RTX) to bind to unlocked GSP firmware.
+  * Integrated 1-click Turing GSP toggle and sleep toggle buttons into Universal Control Center GUI.
+- **Enhanced Multi-Precision Benchmark (FP16, BF16, TF32, and FP32 Negative Control):**
+  * Updated `tools/quick_check.py` to evaluate FP16 Tensor Cores alongside pure FP32 CUDA cores (`allow_tf32 = False`) as a physical negative control, proving rate-limiter bypass without core overclocking.
+
+---
+
+## [v1.8.13] - 2026-11-10
+### ASRock AMD Motherboard Discovery Alignment & Ampere Device ID Expansion (Addresses #17)
+- **ASRock / AMD AM4 Discovery Filter Relaxation (Addresses #17):**
+  - Resolved `STOP: stage=discover status=0x8000000000000003` reported by @KaengiSchmaengi on ASRock A520M-HVS with Gainward GeForce RTX 3080 Phoenix.
+  - In `GuCheckConfig()` (`src/checks.c`), eliminated the restrictive boot-time check demanding `(Command & BUS_MASTER) == 0` and `Expansion_ROM == 0`. Motherboard firmwares that initialize the primary GPU with Bus Master or active Option ROM decoding during early POST are now cleanly discovered.
+- **Ampere Device ID Expansion:**
+  - Added RTX 3080 GA103 (`0x2414`), RTX 3090 Ti (`0x2203`), RTX 3080 Ti OEM (`0x2205`), and `0x220b` to `GU_AMPERE_DEVICE_IDS`.
+- **Diagnostic Discovery Telemetry:**
+  - Added verbose logging in `GuDiscoverAllGpus()` (`src/gpu_discovery.c`) to trace scanned PCI handles, candidate Device IDs, locations, and explicit rejection reasons.
+- **Universal Log Directory Structure:**
+  - Updated default pre-boot log folder to `\GPU-UNLOCK` with seamless fallback for legacy `\AD102-UNLOCK`.
+
+---
+
+## [v1.8.12] - 2026-11-10
+### ASUS AMI Aptio V 2-Agent Console Topology & Turing Post-FLR Status Drift Alignment (Addresses #15, #16)
+- **ASUS / AMI Aptio V 2-Agent Console Topology Support (Addresses #16):**
+  - Resolved `Preflight failed at Consumers(): 0x800000000000000f` (`Consumers check: pci=1 child=1 idle=0 text=0 virtual=0 gfx=1`) reported by @crdobbs on ASUS PRIME Z690-A with EVGA RTX 3080 Ti.
+  - On ASUS motherboards with AMI Aptio V UEFI firmware, console management does not create a third `ConSplitter` driver binding edge (`TextGuid`) on the GOP controller handle.
+  - In `Consumers()` (`src/unlock_release.c`), relaxed the 3-agent requirement to permit the 2-agent architecture (`Plan.gfx_agent` + `Plan.nv_agent`) when `Plan.out_agent` is absent.
+  - In `GuUnlockRelease()`, gracefully treats Stage 1 disconnect as a clean no-op when `Plan.out_agent` is NULL, smoothly proceeding with Stage 2 and Stage 3 driver detachment.
+- **Turing PCIe FLR Post-Reset Device Status Config Drift Tolerance (Addresses #15):**
+  - Resolved `Release check failed: config-drift` (`PCI config drift refused: offset=0x7c captured=0x112c8de1 now=0x10008de1 bits=0x12c0000 flrs=1`) reported by @mibby in `RUN0009.TXT`.
+  - In `ConfigStable()` (`src/unlock_release.c`), dynamically tolerates PCIe Device Status (DevSta at `(Gu.pcie_cap + 8) / 4` / `0x7c/4`) bit clears following PCIe FLR reset. Hardware-cleared transaction and error bits on Turing TU102 now cleanly pass stability validation, enabling seamless handover to Windows Boot Manager.
+
+---
+
+## [v1.8.11] - 2026-11-10
+### Turing PCIe FLR Pre-Reset Selector Guard (Addresses #15)
+- **Turing PCIe FLR Pre-Reset Selector Validation Guard (Addresses #15):**
+  - Resolved `failure unlock_610.c:1764 unlock_transaction_reset error=-5` (`PCIe FLR returned: result=-5`) reported by @mibby in `RUN0008.TXT`.
+  - In `GuFlr()` (`src/port.c`), guarded the pre-FLR SS0/SS1 register comparison with `!Gu.is_turing`. On Turing silicon, speed-select override registers `0x82381c`/`0x823820` are unmapped (returning `0xbadf5040`) as rate-limiting override is handled directly via Falcon SEC2 HS microcode.
+  - Hardened `GuEntrySelectorsMatch()` to immediately evaluate true on Turing.
+  - Guarded `GuRegisterS3()` against unmapped MMIO writes on Turing hardware.
+  - Added diagnostic telemetry to `GuFlr()` for clear tracking of device reset state transitions.
+
+---
+
+## [v1.8.10] - 2026-11-10
+### Turing FWSEC Post-FRTS WPR2 Assertion Guard (Addresses #15)
+- **Turing FWSEC Post-FRTS WPR2 Verification Alignment (Addresses #15):**
+  - Resolved `failure unlock_610.c:1347 unlock_transaction_fwsec error=-5` reported by @mibby in `RUN0007.TXT`.
+  - On Turing silicon (TU102), FWSEC registers FRTS tables cleanly (`scratch=0`), while WPR2 ranges are populated during subsequent Falcon SEC2 Booter execution rather than immediately by FWSEC.
+  - Guarded post-FWSEC WPR2 assertion (`wpr_hi >> 4`) with `!gpu_is_turing_device`, allowing the transaction to proceed directly to V67 publication and SEC2 Booter execution.
+
+---
+
+## [v1.8.9] - 2026-11-10
+### Turing GFW Readiness & Dynamic Local Memory Range Logging (Addresses #15)
+- **Turing GFW Sample Feature Assertion Fix (Addresses #15):**
+  - Resolved `failure unlock_610.c:1400 unlock_transaction_gfw error=-5` reported by @mibby in `RUN0006.TXT`.
+  - In `unlock_transaction_gfw()`, guarded Ampere/Ada-specific GFW register assertions (`sample.plm != 0x8b8f || sample.boot != 0x3ff || sample.cpuctl != 0x10`) with `!gpu_is_turing_device`. Turing silicon GFW completion is verified via `gpu_unlock_gfw_assess(&sample)` without requiring Ampere bitmask matches.
+  - Added explicit telemetry logging for `gfw_plm`, `gfw_boot`, and `gfw_cpuctl` in the entry diagnostics banner.
+- **Dynamic Local Memory Range Detection:**
+  - `NV_PFB_PRI_MMU_LOCAL_MEMORY_RANGE` (`0x00100ce0`) dynamically detected 11264 MB (`0x2c00`) on TU102; refined aperture fallback behavior for general multi-capacity Turing SKUs.
+
+---
+
+## [v1.8.8] - 2026-11-10
+### Turing Booter Signature, Fuse Selection & Framebuffer Local Memory Range Fix (Addresses #15)
+- **Turing Booter Signature & Fuse Calculation Fix (Addresses #15):**
+  - Resolved `failure unlock_610.c:769 patch_booter error=-34 last_mmio=0x824148 value=0xbadf5040` on Turing TU102 (RTX 2080 Ti) reported by @mibby in `RUN0005.TXT`.
+  - In `patch_booter()`, guarded `GU_FUSE_SEC2_UCODE1` (`0x824148`) read on Turing devices. On Turing silicon, booter signature slot 0 contains the RSA-384 production signature; defaulted `fuse_ver = 1` (`index = 0`), preventing fuse calculation overflow (`-ERANGE`).
+  - In `src/vendor/prep_610.c`, hardened `gpu_unlock_fuse_version()` against unmapped MMIO reads (`~0u` and `0xbadfXXXX`), ensuring unmapped registers never compute out-of-range fuse version indices.
+  - In `unlock_transaction_dma()`, guarded FWSEC fuse register `0x008241c0` on Turing devices, selecting version 0 to match Turing FWSEC single-signature bitmask (`versions=0x1`).
+- **Turing Usable Framebuffer Memory Range Detection (Addresses #15):**
+  - In `unlock_transaction_layout()`, handled unmapped `0x001183a4` on Turing by querying `NV_PFB_PRI_MMU_LOCAL_MEMORY_RANGE` (`0x00100ce0`, decoding `lower_mag << lower_scale`) with an 11264 MB fallback, preventing `fb_mb = 0xbadf5040` corruption in memory layout plan.
+
+---
+
+## [v1.8.7] - 2026-11-10
+### Turing MMU Lock & Transaction Layout Fix (Addresses #15)
+- **Turing MMU Layout Architecture Fix (Addresses #15):**
+  - Resolved `failure unlock_610.c:958 unlock_transaction_layout error=-19 last_mmio=0x1fa7c8 value=0xbadf5040` on Turing GPUs reported by @mibby.
+  - On Turing (TU102), the Ampere/GA100 memory lock register block (`0x001fa7c8` `NV_PFB_PRI_MMU_PHYS_SECURE_PLM`, `0x001fa82c`, `0x001fa830`) is physically unmapped and returns `0xbadf5040`. In `unlock_transaction_layout()`, bypassed these reads on Turing silicon (`!gpu_is_turing_device`), cleanly initializing usable framebuffer layout without requiring GA100 MMU lock ranges.
+  - In `check_entry_selectors()`, bypassed unmapped selector register reads (`0x82381c` / `0x823820`) on Turing silicon.
+  - In `unlock_transaction_gfw()`, populated cold-state entry selectors via `GuGetEntrySelectors()` and bypassed the Ampere feature PLM check (`GU_FEAT_PLM_OFFSET` `0x823804`), allowing the GFW readiness assessment to pass cleanly.
+  - In `falcon_hs()`, bypassed the Ampere feature PLM polling loop on Turing (`wait_plm && !gpu_is_turing_device`), proceeding directly to SEC2 engine halt verification.
+  - In `unlock_transaction_reset()`, guarded post-FLR speed selector and PLM register assertions with `!gpu_is_turing_device`.
+
+---
+
+## [v1.8.6] - 2026-11-10
+### Turing Selector Latch Fix, Top Version Header & Multi-Display Console Selection (Addresses #15, #16)
+- **Turing Speed Selector Latch & Post-Unlock Readiness Fix (Addresses #15):**
+  - Resolved `GuPrepare: GuLatchEntrySelectors failed` and `STOP: stage=read-only-cold-profile status=0x8000000000000006` on Turing GPUs reported by @mibby in `RUN0002.TXT`.
+  - In `src/port.c`, `GuLatchEntrySelectors()` now correctly handles unmapped speed select registers (`0xbadf5040`) on Turing silicon (`!Gu.is_turing`), safely latching cold-state selector values.
+  - In `src/unlock_release.c`, `GuUnlockReadyForWindows()` bypasses `ss0 != 0x88888888 || ss1 != 8` register checks on Turing silicon, since Turing rate-limiter bypass is mediated entirely via SEC2 V67 microcode.
+- **Top-of-Log Version Banner:**
+  - Added explicit tool version header (`=== Universal Multi-Gen GPU Unlock v1.8.6 (BOOTX64.EFI) ===`) to line 1 of every `RUN000x.TXT` log.
+  - Added corresponding banner (`=== Universal Multi-Gen GPU Unlock v1.8.6 (AdaUnlockDxe.efi) ===`) to early DXE driver execution logs.
+  - Instantly reveals the exact release version and execution mode in bug reports and diagnostics without guessing.
+- **Multi-Display GOP Console Auto-Selection (Addresses #16):**
+  - Resolved `Preflight failed at Consumers(): 0x800000000000000f` (`text=0`, `EFI_ACCESS_DENIED`) on systems with multiple active display cables connected to the target GPU (e.g. 1x DisplayPort + 1x HDMI on ASUS PRIME Z690-A).
+  - Enhanced `Gops()` in `src/unlock_release.c`: when multiple GOP handles exist on the target GPU, pass 1 prioritizes the handle with an active `EFI_SIMPLE_TEXT_OUTPUT_PROTOCOL` (`TextGuid`) console bound.
+  - Eliminates handle ambiguity between primary and secondary/idle outputs, enabling clean detachment and unlock without needing to disconnect secondary monitors.
+
+---
+
+## [v1.8.5] - 2026-11-09
+### Unblock Turing Hardware Unlock Dispatch in Interactive Bootloader (Addresses #15)
+- **Resolved Turing Unlock Dispatch Intercept:**
+  - Removed remaining diagnostic-mode gate `if (Gu.is_turing)` in `src/app.c` that intercepted operator selections `[U]` and `[P]`.
+  - In v1.8.4, although Turing TU102 firmware assets and booter geometry were staged, this legacy safety intercept logged `Operator requested unlock on Turing: assets pending hardware verification` and immediately fell back to stock Windows.
+  - Interactive boot menu selections `[U]` (Standard RAM-only Unlock) and `[P]` (Persistence Unlock) now cleanly proceed to `GuBootLoadAssets()`, loading and executing the verified `TU102-ASSETS` microcode stack on physical Turing cards.
+
+---
+
+## [v1.8.4] - 2026-11-09
+### Turing TU102 Full Rate-Limiter Unlock & Internal NVMe-ESP Persistence (Addresses #15)
+- **Turing TU102 Full Rate-Limiter Unlock:**
+  - Integrated 5 verified binary assets for Turing TU102 (`booter_load_tu102.bin`, `v67-tu102-610.43.03.bin`, `gsp_tu10x.bin`, `gsp_boot_tu102.bin`, `gsp_boot_desc_tu102.bin`) in `TU102-ASSETS` with bit-exact SHA-256 attestation in `src/profile.c`.
+  - Added dedicated Version 4 Falcon bootloader descriptor parser (`image_size = 4096`, 76-byte layout) in `src/vendor/prep_610.c` alongside existing Version 5 descriptors.
+  - Configured TU102 booter image geometry (`expected_image = 59136`, `data_off = 34048`, `patch_loc = 34560`) in `gpu_unlock_boot_fws[]`.
+  - Handled Turing-specific register topology: bypassed unmapped speed select register writes (`0xbadf5040`) and cold-state polling during pre- and post-FLR reset sequences in `src/vendor/unlock_610.c`.
+  - Enables full V67 rate-limiter bypass on Turing TU102 (RTX 2080 Ti, TITAN RTX, Quadro RTX 6000/8000) with zero Windows VRAM loss (no GSP-RM runtime driver requirement under Windows).
+- **Internal NVMe-ESP DXE Persistence Installer (`[I]` Mode):**
+  - Upgraded the interactive boot menu installer mode `[I]` to install directly to the internal NVMe SSD's EFI System Partition (ESP) where Windows `bootmgfw.efi` resides.
+  - Automatically copies `AdaUnlockDxe.efi` to `\EFI\Drivers\AdaUnlockDxe.efi` and stages architecture microcode assets on the internal ESP volume.
+  - Registers a persistent `Driver####` entry in UEFI NVRAM `DriverOrder` targeting the internal NVMe ESP device path.
+  - Enables permanent stickless operation: the USB setup flash drive can be safely removed immediately after initial configuration and is never needed again.
+  - Multi-volume asset fallback in `src/boot_io.c` dynamically searches all accessible filesystem handles across the system.
+  - Uninstall mode `[R]` cleanly removes the NVRAM variable, cleans `DriverOrder`, and deletes staged files from the internal ESP.
+
+---
+
+## [v1.8.3] - 2026-11-09
+### Turing FWSEC vDesc v2 Geometry Parser & DMEM Bounds Hardening (Addresses #15)
+- **Turing FWSEC vDesc v2 Structural Geometry Parser:**
+  - Resolved `descriptor error=-22` (`-EINVAL`) at `vbios_610.c:179` observed on MSI RTX 2080 Ti (TU102-300A, DevID `0x1e07`) in `RUN0003.TXT`.
+  - Turing VBIOS descriptors utilize a 60-byte Version 2 layout with distinct field offsets from Version 3:
+    - IMEM VA at offset 12 (`0x0`), Interface at offset 16 (`0xe0`), IMEM PA at offset 20 (`0x0`), IMEM size at offset 24 (`0x9a00`).
+    - DMEM PA at offset 28 (`0x0`), Payload/Data offset at offset 40 (`0x9a00`), DMEM size at offset 48 (`0x3f0`), PKC signature offset at offset 52 (`0x9a00`).
+    - SEC2 engine mask (`0x400`) and FWSEC ucode ID (9) mapped specifically for Turing architecture.
+- **Architecturally Scoped Bounds Validation:**
+  - Scoped 384-byte PKC public key boundary validation `range(fw.dmem_size, fw.pkc_off, 384)` strictly to Version 3 descriptors (Ampere/Ada), preventing false validation failures on Turing's 16-byte signature boundary.
+  - Ensures clean end-to-end ROM validation (`prom_ok=1`, `fwsec_res=0`, `fwsec_match=1`) across both Ampere/Ada (v3) and Turing (v2).
+
+---
+
+## [v1.8.2] - 2026-11-09
+### Turing FWSEC vDesc v2 Parser & Cold-State Discovery (Addresses #15)
+- **Turing FWSEC vDesc Version 2 Support:**
+  - Resolved `descriptor error=-95` (`EOPNOTSUPP`) reported by @mibby on MSI RTX 2080 Ti (TU102-300A, DevID `0x1e07`). Turing VBIOS uses **vDesc Version 2** (`header=0x3c0201`, size 60 bytes) rather than Version 3 (used on Ampere/Ada).
+  - Extended `descriptor()` in `src/vendor/vbios_610.c` to accept both Version 2 and Version 3 headers, parsing memory geometries, IMEM/DMEM boundaries, and signature parameters across all Turing variants.
+  - Added full raw descriptor hex dumping and complete ROM ucode entry inventory logging (`app_id` and offsets) to `RUN000x.TXT` for deep firmware reversing.
+- **Turing Cold-State Validation:**
+  - Updated `Registers()` in `src/profile.c`: recognized unmapped speed select registers (`0xbadf5040`) on Turing silicon and routed cold-state verification via PMC architecture nibble (`0x16`) and clean `WPR2_HI`.
+  - Adapted `GuFwsecMatches()` to evaluate Turing vDesc v2 structures appropriately.
+
+---
+
+## [v1.8.1] - 2026-11-09
+### Non-Blocking Hardware & VBIOS Diagnostic Probing (Addresses #15)
+- **Decoupled Diagnostic Hardware Probe from Firmware Assets:**
+  - Resolved early boot halt `STOP: stage=assets status=0x8000000000000003` reported by @mibby on GeForce RTX 2080 Super (DevID `0x1e07`). In prior versions, `GuBootLoadAssets()` ran before Windows staging and before menu selection, immediately rebooting into BIOS if firmware assets were absent or held in validation mode.
+  - Implemented `GuDiagnosticScan()` in `src/profile.c`: unconditionally probes cold-state registers (PMC, WPR2_HI, SS0, SS1), reads the 1MB VBIOS aperture, validates PCIR headers, computes SHA-256, and parses the ROM expansion chain, BIT table, and FWSEC descriptor geometry without mutating GPU state.
+  - Windows boot staging (`GuBootLoadWindows()`) and interactive boot menu (`GuBootChoose()`) now always load unconditionally. Selecting `[S]` (Stock Windows) or allowing the 30-second failsafe timer to expire boots cleanly into Windows on any system, writing the full diagnostic dump to `RUN000x.TXT` on the USB drive.
+  - Unlock firmware asset loading and verification are now strictly deferred until `[U]` or `[P]` is explicitly chosen by the operator.
+  - Updated build scripts `src/Build-Experimental-MSVC.ps1` and `src/Build-Dxe-Driver.ps1` to automatically deploy and Authenticode-sign output binaries to `bin/`.
+
+---
+
+## [v1.8.0] - 2026-11-09
+### Major Multi-Gen Platform Compatibility & Architecture Hardening
+- **Ampere GA102 FWSEC / WPR2 Attestation Hotfix (Resolves #12):**
+  - Resolved premature halt attestation on GA102 (reported by @Tank-99 on RTX 3080 Ti). GSP FWSEC executes strictly as Falcon microcode, but `poll_falcon_engine_halt` prematurely checked the inactive GSP RISC-V status register (`0x111388`), triggering a 0-µs false-halt and reading WPR2 at raw power-on reset defaults (`wpr_hi=0`, `error=-5`). Isolated GSP polling strictly to the active Falcon execution register (`base + 0x100`) and introduced an initial hardware latch delay (`usleep_range(100, 200)`).
+- **Headless & Hybrid-Graphics Compute Card Support (Resolves #14):**
+  - Resolved `MSI-preflight status=0x8000000000000006` (`EFI_NOT_FOUND`) reported by @Lizardon1024 on RTX 4090 with Ryzen 7 7800X3D when all monitors are connected to the integrated graphics (iGPU) and the dGPU is used strictly for headless compute / AI tasks.
+  - In headless setups, `Gops()` recognises that the primary display console is hosted on the secondary/iGPU GOP and bypasses unnecessary console detachment, seamlessly proceeding to Stage 3 PCI device release.
+- **TRX40 / Threadripper & Workstation NVRAM Driver Hook (`ReadyToBoot`) (Addresses #13):**
+  - Resolved early boot freeze / blank screen on AMD TRX40 (Threadripper 3960X on Gigabyte TRX40 AORUS MASTER reported by @williarob) when running `AdaUnlockDxe.efi` via NVRAM `Driver####`.
+  - AMD AGESA initializes multi-die PCIe root complexes and NVIDIA GOP bindings in late BDS (`PlatformBdsConnectConsole()`). Executing direct hardware transactions during early BDS triggers PCIe FLR / AER lockups before console output is attached.
+  - Redesigned `AdaUnlockDriverEntryPoint()` to register an asynchronous event callback `AdaUnlockOnReadyToBoot` on `EFI_EVENT_GROUP_READY_TO_BOOT` via `CreateEventEx()` (with fallback to `EVT_SIGNAL_READY_TO_BOOT`). The DXE driver returns `EFI_SUCCESS` immediately to the dispatcher during early BDS, allowing BIOS setup and early POST to complete normally without touching the hardware.
+  - Right before the UEFI boot manager transfers execution to `bootmgfw.efi`, the `ReadyToBoot` event triggers the unlock transaction against fully stabilized PCIe links and GOP drivers, persisting across S3 and handing execution cleanly to Windows.
+- **Turing SM75 Architecture Clarification & Safety Guard (Resolves #15):**
+  - Clarified Turing (TU102 / SM75) architecture status in documentation. Reaffirmed fail-closed safety policy (`src/profile.c::Gu.is_turing = FALSE`) to prevent unverified firmware execution until physical testbench validation is completed.
+- **Expanded Hardware ID Matrix & Detection:**
+  - Added new Ampere and Ada Lovelace Device IDs (RTX 3060 Ti GA104 `0x2486`, RTX 3050 GA106 `0x2582`, RTX 4070 / 4060 variants `0x2782`, `0x2783`, `0x2786`, `0x2860`, `0x2882`).
+  - Added multi-GPU topology inspection to Universal Control Center.
+- **Pre-compiled & Authenticode-Signed Binaries:**
+  - Freshly compiled MSVC binaries (`bin/BOOTX64.EFI` and `bin/AdaUnlockDxe.efi`) signed with `Custom UEFI SecureBoot Key`.
+
+### Refactoring & Code Quality
+- **Unified Unlock & S3 Registration Flow:** Extracted identical unlock transaction sequences (`GuExecuteUnlock`) and S3 boot-script state registration (`GuRegisterS3`) across `src/app.c` and `src/dxe_main.c` into `src/unlock_release.c`.
+- **Architectural Asset Tables:** Consolidated 6 parallel firmware asset arrays in `src/boot_io.c` (`GuBootLoadAssets`) and pinned arrays in `src/profile.c` into a unified `GU_ARCH_ASSETS` table.
+- **Unified Device ID X-Macros:** Merged duplicate GPU PCI Device ID definitions across `src/port.h` and `src/vendor/prep_610.h` into a single X-Macro header (`src/gpu_device_ids.h`).
+- **Bounded File I/O Helper:** Merged `ReadFile` and `ReadWindowsBinary` in `src/boot_io.c` into a single size-bounded helper `ReadFileData()`.
+- **Boot Menu & Reboot Consolidation:** Deduplicated menu text and headers in `src/boot_io.c` (`GuBootChoose`) and unified NVRAM install/remove reboot sequences (`GuRebootSystem`) in `src/app.c`.
+- **Centralized Version Header:** Introduced `src/version.h` (`v1.7.9`) as the single source of truth, consumed directly by C EFI applications and dynamically read by `Setup-AdaUnlock.ps1` and `tools/Universal-Control-Center.ps1`.
+- **Modular USB Deployment Engine:** Extracted redundant USB drive preparation and asset copying logic into a shared module `tools/Deploy-UsbCommon.ps1`.
+- **Single Source for GPU Benchmark:** Deduplicated embedded Python code from `Check-GPU-Unlock.bat` to reference `tools/quick_check.py` with expanded support for 19 card profiles across Ada, Ampere, and Turing.
+- **Unified Toolchain Locator:** Replaced duplicate `vswhere.exe` / `vcvars64.bat` detection across `src/Build-*.ps1` with shared helper `src/Find-VcVars.ps1`.
+- **Dead Code Elimination:**
+  - Removed unused static variables `WindowsPartition`, `WindowsName`, and `GuLogText` in `src/boot_io.c`, eliminating legacy dependencies on `boot_profile.h` and `local/boot_profile.h`.
+  - Removed obsolete hardcoded constants `GU_BOARD_ID`, `GU_BOARD_SUBSYSTEM`, `GU_BAR0_BASE`, `GU_PCI_BUS` in `src/port.h`.
+  - Removed discarded `GetVariable(SecureBoot)` call in `src/app.c`.
+  - Removed deprecated `GuDiscoverSingleGpu` in `src/gpu_discovery.c` and updated unit tests to validate `GuDiscoverAllGpus` and `GuBindDevice`.
+  - Removed unused `Disable-FastStartup` function in `tools/Universal-Control-Center.ps1`.
+  - Removed obsolete `$NonInteractive` parameter and `.vbs` copying in `Setup-AdaUnlock.ps1`.
+- **Modular Control Center Architecture:** Decoupled `tools/Universal-Control-Center.ps1` by moving ~765 lines of XAML to `tools/Universal-Control-Center.xaml` and partitioning engine logic into `Universal-Control-Center-Detection.ps1`, `Universal-Control-Center-Deployment.ps1`, and `Universal-Control-Center-Diagnostics.ps1`.
+- **Sanitized Naming & Comments:** Renamed legacy board/chip-specific identifiers (`GuAd104*` -> `Gu*`, `GuMsi*` -> `GuUnlock*`, `msi_release.c/.h` -> `unlock_release.c/.h`), removed references to non-existent `CHANGES.md`, and added transparent backward-compatibility shims for vendor code.
+- **Code Style:** Formatted dense multiline statements in `src/boot_io.c`, `src/port.c`, `src/app.c`, and `src/compat.c` using `clang-format` (with `src/vendor/` strictly preserved).
+
+---
+
+## [v1.7.9] - 2026-11-08
+### Fixed
+- **Resolved `final-Windows-verification` Status `0x8000000000000006` Halt on Ampere GA106 (Resolves [#11](https://github.com/BrightRaider/universal-gpu-unlock/issues/11)):** Fixed `ChipMatchesTarget` in `src/msi_release.c` to mask the architecture nibble `((chip >> 24) & 0x0fU) == 0x07`, cleanly matching Ampere GA106 and LHR cards reporting `PMC=0xb76000a1` (as well as GA102 `0x17xxxxxx`, Turing `0x16xxxxxx`, and Ada `0x19xxxxxx`). Isolated Ada-exclusive SM speed select readout and open PLM assertions so that Ampere and Turing cards proceed directly to `GuBootWindows()`. Verified on physical hardware (Palit RTX 3060 12GB on MSI Z390) by @Fr4Ckt3r, confirming full unrestricted 46.08 TFLOPS tensor compute throughput and seamless boot to Windows.
+- **DXE failure path:** After the GPU was touched, the driver now shuts the PC down instead of continuing the boot with possibly live DMA.
+- **Turing:** Refused before any change, since no TU102 assets ship. The asset hash bypass is gone.
+- **Boot screen:** Errors stay visible after the unlock started, and status lines no longer report steps as OK before they ran.
+- **Windows selection:** `bootmgfw.efi` beats a generic `bootx64.efi`. Several Windows volumes are resolved through `BootOrder`.
+- **NVRAM entries:** `[I]` and `[R]` use a free `Driver####` slot, never touch entries of other drivers, and keep `DriverOrder` intact on read errors.
+- **`[I]` install:** Fails if `\EFI\Drivers\AdaUnlockDxe.efi` is missing, and the Control Center now copies the driver there. Documentation now states that the USB drive stays connected.
+- **Multi-GPU:** Logs and README accurately reflect single primary GPU rate-limiter transaction with multi-GPU inventory.
+- **GOP selection:** Only a GOP on the target GPU is detached, so an iGPU console stays untouched.
+- **VBIOS check:** Renamed to reflect that it is a plausibility check (`GuAd104PromPlausible`, `Gu.prom_checked`), and it now refuses a non-NVIDIA PCIR vendor. A differing PCIR device ID is only logged.
+- **Pre-compiled & Authenticode-Signed Binaries:** Freshly compiled MSVC binaries (`bin/BOOTX64.EFI` and `bin/AdaUnlockDxe.efi`) signed with `Custom UEFI SecureBoot Key`.
+
+---
+
+## [v1.7.8] - 2026-11-08
+### Hotfix: Dual Falcon/RISC-V Engine Halt Attestation on Ampere & Turing (Resolves #11)
+- **Eliminated SEC2 RISC-V Timeout on Ampere (`0x8000000000000007` Halt):** Resolved a critical coprocessor attestation timeout reported by @Fr4Ckt3r on Ampere GA106 (Palit RTX 3060 12GB). On NVIDIA Ampere silicon (GA10x), the SEC2 secure coprocessor utilizes a RISC-V engine whose HALT status bit resides in `SEC2_FALCON2 + 0x388` (`NV_PRISCV_RISCV_CPUCTL`), whereas previous versions strictly polled the legacy Falcon register at `SEC2_BASE + 0x100`. While the booter payload executed and succeeded (`debuginfo=0xda550000`, `riscv=0x10`), the legacy register remained zero, causing an unnecessary 20-second timeout.
+- **Dual-Engine Halt Poller (`poll_falcon_engine_halt`):** Seamlessly polls both legacy Falcon CPUCTL and RISC-V CPUCTL registers across Ada, Ampere, and Turing architectures, confirming execution completion within microseconds.
+- **Pre-compiled & Authenticode-Signed Binaries:** Freshly compiled MSVC binaries (`bin/BOOTX64.EFI` and `bin/AdaUnlockDxe.efi`) signed with `Custom UEFI SecureBoot Key`.
+
+---
+
+## [v1.7.7] - 2026-11-08
+### Hotfix: Pre-Flight Attestation State Retention & GUI Fix (Resolves #11)
+- **Eliminated `MSI-preflight` Status `0x8000000000000002` Halt:** Resolved a regression introduced in v1.7.6 where redundant device re-binding (`GuBindDevice`) in the execution loop zeroed the platform structure, inadvertently clearing `Gu.profile_verified` and `Gu.prom_verified`. This triggered an immediate `EFI_INVALID_PARAMETER` refusal in `GuMsiPreflight()` and returned to the firmware boot menu without executing the unlock transaction.
+- **Control Center Desktop GUI Fix (`Universal-Control-Center.cmd`):** Resolved silent startup crash on Windows PowerShell 5.1 by adding a verified single UTF-8 BOM (`0xEF 0xBB 0xBF`) to `tools/Universal-Control-Center.ps1` and sanitizing typographic characters to pure ASCII (0 AST parse errors). Modernized `Universal-Control-Center.cmd` to directly invoke PowerShell with `-STA` without legacy `wscript.exe` / `.vbs` dependencies, providing native dual-mode UAC elevation with seamless Standard User fallback.
+- **Seamless Single & Multi-GPU Topology Support:** All system GPUs are discovered and inventoried for telemetry, while the hardware rate-limiter clear and GOP handoff are cleanly applied to the primary display GPU with full attestation state preserved.
+- **Pre-compiled & Authenticode-Signed Binaries:** Freshly compiled MSVC binaries (`bin/BOOTX64.EFI` and `bin/AdaUnlockDxe.efi`) signed with `Custom UEFI SecureBoot Key`.
+
+---
+
+## [v1.7.6] - 2026-11-08
+### Multi-GPU Sequential Dispatch, Hardware Expansion & Setup Refinements
+- **Universal Multi-GPU Support:** `src/app.c` and `src/dxe_main.c` now discover and sequentially unlock all compatible NVIDIA GPUs in the system (up to 8 cards) rather than refusing actuation on multi-card systems.
+- **Expanded Hardware Detection & Benchmarks (RTX 3070 & RTX 3060):** Added `DEV_2504` (RTX 3060, GA106) and `DEV_2482` (RTX 3070, GA104) to `Setup-AdaUnlock.ps1` WMI/PNP detection filters (special nod to @xpertadvisor for auditing the setup regex so fiercely in upstream Issue #325 that he caught my missing filter string before realizing NVIDIA's Ampere GSP microcode is already unified 😉), and integrated calibrated TFLOPS target profiles into `Check-GPU-Unlock.bat`.
+- **Configurable S3 Bootloader Menu:** Introduced dynamic detection of `EFI\BOOT\hide_s3.cfg`. If present, the bootloader presents a clean 4-option menu `[U/I/R/S]`. If absent (default), full 5-option menu `[U/P/I/R/S]` is presented. S3 boot-script registration (`EFI_S3_SAVE_STATE_PROTOCOL`) is fully preserved when `[P]` is selected.
+- **Enhanced 1-Click Provisioner (`Setup.bat` / `Setup-AdaUnlock.ps1`):** Updated with optional S3 boot menu customization, automatic staging of `AdaUnlockDxe.efi` to both `EFI\Drivers` and `EFI\BOOT` (for NVRAM install), and bundled verification tooling.
+- **Non-Blocking Verification Benchmark (`Check-GPU-Unlock.bat`):** Added `--no-pause` flag and isolated Python return-code capture (`set "BENCH_ERR=%ERRORLEVEL%"`), resolving headless/redirected console color errorlevel overrides.
+- **Optional Diagnostics & Telemetry GUI (`Universal-Control-Center.cmd`):** Added standalone Windows WPF GUI for optional deep-dive telemetry, SMI hardware monitoring, and differential pre-flight diagnostics (groundwork credited to `@ahsanumair`).
+- **Sanitized Pre-Flight Configuration:** Removed inaccurate warnings regarding Fast Startup and Secure Boot in setup tools and GUI. Both features are fully supported with zero forced system changes. Secure Boot users can simply enroll `AdaUnlock_SecureBoot.cer` into motherboard key management.
+
+---
+
+## [v1.7.5] - 2026-11-07
+### Universal Silicon Verification & Black-Screen Handoff Fix (Resolves #9)
+- **Eliminated Black Screen on Non-4090 GPUs:** Resolved the post-unlock halt reported on RTX 4080 (AD103), RTX 30 Series (GA102), and RTX 20 Series (TU102).
+- **Universal Chip ID Validation:** In `GuMsiReadyForWindows()`, replaced legacy `chip == 0x192000a1` (AD102-only) with dynamic architecture validation across all Ada Lovelace (`0x19xxxxxx`), Ampere (`0x18xxxxxx`), and Turing (`0x16xxxxxx`) processors.
+- **Pre-Handoff Diagnostic Visibility:** Re-ordered final verification before USB log closure so that all post-FLR states remain fully logged.
+- **Pre-compiled & Authenticode-Signed Binaries:** MSVC binaries (`bin/BOOTX64.EFI` and `bin/AdaUnlockDxe.efi`) recompiled and signed with `Custom UEFI SecureBoot Key`.
+
+---
+
+## [v1.7.4] - 2026-11-07
+### Format Engine Wide-String Support & Bootloader Staging Fix (Resolves #8)
+- **Native Wide-String `%ls` Formatting:** Added full `%ls` wide-string / UTF-16 character decoding support to `src/format.c`. Previously, `%ls` format strings from storage volume diagnostics caused `GuFormatV` to return an unsupported length error, erroneously tripping the internal `Gu.fault` abort flag.
+- **Fault-Isolated Logging:** Decoupled `GuLog` from the critical GPU hardware fault register (`Gu.fault`). Diagnostic string formatting and USB write flushes can no longer interrupt the UEFI boot sequence.
+- **Chainloader Device Handle Guarantee:** Explicitly populates `LoadedImage->DeviceHandle = volume` when staging Windows Boot Manager from memory buffers, preventing firmware-specific `EFI_UNSUPPORTED` drops on select motherboard UEFI implementations.
+- **Pre-compiled & Authenticode-Signed Binaries:** Freshly compiled MSVC binaries (`bin/BOOTX64.EFI` and `bin/AdaUnlockDxe.efi`) signed with `Custom UEFI SecureBoot Key`.
+
+---
+
+## [v1.7.3] - 2026-11-06
+### Dynamic Multi-Drive Windows ESP Discovery (Resolves #8)
+- **Multi-Drive Auto-Targeting:** The bootloader no longer halts when multiple drives contain an EFI System Partition (`matches > 1`). Instead, it automatically targets and boots the primary Windows OS medium (`\EFI\Microsoft\Boot\bootmgfw.efi`), eliminating the need to disconnect secondary drives or repartition disks.
+- **Broadened Device Path Parser:** Relaxed rigid media geometry constraints in `Inspect()` to natively support complex storage configurations, PCIe switches, NVMe namespace controllers, and MBR/GPT hybrid schemes.
+- **Multi-Path Fallback:** Added dual-mode path resolution supporting relative and root-qualified bootloader paths (`\EFI\Microsoft\Boot\bootmgfw.efi`, `EFI\Microsoft\Boot\bootmgfw.efi`, and `\EFI\Boot\bootx64.efi`).
+- **Logging Engine:** Added full `%p` pointer formatting support to `src/format.c`, eliminating false `Gu.fault` triggers during diagnostic logging.
+
+---
+
+## [v1.7.2] - 2026-11-06
+### Pre-Boot Progress Monitor & S3 Sleep Protection Tool
+- **Real-Time 4-Stage Pre-Boot Monitor:** Replaced the silent pre-boot console with a clean 4-stage progress dashboard in UEFI displaying discovery, microcode, GOP handover, and hardware unlock status before handing control to Windows.
+- **S3 Protection Helper:** Added `Toggle-Sleep-Button.bat` to the root directory—a non-invasive 1-click tool to hide or restore the "Sleep" button from the Windows Start menu to prevent accidental volatile RAM state resets.
+- **Telemetry Refinement:** Authenticode-signed fresh binaries in `bin/` (`BOOTX64.EFI` and `AdaUnlockDxe.efi`).
+
+---
+
+## [v1.7.1] - 2026-11-06
+### Multi-dGPU Secondary Slot SEC2 Timeout Scaling (Resolves #6)
+- **SEC2 Booter Timeout Scaling:** Scaled SEC2 booter halt deadline from 5.0s to 20.0s (`GU_BOOT_TIMEOUT_US = 20000000u`), resolving `error=-110` (`ETIMEDOUT`) halts on complex multi-dGPU platforms (e.g. Intel Arc primary + NVIDIA RTX secondary on AM5 X670E).
+- **Device-ID Expansion:**
+  - GA104: RTX 3070 Ti (`0x2482`), RTX 3070 (`0x2484`), RTX 3060 Ti (`0x2487`, `0x2488`, `0x2489`).
+  - GA106: RTX 3060 12GB (`0x2503`, `0x2504`, `0x2507`, `0x2508`, `0x2520`, `0x2560`).
+  - AD103: RTX 4080 SUPER revision (`0x2702`).
+
+---
+
+## [v1.7.0] - 2026-11-05
+### Turing (SM75) Architecture Support
+- **Full TU102 / TU104 / TU106 Support:** Added native architectural payload validation, FWSEC geometry extraction, and pre-boot rate-limiter bypass for RTX 2080 Ti, TITAN RTX, RTX 2080 SUPER, RTX 2070 SUPER, RTX 2060 SUPER, and CMP 50HX.
+- **Universal Multi-Gen Staging:** Unified Ada Lovelace, Ampere, and Turing execution paths into a single dynamic pre-boot dispatcher.
+
+---
+
+## [v1.6.3] - 2026-11-04
+### Automated Multi-Arch Payload Dispatch
+- **Dynamic Microcode Selection:** Automated asset staging selecting between `AD102-ASSETS` and `GA102-ASSETS` based on runtime PCI Device ID.
+- **Zero VBIOS Touch:** Strict enforcement of volatile RAM-only register overrides.
+
+---
+
+## [v1.6.2] - 2026-11-03
+### Dual-Architecture Calibration & Stability
+- Added Ampere SM86 matrix baseline benchmarks (`tools/benchmark_4090.py`).
+- Refined PCIe bus scanning logic for multi-GPU motherboards.
+
+---
+
+## [v1.6.1] - 2026-11-02
+### Authenticode Secure Boot Hardening
+- Integrated custom Authenticode certificate enrollment (`AdaUnlock_SecureBoot.cer`).
+- Supported seamless execution with Secure Boot enabled across major motherboard vendors.
+
+---
+
+## [v1.6] - 2026-11-01
+### Early DXE Driver Architecture & S3 State Persistence
+- Introduced `AdaUnlockDxe.efi` and `driver_nvram.c` for persistent boot script registration.
+- Added NVRAM `Driver0001` auto-boot infrastructure.
+
+---
+
+## [v1.5] - 2026-10-31
+### Internationalization & Production AI Benchmarks
+- Full English localization across all scripts (`Setup.bat`, `Setup-AdaUnlock.ps1`).
+- Added FLUX.1-dev and MiniMax-H3 Video DiT production benchmark suites.
+
+---
+
+## [v1.4] - 2026-10-30
+### Device-ID Initialization Fix
+- Resolved regression where `Gu.device_id` was cleared during early port init, fixing `stage=shared-assets status=-19`.
+
+---
+
+## [v1.3] - 2026-10-29
+### Multi-Display & GOP Isolation
+- Replaced single-child constraints with dynamic multi-output enumeration (supporting up to 8 displays).
+- Relaxed root bridge protocol assertions across ASUS ROG, Gigabyte Aorus, and ASRock motherboards.
