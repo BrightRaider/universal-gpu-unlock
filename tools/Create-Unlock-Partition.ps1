@@ -216,7 +216,11 @@ if (-not $newPart -or -not $newPart.DriveLetter) {
     # If drive letter wasn't assigned, find partition and assign one
     $unassigned = Get-Partition -DiskNumber $diskNum -ErrorAction SilentlyContinue | Where-Object { -not $_.DriveLetter -and $_.Size -le ($shrinkBytes + 10485760) -and $_.Size -ge ($shrinkBytes - 10485760) } | Select-Object -First 1
     if ($unassigned) {
-        $newPart = $unassigned | Set-Partition -NewDriveLetter (Get-PartitionSupportedSize -DriveLetter C: | Out-Null; 'U') -ErrorAction SilentlyContinue
+        $usedLetters = (Get-Volume).DriveLetter | Where-Object { $_ }
+        $candidateLetter = ('U', 'V', 'W', 'X', 'Y', 'Z', 'G', 'H', 'I', 'J') | Where-Object { $_ -notin $usedLetters } | Select-Object -First 1
+        if (-not $candidateLetter) { $candidateLetter = 'U' }
+        $unassigned | Set-Partition -NewDriveLetter $candidateLetter -ErrorAction SilentlyContinue
+        $newPart = Get-Partition -DiskNumber $diskNum -PartitionNumber $unassigned.PartitionNumber -ErrorAction SilentlyContinue
     }
 }
 

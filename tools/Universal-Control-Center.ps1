@@ -525,7 +525,9 @@ function Update-UsbTabInfo {
         $espPart = Get-SystemWindowsEspPartition
         $espMb = if ($espPart -and $espPart.Size) { [math]::Round($espPart.Size / 1MB) } else { 0 }
         if ($txtUsbEspInfo) {
-            $txtUsbEspInfo.Text = "System Windows ESP: $(if ($espGuid) { "{$espGuid}" } else { "Not Detected" })$(if ($espMb -gt 0) { " (${espMb} MB)" } else { "" })"
+            $guidStr = if ($espGuid) { "{$espGuid}" } else { "Not Detected" }
+            $sizeStr = if ($espMb -gt 0) { " ($espMb MB)" } else { "" }
+            $txtUsbEspInfo.Text = "System Windows ESP: $guidStr$sizeStr"
         }
         if ($txtUsbEspNotice) {
             if ($espMb -gt 0 -and $espMb -lt 250) {
