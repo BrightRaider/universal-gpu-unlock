@@ -12,7 +12,7 @@ For packaged binaries and downloads, visit [GitHub Releases](https://github.com/
 - **Improved `[I]` Mode On-Screen Messaging:** Updated `RunInstall` in `src/app.c` to display a clear notice when ESP has insufficient space (~85MB for Ada/Ampere) and recommend S3 Sleep Persistence (`[P]`) or creating a 500MB FAT32 partition.
 
 ### Added
-- **Turing Standalone Edition (`Universal_GPU_Unlock_Turing_v1.8.29.zip`):** Dedicated lightweight package (~16MB compressed, ~28MB uncompressed) containing only Turing TU102/TU104/TU106 assets and signed EFI binaries, designed specifically to fit standard 100MB OEM EFI partitions.
+- **Architecture-Aware Selective Staging for Turing (refs #19):** Option `[I]` in the unified package automatically stages only the ~28MB Turing firmware assets (`TU102-ASSETS`) on Turing systems, enabling stickless DXE driver installation directly onto standard 100MB Windows EFI partitions without requiring partition resizing.
 - **ESP Space Preflight Check in Setup:** `Setup-AdaUnlock.ps1` automatically detects standard 100MB Windows EFI partitions, warns about option `[I]` space limitations, and highlights option `[P]` (S3 Sleep) as the recommended zero-space persistence path.
 
 ## [v1.8.29] - 2026-11-21

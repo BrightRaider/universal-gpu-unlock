@@ -70,13 +70,12 @@ If your motherboard blocks the USB drive with a signature verification warning:
 - **ASRock AM4 & CSM Resolution Verified:** Budget AM4 POST discovery and CSM legacy video conflict resolved on ASRock A520M-HVS at **106.05 TFLOPS** (+95.7% boost, unrestricted compute) on Gainward GeForce RTX 3080 Phoenix — refs [#17](https://github.com/BrightRaider/universal-gpu-unlock/issues/17).
 - **Ampere & Turing Verified:** GA106 (RTX 3060), GA102 (RTX 3080, RTX 3080 Ti, RTX 3090) as well as TU102 (RTX 2080 Ti) and TU106 (CMP 40HX) are confirmed. On Turing (RTX 20 Series), the pre-boot unlock transaction completes cleanly and full enterprise compute throughput (>85–105 TFLOPS) is activated with GSP firmware mode (`Toggle-Turing-GSP.bat`) — refs [#15](https://github.com/BrightRaider/universal-gpu-unlock/issues/15), refs [#18](https://github.com/BrightRaider/universal-gpu-unlock/issues/18).
 - **Stickless Internal NVMe-ESP Persistence (`[I]` Mode) & ESP Storage Notice:** Installs `AdaUnlockDxe.efi` and architecture firmware assets to your internal EFI System Partition (`\EFI\Drivers\`) and registers it in UEFI `DriverOrder`, so the USB stick is no longer needed.
-  * **ESP Space Requirements:** Ada (RTX 40) and Ampere (RTX 30) require **~85 MB free space** for NVIDIA's monolithic signed GSP-RM firmware (`gsp_ga10x.bin`). Turing (RTX 20 / CMP) requires **~28 MB**.
-  * **Standard 100 MB Windows ESP:** Windows OEM setups create a 100 MB ESP with only ~30–50 MB free. If space is insufficient, `[I]` automatically falls back to registering the USB drive.
-  * **Workarounds & Best Practices:**
+  * **ESP Space Requirements:** Ada (RTX 40) and Ampere (RTX 30) require **~85 MB free space** for NVIDIA's monolithic signed GSP-RM firmware (`gsp_ga10x.bin`). Turing (RTX 20 / CMP) requires only **~28 MB**.
+  * **Standard 100 MB Windows ESP:** Windows OEM setups create a 100 MB ESP with only ~30–50 MB free. On Turing cards, the unified installer automatically deploys only the compact Turing assets (~28 MB), fitting standard 100 MB partitions out of the box. On Ada/Ampere cards, if space is insufficient, `[I]` safely falls back to registering the USB drive.
+  * **Workarounds & Best Practices for Ada / Ampere:**
     1. **Option `[P]` (S3 Sleep Persistence - Recommended):** If you use Sleep / Standby (Suspend-to-RAM) instead of a cold shutdown, no ESP space is needed at all! Unlock once via USB `[P]`, and the GPU stays unlocked across sleep cycles.
     2. **Dedicated FAT32 Partition:** Create a small 500 MB FAT32 partition on any internal NVMe/SATA SSD (verified in [#19](https://github.com/BrightRaider/universal-gpu-unlock/issues/19)). UEFI mounts it automatically, allowing `[I]` to store assets cleanly.
     3. **Resize ESP:** Use a partition manager to increase the ESP from 100 MB to 500 MB.
-    4. **Turing Edition:** For RTX 20 / CMP 40HX cards, use the lightweight **Turing Standalone Edition** (`Universal_GPU_Unlock_Turing_v1.8.29.zip`, ~30 MB), which fits directly onto standard 100 MB partitions.
 
 <details>
 <summary><b>🔍 Community-Verified Hardware & Live Benchmarks (Click to expand)</b></summary>
