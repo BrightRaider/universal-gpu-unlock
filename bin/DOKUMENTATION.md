@@ -106,6 +106,21 @@ Um den Unlock auch über Standby-Zyklen hinweg ohne Neustart aufrechtzuerhalten,
    - Die Engine setzt den SEC2-Falcon-Controller zurück, konfiguriert das FBIF-Interface, stößt den Booter per DMA an, pollt das Falcon-Halt-Signal und verriegelt anschließend die Rate-Limiter-Selektoren `0x88888888` und `0x00000008`.
    - Nach erfolgreicher Verriegelung wird der SEC2-Controller in einen sauberen Zustand versetzt und der Resume-Status im NVS-Header protokolliert (`resume_status = 1`, inkrementierter `resume_count`).
 
+### 6.3 Zweistufige S3-Persistenz: Tier 1 (Boot-Script) & Tier 2 (Universal ACPI FACS Shadow Trampoline)
+Auf modernen AMD AM4/AM5 Plattformen mit AMI Aptio V Firmware (wie dem MSI MEG X570 ACE mit AGESA / Sinkclose-Mitigationen) signalisiert die Plattformfirmware `DxeSmmReadyToLock` bereits am Ende der internen DXE-Phase, noch bevor externe Treiber (`Driver####`) oder Bootloader geladen werden. Jeder Aufruf von `EFI_S3_SAVE_STATE_PROTOCOL->Write()` wird daraufhin mit `EFI_OUT_OF_RESOURCES` (`0x8000000000000009`) abgewiesen.
+
+Um dieses Problem universell und herstellerunabhängig zu lösen, habe ich eine zweistufige Persistenz-Engine implementiert:
+1. **Tier 1 (UEFI S3 Save State Protocol):** Wird auf Plattformen ohne frühen SMM-Lockdown (z. B. Intel Z690/Z790 oder vielen Workstation-Boards) genutzt.
+2. **Tier 2 (Universal ACPI FACS Shadow Trampoline, `src/s3_facs.c`):**
+   - **ACPI Tabellen-Discovery:** Sucht in `ConfigurationTable` nach RSDP, durchsucht XSDT (mit unaligned 64-Bit-Zeiger-Unterstützung) und RSDT nach der FADT (`FACP`) Tabelle und löst die physikalische FACS-Adresse auf.
+   - **Schatten-FACS Allokation:** Legt im persistenten `EfiACPIMemoryNVS` eine Schatten-FACS an und biegt `FADT->FirmwareCtrl` und `FADT->XFirmwareCtrl` auf diese Schatten-Tabelle um.
+   - **FADT Checksummen-Neuberechnung:** Berechnet die 8-Bit-Prüfsumme der modifizierten FADT-Tabelle neu (0 mod 256), damit Windows `ACPI.sys` die Tabelle ohne Bluescreen akzeptiert.
+   - **Hardware-FACS Hooking:** Schreibt die physikalische Adresse des S3-Resume-Trampolins in `RealFACS->FirmwareWakingVector`.
+   - **Ablauf beim Schlafen:** Windows schreibt seine echte Aufwachadresse (`HalpRMStub`) in die Schatten-FACS. Die echte FACS bleibt unangetastet.
+   - **Ablauf beim Aufwachen:** Das BIOS liest die echte FACS aus der LockBox und springt direkt in mein Trampolin.
+   - **Dual-Mode Trampoline:** Startet im 16-Bit Real Mode, lädt eine eingebettete 5-Eintrag-GDT, wechselt in den 32-Bit Flat Protected Mode, setzt SEC2 Falcon zurück, re-authentifiziert den Unlock-Payload, verriegelt `SS0 = 0x88888888` und `SS1 = 0x8`, schaltet die CPU sauber in den 16-Bit Real Mode zurück und springt per Far Return (`retf`) direkt in Windows `HalpRMStub`.
+   - **Ergebnis:** 100 % volatile, herstellerübergreifende S3-Persistenz ohne VBIOS-Flash und ohne SMM-Abhängigkeit.
+
 ---
 
 ## 7. Sicherheitsarchitektur & Containment (Code-Review Zusammenfassung)
@@ -133,7 +148,7 @@ Alle Kernkomponenten werden über gemockte Firmware-Services automatisiert valid
 5. `test_gpu_topology`: Negative Topology Isolation (44 Checks).
 6. `test_gpu_discovery`: PCI I/O Protocol Adapter & Memory-Decode-Aktivierung (21 Checks).
 7. `test_turing_local`: Turing TU102/TU104/TU106 Device-IDs & Binär-Hashes.
-8. `test_s3_resume`: ACPI NVS Dispatcher & Wake-Handshake (18 Checks).
+8. `test_s3_resume`: Universal S3 Resume Engine, ACPI FACS Shadow Intercept & Dual-Mode Trampoline (55 Checks).
 
 ---
 

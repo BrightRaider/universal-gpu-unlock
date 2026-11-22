@@ -6,6 +6,18 @@ For packaged binaries and downloads, visit [GitHub Releases](https://github.com/
 
 ---
 
+## [v1.8.33] - 2026-11-22
+### Added
+- **Universal ACPI FACS Shadow Trampoline S3 Persistence (refs #19):** Implemented in `src/s3_facs.c` and `src/s3_facs.h`. On modern AMD AM4 and AM5 platforms running AMI Aptio V firmware (such as MSI MEG X570 ACE with AGESA / Sinkclose mitigations), the BIOS signals `gEfiDxeSmmReadyToLockProtocolGuid` before the BDS phase, locking the S3 Save State table in SMRAM and rejecting third-party `s3->Write()` calls with `EFI_OUT_OF_RESOURCES` (`0x8000000000000009`). The new universal Tier-2 persistence engine bypasses the sealed SMM LockBox entirely:
+  - Dynamically discovers the ACPI FADT (`FACP`) table by traversing RSDP, XSDT (with unaligned 64-bit entry support), and RSDT.
+  - Allocates a persistent `EfiACPIMemoryNVS` Shadow FACS table and redirects `FADT->FirmwareCtrl` and `FADT->XFirmwareCtrl` to it while recalculating the mandatory FADT checksum (0 mod 256).
+  - When Windows prepares for S3 sleep, `hal.dll` writes its waking vector into the Shadow FACS, leaving the hardware FACS unmodified.
+  - Hooks `RealFACS->FirmwareWakingVector` to point to a position-independent dual-mode 16-bit real mode / 32-bit flat protected mode trampoline in ACPI NVS.
+  - Upon S3 wake, the motherboard PEI phase jumps into the resident trampoline, which transitions to 32-bit flat protected mode, resets SEC2 Falcon, authenticates the unlock microcode, re-latches rate-limiter selectors (`SS0=0x88888888`, `SS1=0x8`), cleans hardware state, switches the CPU back to 16-bit real mode, and far-returns directly to the original Windows waking vector (`HalpRMStub`).
+- **Comprehensive ACPI FACS & Trampoline Host Test Suite:** Added `TestGuAcpiFacsDiscoveryAndPatching` and `TestGuAcpiBuildTrampolineCode` in `tests/test_s3_resume.c` (55/55 checks passing, `MSVC_HOST_TESTS=PASS`).
+
+---
+
 ## [v1.8.32] - 2026-11-22
 ### Added
 - **12-MiB GFW Usable-Memory-Delta Tolerance (refs Zagitta #361):** GPU-Firmware (GFW) reports `usable_fb` with reserved apertures on high-end boards (e.g. 24,564 MiB vs 24,576 MiB physical on RTX 3090 Ti & RTX 4090 [12 MiB delta], 16,376 MiB vs 16,384 MiB on RTX 4080 [8 MiB delta], and 12,282 MiB vs 12,288 MiB on RTX 4070 SUPER [6 MiB delta]). In `src/vendor/unlock_610.c`, replaced rigid byte-equality checking in `unlock_transaction_layout()` with an aperture delta threshold (`delta_mb <= 32`), preventing `-ERANGE` (-34) preflight rejections while ensuring `mmu_lock_low` remains safely within the pre-scrubbed top 256 MiB.

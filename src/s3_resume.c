@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: GPL-2.0-only */
 #include "s3_resume.h"
+#include "s3_facs.h"
 #include "port.h"
 #include "profile.h"
 #include "compat/compat.h"
@@ -93,22 +94,7 @@ EFI_STATUS GuS3PrepareAndRegister(EFI_SYSTEM_TABLE *t) {
   if (!t || !t->BootServices) return EFI_INVALID_PARAMETER;
   if (!Gu.bar_base) return EFI_NOT_READY;
 
-  static EFI_GUID S3SaveStateGuid = EFI_S3_SAVE_STATE_PROTOCOL_GUID;
-  static EFI_GUID BootScriptSaveGuid = EFI_BOOT_SCRIPT_SAVE_PROTOCOL_GUID;
-  EFI_S3_SAVE_STATE_PROTOCOL *s3 = NULL;
-  EFI_STATUS s3_status = t->BootServices->LocateProtocol(&S3SaveStateGuid, NULL, (VOID **)&s3);
-  if (EFI_ERROR(s3_status) || !s3 || !s3->Write) {
-    s3_status = t->BootServices->LocateProtocol(&BootScriptSaveGuid, NULL, (VOID **)&s3);
-  }
-  if (EFI_ERROR(s3_status) || !s3 || !s3->Write) {
-    GuLog("GuS3PrepareAndRegister: S3 Save State protocol unavailable (%#llx)\n", (unsigned long long)s3_status);
-    GuLog("GuS3PrepareAndRegister: Note: Motherboard BIOS may have ACPI S3 disabled or set to S0ix Modern Standby.\n");
-    Gu.s3_registered = FALSE;
-    Gu.s3_status = s3_status;
-    return s3_status;
-  }
-
-  /* Allocate 64 pages (256 KB) of EfiACPIMemoryNVS.
+  /* 1. Allocate 64 pages (256 KB) of EfiACPIMemoryNVS.
    * ACPI NVS is preserved in DRAM across S3 sleep and is NEVER touched or overwritten by Windows. */
   EFI_PHYSICAL_ADDRESS nvs_phys = 0;
   EFI_STATUS alloc_status = t->BootServices->AllocatePages(
@@ -165,37 +151,59 @@ EFI_STATUS GuS3PrepareAndRegister(EFI_SYSTEM_TABLE *t) {
    * reclamation even if EfiBootServicesCode / EfiLoaderCode is overwritten by the OS. */
   memcpy(nvs_base + 0x00800, (const void *)(uintptr_t)GuS3ResumeDispatch, 0x800);
 
-  /* 1. Register S3 Boot Script Dispatch 2 OpCode (or Dispatch OpCode fallback):
-   * Calls the NVS-resident dispatch handler with Context = nvs_phys upon motherboard S3 resume. */
-  EFI_PHYSICAL_ADDRESS dispatch_entry = nvs_phys + 0x00800;
-  EFI_STATUS s_dispatch = s3->Write(
-      s3,
-      EFI_BOOT_SCRIPT_DISPATCH_2_OPCODE,
-      dispatch_entry,
-      nvs_phys
-  );
-  if (EFI_ERROR(s_dispatch)) {
-    s_dispatch = s3->Write(
-        s3,
-        EFI_BOOT_SCRIPT_DISPATCH_OPCODE,
-        dispatch_entry
-    );
+  /* 2. Tier 1: Try standard UEFI S3 Save State Protocol */
+  static EFI_GUID S3SaveStateGuid = EFI_S3_SAVE_STATE_PROTOCOL_GUID;
+  static EFI_GUID BootScriptSaveGuid = EFI_BOOT_SCRIPT_SAVE_PROTOCOL_GUID;
+  EFI_S3_SAVE_STATE_PROTOCOL *s3 = NULL;
+  EFI_STATUS s3_status = t->BootServices->LocateProtocol(&S3SaveStateGuid, NULL, (VOID **)&s3);
+  if (EFI_ERROR(s3_status) || !s3 || !s3->Write) {
+    s3_status = t->BootServices->LocateProtocol(&BootScriptSaveGuid, NULL, (VOID **)&s3);
   }
 
-  /* 2. Register direct MMIO write opcodes for SS0/SS1 */
-  UINT32 val_ss0 = ctx->val_ss0;
-  UINT32 val_ss1 = ctx->val_ss1;
-  UINT64 addr_ss0 = (UINT64)ctx->bar_base + 0x0082381cULL;
-  UINT64 addr_ss1 = (UINT64)ctx->bar_base + 0x00823820ULL;
-  EFI_STATUS s_mmio0 = s3->Write(s3, EFI_BOOT_SCRIPT_MEM_WRITE_OPCODE, EfiBootScriptWidthUint32, addr_ss0, (UINTN)1, &val_ss0);
-  EFI_STATUS s_mmio1 = s3->Write(s3, EFI_BOOT_SCRIPT_MEM_WRITE_OPCODE, EfiBootScriptWidthUint32, addr_ss1, (UINTN)1, &val_ss1);
+  BOOLEAN boot_script_ok = FALSE;
+  if (!EFI_ERROR(s3_status) && s3 && s3->Write) {
+    EFI_PHYSICAL_ADDRESS dispatch_entry = nvs_phys + 0x00800;
+    EFI_STATUS s_dispatch = s3->Write(s3, EFI_BOOT_SCRIPT_DISPATCH_2_OPCODE, dispatch_entry, nvs_phys);
+    if (EFI_ERROR(s_dispatch)) {
+      s_dispatch = s3->Write(s3, EFI_BOOT_SCRIPT_DISPATCH_OPCODE, dispatch_entry);
+    }
 
-  GuLog("S3 Persistence: Registered ACPI NVS Dispatch (NVS=%#llx Dispatch=%#llx MMIO=%#llx,%#llx)\n",
-        (unsigned long long)nvs_phys, (unsigned long long)s_dispatch,
-        (unsigned long long)s_mmio0, (unsigned long long)s_mmio1);
+    UINT32 val_ss0 = ctx->val_ss0;
+    UINT32 val_ss1 = ctx->val_ss1;
+    UINT64 addr_ss0 = (UINT64)ctx->bar_base + 0x0082381cULL;
+    UINT64 addr_ss1 = (UINT64)ctx->bar_base + 0x00823820ULL;
+    EFI_STATUS s_mmio0 = s3->Write(s3, EFI_BOOT_SCRIPT_MEM_WRITE_OPCODE, EfiBootScriptWidthUint32, addr_ss0, (UINTN)1, &val_ss0);
+    EFI_STATUS s_mmio1 = s3->Write(s3, EFI_BOOT_SCRIPT_MEM_WRITE_OPCODE, EfiBootScriptWidthUint32, addr_ss1, (UINTN)1, &val_ss1);
 
-  Gu.s3_registered = (!EFI_ERROR(s_dispatch) || (!EFI_ERROR(s_mmio0) && !EFI_ERROR(s_mmio1)));
-  Gu.s3_status = !EFI_ERROR(s_dispatch) ? s_dispatch : s_mmio0;
+    if (!EFI_ERROR(s_dispatch) || (!EFI_ERROR(s_mmio0) && !EFI_ERROR(s_mmio1))) {
+      boot_script_ok = TRUE;
+      GuLog("S3 Persistence: Registered via UEFI Boot Script Protocol (NVS=%#llx Dispatch=%#llx)\n",
+            (unsigned long long)nvs_phys, (unsigned long long)s_dispatch);
+      Gu.s3_registered = TRUE;
+      Gu.s3_status = EFI_SUCCESS;
+      return EFI_SUCCESS;
+    } else {
+      GuLog("S3 Persistence: UEFI Boot Script Write locked/rejected (%#llx). SMM LockBox active.\n",
+            (unsigned long long)s_dispatch);
+    }
+  }
 
-  return Gu.s3_registered ? EFI_SUCCESS : s_dispatch;
+  /* 3. Tier 2: Universal ACPI FACS Shadow Trampoline Intercept
+   * Engages when SMM LockBox is sealed before BDS (e.g. AMI Aptio V on AMD AM4/AM5).
+   * Rewrites FADT->FirmwareCtrl to Shadow FACS and hooks Real FACS->FirmwareWakingVector. */
+  GuLog("S3 Persistence: Engaging Universal ACPI FACS Shadow Trampoline Intercept...\n");
+  GU_ACPI_FACS_INFO facs_info;
+  EFI_STATUS facs_status = GuAcpiInstallShadowFacs(t, ctx, nvs_base, nvs_phys, &facs_info);
+  if (!EFI_ERROR(facs_status) && facs_info.found) {
+    GuLog("S3 Persistence: Universal ACPI FACS Trampoline armed successfully!\n");
+    Gu.s3_registered = TRUE;
+    Gu.s3_status = EFI_SUCCESS;
+    return EFI_SUCCESS;
+  }
+
+  GuLog("GuS3PrepareAndRegister: ACPI FACS Trampoline installation failed (%#llx)\n",
+        (unsigned long long)facs_status);
+  Gu.s3_registered = FALSE;
+  Gu.s3_status = facs_status;
+  return facs_status;
 }

@@ -14,6 +14,7 @@ try {
         'dxe_main.c',
         'driver_nvram.c',
         's3_resume.c',
+        's3_facs.c',
         'boot_io.c',
         'unlock_release.c',
         'port.c',
