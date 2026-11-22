@@ -14,6 +14,7 @@ For packaged binaries and downloads, visit [GitHub Releases](https://github.com/
 ### Added
 - **Architecture-Aware Selective Staging for Turing (refs #19):** Option `[I]` in the unified package automatically stages only the ~28MB Turing firmware assets (`TU102-ASSETS`) on Turing systems, enabling stickless DXE driver installation directly onto standard 100MB Windows EFI partitions without requiring partition resizing.
 - **ESP Space Preflight Check in Setup & Control Center:** `Setup-AdaUnlock.ps1` and Universal Control Center (Pre-Flight Safety Tab, USB Deployer Tab & Internal ESP Tab) automatically detect standard 100MB Windows EFI partitions, warn about option `[I]` space limitations, and highlight option `[P]` (S3 Sleep) as the recommended zero-space persistence path.
+- **1-Click 512MB FAT32 Partition Creator (`Create-Unlock-Partition.bat`):** Added automated helper script and Control Center button to safely shrink an internal SSD volume by 512MB and format a dedicated FAT32 ESP volume (`GPU_UNLOCK`), providing permanent stickless UEFI persistence for Ada/Ampere cards on systems with 100MB OEM ESPs without third-party software.
 
 ## [v1.8.29] - 2026-11-21
 ### Fixed

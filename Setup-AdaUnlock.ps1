@@ -50,7 +50,7 @@ try {
         if ($espMb -lt 250) {
             Write-Host "  [!] Notice: Windows EFI Partition is ${espMb} MB (standard 100MB ESP)." -ForegroundColor Yellow
             Write-Host "      Option [I] (Stickless DXE Driver) requires ~85MB free space for Ada/Ampere assets." -ForegroundColor DarkYellow
-            Write-Host "      Recommended: Use Option [P] (S3 Sleep Persistence - no ESP space needed) or create a 500MB FAT32 partition." -ForegroundColor DarkYellow
+            Write-Host "      Recommended: Use Option [P] (S3 Sleep - zero ESP space needed) or run Create-Unlock-Partition.bat." -ForegroundColor DarkYellow
         } else {
             Write-Host "  [OK] Windows EFI Partition: ${espMb} MB (sufficient space for stickless [I] driver)." -ForegroundColor Green
         }
@@ -259,7 +259,7 @@ Write-Host "6. PERSISTENCE OPTIONS (Never need USB reboot):" -ForegroundColor Ye
 Write-Host "   - OPTION [P] (Recommended): S3 Sleep Persistence! Unlock once via USB, then use Sleep/Standby." -ForegroundColor Cyan
 Write-Host "     When waking from sleep, your GPU stays 100% unlocked with zero USB reboots (bypasses ESP space limits)!" -ForegroundColor Gray
 Write-Host "   - OPTION [I] (Stickless EFI Driver): Deploys driver to internal NVMe-ESP. Requires ~85MB free space." -ForegroundColor Cyan
-Write-Host "     (If ESP is standard 100MB OEM, resize to 500MB or create a dedicated 500MB FAT32 partition)." -ForegroundColor Gray
+Write-Host "     (If ESP is standard 100MB OEM, run Create-Unlock-Partition.bat to create a 512MB partition automatically)." -ForegroundColor Gray
 Write-Host "   (Optional: Launch Universal-Control-Center.cmd if you wish to inspect detailed hardware telemetry)."
 Write-Host ""
 Write-Host "Press any key to exit..."

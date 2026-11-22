@@ -483,10 +483,12 @@
                             </StackPanel>
                         </Border>
 
-                        <StackPanel Orientation="Horizontal" Margin="0,0,0,14">
-                            <Button Name="BtnRunInternalConfigure" Content="Configure Internal Boot Config" Margin="0,0,10,0"/>
-                            <Button Name="BtnRestoreWindowsBcd" Content="Restore Windows Boot Priority" Background="#F38BA8" Foreground="#11111B"/>
-                        </StackPanel>
+                        <WrapPanel Margin="0,0,0,14">
+                            <Button Name="BtnCreateUnlockPartition" Content="&#x2714; Create 512 MB Unlock Partition (1-Click)" Background="#A6E3A1" Foreground="#11111B" FontWeight="Bold" Margin="0,0,10,6" Padding="14,8"/>
+                            <Button Name="BtnOpenDiskMgmt" Content="Open Disk Management (diskmgmt.msc)" Background="#313244" Foreground="#89B4FA" Margin="0,0,10,6" Padding="12,8"/>
+                            <Button Name="BtnRunInternalConfigure" Content="Configure Internal Boot Config" Margin="0,0,10,6" Padding="12,8"/>
+                            <Button Name="BtnRestoreWindowsBcd" Content="Restore Windows Boot Priority" Background="#F38BA8" Foreground="#11111B" Margin="0,0,10,6" Padding="12,8"/>
+                        </WrapPanel>
                     </StackPanel>
                 </ScrollViewer>
             </TabItem>

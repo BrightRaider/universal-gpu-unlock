@@ -74,7 +74,7 @@ If your motherboard blocks the USB drive with a signature verification warning:
   * **Standard 100 MB Windows ESP:** Windows OEM setups create a 100 MB ESP with only ~30–50 MB free. On Turing cards, the unified installer automatically deploys only the compact Turing assets (~28 MB), fitting standard 100 MB partitions out of the box. On Ada/Ampere cards, if space is insufficient, `[I]` safely falls back to registering the USB drive.
   * **Workarounds & Best Practices for Ada / Ampere:**
     1. **Option `[P]` (S3 Sleep Persistence - Recommended):** If you use Sleep / Standby (Suspend-to-RAM) instead of a cold shutdown, no ESP space is needed at all! Unlock once via USB `[P]`, and the GPU stays unlocked across sleep cycles.
-    2. **Dedicated FAT32 Partition:** Create a small 500 MB FAT32 partition on any internal NVMe/SATA SSD (verified in [#19](https://github.com/BrightRaider/universal-gpu-unlock/issues/19)). UEFI mounts it automatically, allowing `[I]` to store assets cleanly.
+    2. **Dedicated FAT32 Partition (1-Click Tool):** Run `Create-Unlock-Partition.bat` (or use the button in Universal Control Center) to safely shrink 512 MB from any internal SSD and format a dedicated FAT32 partition. UEFI mounts it automatically on boot, allowing `[I]` to store assets cleanly (verified in [#19](https://github.com/BrightRaider/universal-gpu-unlock/issues/19)).
     3. **Resize ESP:** Use a partition manager to increase the ESP from 100 MB to 500 MB.
 
 <details>

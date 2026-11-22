@@ -30,6 +30,7 @@ flowchart TD
     subgraph CLI["CLI / Setup Tools (PowerShell / Batch)"]
         SETUP_PS["Setup-AdaUnlock.ps1<br/>(Preflight & Drive Scanner)"]
         SETUP_BAT["Setup.bat / Update-USB.bat"]
+        PART_BAT["Create-Unlock-Partition.bat<br/>tools/Create-Unlock-Partition.ps1<br/>(512MB FAT32 Creator)"]
         TOOLS_WIN["Check-GPU-Unlock.bat<br/>Toggle-Turing-GSP.bat<br/>Toggle-Sleep-Button.bat"]
     end
 

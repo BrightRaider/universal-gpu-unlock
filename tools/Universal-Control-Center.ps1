@@ -262,6 +262,8 @@ $txtUsbOverlayTitle = $window.FindName('TxtUsbOverlayTitle')
 $txtUsbOverlayDetail = $window.FindName('TxtUsbOverlayDetail')
 
 # Tab 4
+$btnCreateUnlockPartition = $window.FindName('BtnCreateUnlockPartition')
+$btnOpenDiskMgmt = $window.FindName('BtnOpenDiskMgmt')
 $btnRunInternalConfigure = $window.FindName('BtnRunInternalConfigure')
 $btnRestoreWindowsBcd = $window.FindName('BtnRestoreWindowsBcd')
 
@@ -889,6 +891,21 @@ $btnDeployUsb.Add_Click({
             }
         }
     })
+
+if ($btnCreateUnlockPartition) {
+    $btnCreateUnlockPartition.Add_Click({
+        Write-GuiLog "Launching 1-Click 512 MB Dedicated Unlock Partition Creator..."
+        $script = Join-Path $Script:RepoRoot "tools\Create-Unlock-Partition.ps1"
+        Start-Process powershell -ArgumentList "-NoProfile -ExecutionPolicy Bypass -File `"$script`"" -Verb RunAs
+    })
+}
+
+if ($btnOpenDiskMgmt) {
+    $btnOpenDiskMgmt.Add_Click({
+        Write-GuiLog "Opening Windows Disk Management (diskmgmt.msc)..."
+        Start-Process diskmgmt.msc
+    })
+}
 
 $btnRunInternalConfigure.Add_Click({
         Write-GuiLog "Internal Headless Setup requires manual execution with exact GUID of dedicated ESP."
