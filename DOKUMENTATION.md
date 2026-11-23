@@ -1,7 +1,7 @@
 # Technische Dokumentation: Universal GPU Unlock (Multi-Gen)
 
 > **Tool:** Universal GPU Unlock  
-> **Version:** v1.8.35  
+> **Version:** v1.8.36  
 > **Architekturen:** NVIDIA Ada Lovelace (RTX 40), Ampere (RTX 30), Turing (RTX 20 / CMP)  
 > **Unterstützte Betriebssysteme:** Windows 10, Windows 11, WSL2 / Ubuntu CUDA Container  
 
@@ -336,11 +336,11 @@ In **v1.8.34** habe ich die Architektur umfassend überarbeitet und perfektionie
 6. **Erzwingung des 32-Bit Wake Vectors:**
    Bit 1 in den FACS-`Flags` (64-Bit Wake Supported) sowie `XFirmwareWakingVector` werden in beiden FACS-Tabellen genullt, sodass Windows ACPI garantiert den 32-Bit Real-Mode Waking Vector verwendet.
 
-### 13.4 Die v1.8.35 Lösung: Reines 16-Bit Real-Mode Passthrough & Low-Memory Shadow FACS (0x9E100)
+### 13.4 Die v1.8.36 Lösung: Reines 16-Bit Real-Mode Passthrough & Low-Memory Shadow FACS (0x9E100)
 1. **Ursachenanalyse des schwarzen Bildschirms in v1.8.34:**
    Forensische Tests ergaben, dass beim Aufwachen aus S3 die diskrete GPU auf Bus 45 (PCIe-Slot 1) noch gar nicht durch den Windows-PCI-Treiber (`pci.sys`) link-trainiert und deren Root-Port-Bridge noch nicht konfiguriert ist. Wenn das Trampolin im Protected Mode versucht, über `0xFB8403C0` auf GPU BAR0 zuzugreifen, friert die CPU in einem unkorrigierbaren PCIe-Bus-Stall (Master Abort / Machine Check) ein.
 2. **Reines 16-Bit Real-Mode Trampolin ohne MMIO:**
-   In v1.8.35 führt das Trampolin während der Firmware-Aufwachphase **keinerlei riskante GPU-MMIO-Zugriffe** mehr aus. Es verbleibt zu 100 % im 16-Bit Real Mode (kein GDT, kein CR0.PE-Umschalten, kein Risiko von Triple Faults).
+   In v1.8.36 führt das Trampolin während der Firmware-Aufwachphase **keinerlei riskante GPU-MMIO-Zugriffe** mehr aus. Es verbleibt zu 100 % im 16-Bit Real Mode (kein GDT, kein CR0.PE-Umschalten, kein Risiko von Triple Faults).
 3. **Co-Located Shadow FACS im Low Memory (`0x9E100`):**
    Die Shadow FACS (64 Bytes) wird direkt in derselben Low-Memory-NVS-Page bei `+0x100` (z. B. `0x0009E100`) platziert, 256-Byte-aligned. Das 16-Bit-Trampolin liest den Waking Vector direkt aus dem gleichen Segment (`DS:[0x010C]` bzw. `DS:[0x0118]`).
 4. **4-Stufen-Waking-Vector-Resolution mit sicherem Fallback:**

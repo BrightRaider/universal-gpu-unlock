@@ -6,6 +6,26 @@ For packaged binaries and downloads, visit [GitHub Releases](https://github.com/
 
 ---
 
+## [v1.8.36] - 2026-11-23
+### Added
+- **S3 Resume Pre-OS Hardware Telemetry & PCIe Root Bridge Active Arming (addresses #19):**
+  - **Non-Intrusive 16-Bit Real-Mode PCI Config Probe Loop:** Integrated a 32-byte non-blocking I/O loop using standard x86 PCI Configuration Mechanism #1 (`0x0CF8` / `0x0CFC`) directly into the S3 wake trampoline preamble. Probes and captures 8 critical PCIe registers at the earliest millisecond of S3 resume:
+    1. AMD Root Port `0:3:1` Device/Vendor ID (`0x80001900`)
+    2. AMD Root Port `0:3:1` Command/Status (`0x80001904`)
+    3. AMD Root Port `0:3:1` Primary/Secondary/Subordinate Bus Numbers (`0x80001918`)
+    4. AMD Root Port `0:3:1` Memory Base/Limit (`0x80001920`)
+    5. NVIDIA RTX 4090 `45:0:0` Device/Vendor ID (`0x802D0000`)
+    6. NVIDIA RTX 4090 `45:0:0` Command/Status (`0x802D0004`)
+    7. NVIDIA RTX 4090 `45:0:0` BAR0 Physical Address (`0x802D0010`)
+    8. NVIDIA RTX 4090 `45:0:0` Power Management Control/Status (`0x802D0064`)
+  - **Autonomous Root Bridge Secondary Bus Arming:** If AMD PCIe Root Port `0:3:1` is detected on S3 wake, the trampoline actively programs Secondary and Subordinate Bus numbers to `45` (`0x2D`) via `0x80001918` and asserts Memory Space Enable (`MSE`) and Bus Master Enable (`BME`) via `0x80001904`. It immediately re-probes the GPU DevID, Command, PMCSR, and BAR0, recording the post-arm state into telemetry buffer `+0x0090`.
+  - **Co-Located Shadow FACS at 512-Byte Alignment (`+0x0200`):** Relocated `ShadowFACS` to offset `+0x0200` in the low ACPI NVS page, ensuring 512-byte alignment per ACPI specification and providing a full 512-byte execution envelope for the real-mode trampoline without structural overlap.
+  - **Full S3 Prior Wake Forensic Telemetry in `RUN*.TXT`:** Boot-time initialization reads and logs all 12 raw and post-arm PCIe configuration registers into `RUN*.TXT`, providing instant diagnostic verification of hardware link training and bridge decoding across S3 sleep cycles.
+  - **Boot Menu Clarification:** Updated on-screen boot text to distinguish between `[P]` (S3 Standby Persistence Unlock via ACPI FACS Low-Trampoline) and `[U]` (Standard RAM-only Unlock without S3 hook).
+  - **Host Unit Tests Passing:** All 76 checks passing under MSVC test suite (`MSVC_HOST_TESTS=PASS`).
+
+---
+
 ## [v1.8.35] - 2026-11-23
 ### Fixed
 - **Pure 16-Bit Real-Mode S3 Resume Trampoline & Co-Located Low-Memory Shadow FACS (addresses #19):**

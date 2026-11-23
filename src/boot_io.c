@@ -712,15 +712,15 @@ EFI_STATUS GuBootChoose(CHAR16 *choice) {
   if (GuIsUnlocked()) {
     GuBootSay(
         L" [OK] GPU Silicon Status: ALREADY UNLOCKED (by DXE Driver in POST)\r\n"
-        L"      Pressing [P] or [U] will register S3 and boot Windows directly.\r\n"
+        L"      Select [P] for S3 Standby Persistence, or [U] for RAM-only boot.\r\n"
         L"=======================================================\r\n");
   }
   if (hide_s3) {
     GuBootSay(L"  [U] Full GPU Unlock (RAM-only)\r\n"
               L"  [I] Install DXE Driver to internal ESP and UEFI NVRAM (Auto-boot)\r\n");
   } else {
-    GuBootSay(L"  [U] Standard Unlock (RAM-only)\r\n"
-              L"  [P] Experimental S3 Persistence Unlock (Boot-Script)\r\n"
+    GuBootSay(L"  [U] Standard Unlock (RAM-only, no S3 hook)\r\n"
+              L"  [P] S3 Standby Persistence Unlock (ACPI FACS Low-Trampoline)\r\n"
               L"  [I] Install DXE Driver to internal ESP and UEFI NVRAM (Auto-boot / S3)\r\n");
   }
   GuBootSay(L"  [R] Remove DXE Driver from UEFI NVRAM\r\n"

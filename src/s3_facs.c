@@ -166,7 +166,7 @@ UINT32 GuAcpiBuildTrampolineCode(
 
   /*
    * Layout within Low Trampoline buffer (<1MB, 4096 bytes):
-   * +0x000: 16-bit Pure Real Mode S3 Resume Trampoline Machine Code
+   * +0x000: 16-bit Pure Real Mode S3 Resume Trampoline Machine Code (<350 bytes)
    * +0x030: Far Jump Target: [0x30] = Offset (16-bit), [0x32] = Segment (16-bit)
    * +0x034: Saved BIOS SP
    * +0x036: Saved BIOS SS
@@ -177,9 +177,23 @@ UINT32 GuAcpiBuildTrampolineCode(
    * +0x048: Telemetry Target Offset
    * +0x04A: Telemetry Target Segment
    * +0x04C: Telemetry Magic (0x53335F54 "S3_T")
-   * +0x100: Shadow FACS (64 bytes, 256-byte aligned per ACPI spec)
-   * +0x180: Real FACS Vector Mirror (32-bit at 0x180, 64-bit at 0x188)
+   * +0x050: PCI Probe Addresses Table (8 dwords = 32 bytes)
+   * +0x070: PCI Probe Raw Results (8 dwords = 32 bytes)
+   * +0x090: PCI Probe Post-Arm Results (4 dwords = 16 bytes)
+   * +0x200: Shadow FACS (64 bytes, 512-byte aligned per ACPI spec)
+   * +0x280: Real FACS Vector Mirror (32-bit at 0x280, 64-bit at 0x288)
    */
+
+  /* Pre-populate PCI probe addresses at +0x0050 (8 dwords = 32 bytes) */
+  UINT32 *probe_addrs = (UINT32 *)(Buffer + 0x0050);
+  probe_addrs[0] = 0x80001900U; /* Bridge 0:3:1 DevID (Expected 0x14831022) */
+  probe_addrs[1] = 0x80001904U; /* Bridge 0:3:1 Cmd/Stat */
+  probe_addrs[2] = 0x80001918U; /* Bridge 0:3:1 Bus Numbers (Pri, Sec, Sub) */
+  probe_addrs[3] = 0x80001920U; /* Bridge 0:3:1 Memory Base/Limit */
+  probe_addrs[4] = 0x802D0000U; /* GPU 45:0:0 DevID (Expected 0x268410de if up) */
+  probe_addrs[5] = 0x802D0004U; /* GPU 45:0:0 Cmd/Stat */
+  probe_addrs[6] = 0x802D0010U; /* GPU 45:0:0 BAR0 */
+  probe_addrs[7] = 0x802D0064U; /* GPU 45:0:0 PMCSR */
 
   UINT8 *e = Buffer + 0x000;
 
@@ -197,33 +211,95 @@ UINT32 GuAcpiBuildTrampolineCode(
   /* Telemetry Entry Checkpoint: mov word [0x0040], 0xAA01 */
   *e++ = 0xC7; *e++ = 0x06; *e++ = 0x40; *e++ = 0x00; *e++ = 0x01; *e++ = 0xAA;
 
-  /* Read 32-bit waking vector from Shadow FACS at 0x0100: [0x010C] */
-  *e++ = 0xA1; *e++ = 0x0C; *e++ = 0x01;             /* mov ax, [0x010C] */
-  *e++ = 0x8B; *e++ = 0x16; *e++ = 0x0E; *e++ = 0x01; /* mov dx, [0x010E] */
+  /* Probe loop: si=0x0050, di=0x0070, cx=8 */
+  *e++ = 0xBE; *e++ = 0x50; *e++ = 0x00; /* mov si, 0x0050 */
+  *e++ = 0xBF; *e++ = 0x70; *e++ = 0x00; /* mov di, 0x0070 */
+  *e++ = 0xB9; *e++ = 0x08; *e++ = 0x00; /* mov cx, 8 */
+  UINT8 *pci_loop_start = e;
+  *e++ = 0x66; *e++ = 0x8B; *e++ = 0x04; /* mov eax, [si] */
+  *e++ = 0xBA; *e++ = 0xF8; *e++ = 0x0C; /* mov dx, 0x0CF8 */
+  *e++ = 0x66; *e++ = 0xEF;             /* out dx, eax */
+  *e++ = 0xBA; *e++ = 0xFC; *e++ = 0x0C; /* mov dx, 0x0CFC */
+  *e++ = 0x66; *e++ = 0xED;             /* in eax, dx */
+  *e++ = 0x66; *e++ = 0x89; *e++ = 0x05; /* mov [di], eax */
+  *e++ = 0x83; *e++ = 0xC6; *e++ = 0x04; /* add si, 4 */
+  *e++ = 0x83; *e++ = 0xC7; *e++ = 0x04; /* add di, 4 */
+  *e++ = 0xE2;                           /* loop */
+  INT8 loop_disp = (INT8)(pci_loop_start - (e + 1));
+  *e++ = (UINT8)loop_disp;
+
+  /* Check if Bridge DevID is AMD (Vendor ID 0x1022 at [0x0070]) */
+  *e++ = 0xA1; *e++ = 0x70; *e++ = 0x00; /* mov ax, [0x0070] */
+  *e++ = 0x3D; *e++ = 0x22; *e++ = 0x10; /* cmp ax, 0x1022 */
+  *e++ = 0x75; UINT8 *skip_bridge_disp = e++; /* jne .skip_bridge */
+
+  /* Bridge detected! Ensure Secondary/Subordinate bus is 45 (0x2D): write 0x002D2D00 to 0x80001918 */
+  *e++ = 0x66; *e++ = 0xB8; *e++ = 0x18; *e++ = 0x19; *e++ = 0x00; *e++ = 0x80; /* mov eax, 0x80001918 */
+  *e++ = 0xBA; *e++ = 0xF8; *e++ = 0x0C; *e++ = 0x66; *e++ = 0xEF;             /* out 0xCF8, eax */
+  *e++ = 0x66; *e++ = 0xB8; *e++ = 0x00; *e++ = 0x2D; *e++ = 0x2D; *e++ = 0x00; /* mov eax, 0x002D2D00 */
+  *e++ = 0xBA; *e++ = 0xFC; *e++ = 0x0C; *e++ = 0x66; *e++ = 0xEF;             /* out 0xCFC, eax */
+
+  /* Enable Bridge Command (bit 1 Memory Space, bit 2 Bus Master) at 0x80001904 */
+  *e++ = 0x66; *e++ = 0xB8; *e++ = 0x04; *e++ = 0x19; *e++ = 0x00; *e++ = 0x80; /* mov eax, 0x80001904 */
+  *e++ = 0xBA; *e++ = 0xF8; *e++ = 0x0C; *e++ = 0x66; *e++ = 0xEF;             /* out 0xCF8, eax */
+  *e++ = 0xBA; *e++ = 0xFC; *e++ = 0x0C; *e++ = 0x66; *e++ = 0xED;             /* in eax, 0xCFC */
+  *e++ = 0x83; *e++ = 0xC8; *e++ = 0x06;                                       /* or ax, 0x0006 */
+  *e++ = 0x66; *e++ = 0xEF;                                                     /* out 0xCFC, eax */
+
+  /* Probe GPU DevID at 0x802D0000 -> [0x0090] */
+  *e++ = 0x66; *e++ = 0xB8; *e++ = 0x00; *e++ = 0x00; *e++ = 0x2D; *e++ = 0x80; /* mov eax, 0x802D0000 */
+  *e++ = 0xBA; *e++ = 0xF8; *e++ = 0x0C; *e++ = 0x66; *e++ = 0xEF;             /* out 0xCF8, eax */
+  *e++ = 0xBA; *e++ = 0xFC; *e++ = 0x0C; *e++ = 0x66; *e++ = 0xED;             /* in eax, 0xCFC */
+  *e++ = 0x66; *e++ = 0xA3; *e++ = 0x90; *e++ = 0x00;                         /* mov [0x0090], eax */
+
+  /* Probe GPU Cmd at 0x802D0004 -> [0x0094] */
+  *e++ = 0x66; *e++ = 0xB8; *e++ = 0x04; *e++ = 0x00; *e++ = 0x2D; *e++ = 0x80; /* mov eax, 0x802D0004 */
+  *e++ = 0xBA; *e++ = 0xF8; *e++ = 0x0C; *e++ = 0x66; *e++ = 0xEF;             /* out 0xCF8, eax */
+  *e++ = 0xBA; *e++ = 0xFC; *e++ = 0x0C; *e++ = 0x66; *e++ = 0xED;             /* in eax, 0xCFC */
+  *e++ = 0x66; *e++ = 0xA3; *e++ = 0x94; *e++ = 0x00;                         /* mov [0x0094], eax */
+
+  /* Probe GPU PMCSR at 0x802D0064 -> [0x0098] */
+  *e++ = 0x66; *e++ = 0xB8; *e++ = 0x64; *e++ = 0x00; *e++ = 0x2D; *e++ = 0x80; /* mov eax, 0x802D0064 */
+  *e++ = 0xBA; *e++ = 0xF8; *e++ = 0x0C; *e++ = 0x66; *e++ = 0xEF;             /* out 0xCF8, eax */
+  *e++ = 0xBA; *e++ = 0xFC; *e++ = 0x0C; *e++ = 0x66; *e++ = 0xED;             /* in eax, 0xCFC */
+  *e++ = 0x66; *e++ = 0xA3; *e++ = 0x98; *e++ = 0x00;                         /* mov [0x0098], eax */
+
+  /* Probe GPU BAR0 at 0x802D0010 -> [0x009C] */
+  *e++ = 0x66; *e++ = 0xB8; *e++ = 0x10; *e++ = 0x00; *e++ = 0x2D; *e++ = 0x80; /* mov eax, 0x802D0010 */
+  *e++ = 0xBA; *e++ = 0xF8; *e++ = 0x0C; *e++ = 0x66; *e++ = 0xEF;             /* out 0xCF8, eax */
+  *e++ = 0xBA; *e++ = 0xFC; *e++ = 0x0C; *e++ = 0x66; *e++ = 0xED;             /* in eax, 0xCFC */
+  *e++ = 0x66; *e++ = 0xA3; *e++ = 0x9C; *e++ = 0x00;                         /* mov [0x009C], eax */
+
+  /* Patch .skip_bridge target */
+  *skip_bridge_disp = (UINT8)(e - (skip_bridge_disp + 1));
+
+  /* Read 32-bit waking vector from Shadow FACS at 0x0200: [0x020C] */
+  *e++ = 0xA1; *e++ = 0x0C; *e++ = 0x02;             /* mov ax, [0x020C] */
+  *e++ = 0x8B; *e++ = 0x16; *e++ = 0x0E; *e++ = 0x02; /* mov dx, [0x020E] */
   *e++ = 0x85; *e++ = 0xC0;                         /* test ax, ax */
   *e++ = 0x75; UINT8 *f_ax0 = e++;                   /* jnz .have_vec */
   *e++ = 0x85; *e++ = 0xD2;                         /* test dx, dx */
   *e++ = 0x75; UINT8 *f_dx0 = e++;                   /* jnz .have_vec */
 
-  /* Read 64-bit waking vector from Shadow FACS at 0x0100: [0x0118] */
-  *e++ = 0xA1; *e++ = 0x18; *e++ = 0x01;             /* mov ax, [0x0118] */
-  *e++ = 0x8B; *e++ = 0x16; *e++ = 0x1A; *e++ = 0x01; /* mov dx, [0x011A] */
+  /* Read 64-bit waking vector from Shadow FACS at 0x0200: [0x0218] */
+  *e++ = 0xA1; *e++ = 0x18; *e++ = 0x02;             /* mov ax, [0x0218] */
+  *e++ = 0x8B; *e++ = 0x16; *e++ = 0x1A; *e++ = 0x02; /* mov dx, [0x021A] */
   *e++ = 0x85; *e++ = 0xC0;                         /* test ax, ax */
   *e++ = 0x75; UINT8 *f_ax1 = e++;                   /* jnz .have_vec */
   *e++ = 0x85; *e++ = 0xD2;                         /* test dx, dx */
   *e++ = 0x75; UINT8 *f_dx1 = e++;                   /* jnz .have_vec */
 
-  /* Fallback: Read backup 32-bit vector from Real FACS mirror at [0x0180] */
-  *e++ = 0xA1; *e++ = 0x80; *e++ = 0x01;             /* mov ax, [0x0180] */
-  *e++ = 0x8B; *e++ = 0x16; *e++ = 0x82; *e++ = 0x01; /* mov dx, [0x0182] */
+  /* Fallback: Read backup 32-bit vector from Real FACS mirror at [0x0280] */
+  *e++ = 0xA1; *e++ = 0x80; *e++ = 0x02;             /* mov ax, [0x0280] */
+  *e++ = 0x8B; *e++ = 0x16; *e++ = 0x82; *e++ = 0x02; /* mov dx, [0x0282] */
   *e++ = 0x85; *e++ = 0xC0;                         /* test ax, ax */
   *e++ = 0x75; UINT8 *f_ax2 = e++;                   /* jnz .have_vec */
   *e++ = 0x85; *e++ = 0xD2;                         /* test dx, dx */
   *e++ = 0x75; UINT8 *f_dx2 = e++;                   /* jnz .have_vec */
 
-  /* Fallback: Read backup 64-bit vector from Real FACS mirror at [0x0188] */
-  *e++ = 0xA1; *e++ = 0x88; *e++ = 0x01;             /* mov ax, [0x0188] */
-  *e++ = 0x8B; *e++ = 0x16; *e++ = 0x8A; *e++ = 0x01; /* mov dx, [0x018A] */
+  /* Fallback: Read backup 64-bit vector from Real FACS mirror at [0x0288] */
+  *e++ = 0xA1; *e++ = 0x88; *e++ = 0x02;             /* mov ax, [0x0288] */
+  *e++ = 0x8B; *e++ = 0x16; *e++ = 0x8A; *e++ = 0x02; /* mov dx, [0x028A] */
   *e++ = 0x85; *e++ = 0xC0;                         /* test ax, ax */
   *e++ = 0x75; UINT8 *f_ax3 = e++;                   /* jnz .have_vec */
   *e++ = 0x85; *e++ = 0xD2;                         /* test dx, dx */
@@ -321,20 +397,44 @@ EFI_STATUS GuAcpiInstallShadowFacs(
     UINT32 full_vec     = ((UINT32)vec_hi << 16) | vec_lo;
     GuLog("S3 Prior Wake Telemetry: Magic=S3_T Entry=%#04x Vector=%#08x Target=%04x:%04x Exit=%#04x\n",
           (unsigned)entry_status, (unsigned)full_vec, (unsigned)tgt_seg, (unsigned)tgt_off, (unsigned)exit_status);
+
+    UINT32 br_id   = *(UINT32 *)(low_base + 0x0070);
+    UINT32 br_cmd  = *(UINT32 *)(low_base + 0x0074);
+    UINT32 br_bus  = *(UINT32 *)(low_base + 0x0078);
+    UINT32 br_mem  = *(UINT32 *)(low_base + 0x007C);
+    UINT32 gpu_id  = *(UINT32 *)(low_base + 0x0080);
+    UINT32 gpu_cmd = *(UINT32 *)(low_base + 0x0084);
+    UINT32 gpu_bar = *(UINT32 *)(low_base + 0x0088);
+    UINT32 gpu_pm  = *(UINT32 *)(low_base + 0x008C);
+    UINT32 post_id = *(UINT32 *)(low_base + 0x0090);
+    UINT32 post_cmd= *(UINT32 *)(low_base + 0x0094);
+    UINT32 post_pm = *(UINT32 *)(low_base + 0x0098);
+    UINT32 post_bar= *(UINT32 *)(low_base + 0x009C);
+    GuLog("S3 Wake PCI Telemetry (Raw Before Bridge Arming):\n"
+          "  Bridge (0:3:1) -> DevID=%#08x Cmd/Stat=%#08x BusNum=%#08x MemBaseLim=%#08x\n"
+          "  GPU   (45:0:0) -> DevID=%#08x Cmd/Stat=%#08x BAR0=%#08x PMCSR=%#08x\n"
+          "S3 Wake PCI Telemetry (After Bridge Arming):\n"
+          "  GPU   (45:0:0) -> DevID=%#08x Cmd/Stat=%#08x BAR0=%#08x PMCSR=%#08x\n",
+          (unsigned)br_id, (unsigned)br_cmd, (unsigned)br_bus, (unsigned)br_mem,
+          (unsigned)gpu_id, (unsigned)gpu_cmd, (unsigned)gpu_bar, (unsigned)gpu_pm,
+          (unsigned)post_id, (unsigned)post_cmd, (unsigned)post_bar, (unsigned)post_pm);
   }
 
   /*
    * Low (<1MB) ACPI NVS Allocation (4096 bytes):
-   * +0x00000: Pure 16-bit Real Mode S3 Resume Trampoline Machine Code (<180 bytes)
+   * +0x00000: Pure 16-bit Real Mode S3 Resume Trampoline Machine Code (<350 bytes)
    * +0x00040: Telemetry Checkpoints & Waking Vector capture
-   * +0x00100: Shadow FACS (64 bytes, 256-byte aligned per ACPI spec)
-   * +0x00180: Real FACS Vector Mirror (32-bit at 0x180, 64-bit at 0x188)
+   * +0x00050: PCI Probe Addresses Table (8 dwords)
+   * +0x00070: PCI Probe Raw Results (8 dwords)
+   * +0x00090: PCI Probe Post-Arm Results (4 dwords)
+   * +0x00200: Shadow FACS (64 bytes, 512-byte aligned per ACPI spec)
+   * +0x00280: Real FACS Vector Mirror (32-bit at 0x280, 64-bit at 0x288)
    */
-  EFI_PHYSICAL_ADDRESS shadow_facs_phys = LowTrampPhys + 0x00100;
+  EFI_PHYSICAL_ADDRESS shadow_facs_phys = LowTrampPhys + 0x00200;
   EFI_PHYSICAL_ADDRESS trampoline_phys  = LowTrampPhys;
 
   EFI_ACPI_2_0_FIRMWARE_ACPI_CONTROL_STRUCTURE *shadow_facs =
-      (EFI_ACPI_2_0_FIRMWARE_ACPI_CONTROL_STRUCTURE *)(low_base + 0x00100);
+      (EFI_ACPI_2_0_FIRMWARE_ACPI_CONTROL_STRUCTURE *)(low_base + 0x00200);
 
   /* Clear the low trampoline memory page */
   memset(low_base, 0, 4096);
@@ -354,9 +454,9 @@ EFI_STATUS GuAcpiInstallShadowFacs(
   Info->real_facs->Flags &= ~0x00000002U;
   Info->real_facs->XFirmwareWakingVector = 0;
 
-  /* Store Real FACS original vectors as backup mirror in low memory at +0x180 / +0x188 */
-  *(UINT32 *)(low_base + 0x0180) = Info->original_firmware_waking_vector;
-  *(UINT64 *)(low_base + 0x0188) = Info->original_xfirmware_waking_vector;
+  /* Store Real FACS original vectors as backup mirror in low memory at +0x280 / +0x288 */
+  *(UINT32 *)(low_base + 0x0280) = Info->original_firmware_waking_vector;
+  *(UINT64 *)(low_base + 0x0288) = Info->original_xfirmware_waking_vector;
 
   /* 3. Build Pure 16-bit Real Mode S3 Resume Trampoline machine code in low memory (<1MB) */
   UINT32 tramp_bytes = GuAcpiBuildTrampolineCode(
@@ -372,7 +472,7 @@ EFI_STATUS GuAcpiInstallShadowFacs(
     return EFI_DEVICE_ERROR;
   }
 
-  Info->shadow_facs_phys = shadow_facs_phys;
+    Info->shadow_facs_phys = shadow_facs_phys;
   Info->trampoline_phys = trampoline_phys;
 
   /* 4. Update FADT to point to Shadow FACS in low memory */

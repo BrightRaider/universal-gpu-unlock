@@ -23,6 +23,13 @@
 #define GU_TRAMP_EXIT_STATUS      0xAA02U
 #define GU_TRAMP_FAULT_STATUS     0xDEADU
 
+/* Telemetry and Table Offsets within Low Trampoline Memory (<1MB) */
+#define GU_TRAMP_PCI_PROBE_ADDRS_OFF   0x0050U
+#define GU_TRAMP_PCI_PROBE_RAW_OFF     0x0070U
+#define GU_TRAMP_PCI_PROBE_POST_OFF    0x0090U
+#define GU_TRAMP_SHADOW_FACS_OFF       0x0200U
+#define GU_TRAMP_REAL_FACS_MIRROR_OFF  0x0280U
+
 #pragma pack(push, 1)
 typedef struct {
   BOOLEAN found;

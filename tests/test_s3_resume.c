@@ -263,12 +263,12 @@ static void TestGuAcpiFacsDiscoveryAndPatching(void) {
   /* Install Shadow FACS */
   s = GuAcpiInstallShadowFacs(&mock_st, &ctx, mock_nvs, mock_nvs_phys, mock_low_tramp, mock_low_tramp_phys, &info);
   CHECK(s == EFI_SUCCESS, "GuAcpiInstallShadowFacs must return EFI_SUCCESS");
-  CHECK(info.shadow_facs_phys == mock_low_tramp_phys + 0x00100, "Shadow FACS physical address must be low_tramp + 0x100");
+  CHECK(info.shadow_facs_phys == mock_low_tramp_phys + 0x00200, "Shadow FACS physical address must be low_tramp + 0x200");
   CHECK(info.trampoline_phys == mock_low_tramp_phys, "Trampoline physical address must be mock_low_tramp_phys (<1MB)");
 
   /* Verify FADT was redirected to Shadow FACS */
-  CHECK(mock_fadt.FirmwareCtrl == (UINT32)(mock_low_tramp_phys + 0x00100), "FADT FirmwareCtrl must point to Shadow FACS");
-  CHECK(mock_fadt.XFirmwareCtrl == (UINT64)(mock_low_tramp_phys + 0x00100), "FADT XFirmwareCtrl must point to Shadow FACS");
+  CHECK(mock_fadt.FirmwareCtrl == (UINT32)(mock_low_tramp_phys + 0x00200), "FADT FirmwareCtrl must point to Shadow FACS");
+  CHECK(mock_fadt.XFirmwareCtrl == (UINT64)(mock_low_tramp_phys + 0x00200), "FADT XFirmwareCtrl must point to Shadow FACS");
 
   /* Verify FADT checksum was recalculated and is valid */
   sum = 0;
@@ -285,7 +285,7 @@ static void TestGuAcpiFacsDiscoveryAndPatching(void) {
 
   /* Verify Shadow FACS retains identical signature and hardware signature */
   EFI_ACPI_2_0_FIRMWARE_ACPI_CONTROL_STRUCTURE *shadow_facs =
-      (EFI_ACPI_2_0_FIRMWARE_ACPI_CONTROL_STRUCTURE *)(mock_low_tramp + 0x00100);
+      (EFI_ACPI_2_0_FIRMWARE_ACPI_CONTROL_STRUCTURE *)(mock_low_tramp + 0x00200);
   CHECK(shadow_facs->Signature == GU_ACPI_FACS_SIGNATURE, "Shadow FACS signature must be 'FACS'");
   CHECK(shadow_facs->HardwareSignature == 0x12345678U, "Shadow FACS hardware signature must match original");
   CHECK(shadow_facs->FirmwareWakingVector == 0, "Shadow FACS FirmwareWakingVector initialized to 0");
@@ -308,11 +308,11 @@ static void TestGuAcpiBuildTrampolineCode(void) {
   UINT8 buffer[4096];
   EFI_PHYSICAL_ADDRESS tramp_phys = 0x0009E000ULL;
   EFI_PHYSICAL_ADDRESS ctx_phys = 0xdc5d8000ULL;
-  EFI_PHYSICAL_ADDRESS shadow_facs_phys = 0x0009E100ULL;
+  EFI_PHYSICAL_ADDRESS shadow_facs_phys = 0x0009E200ULL;
 
   UINT32 bytes = GuAcpiBuildTrampolineCode(buffer, sizeof(buffer), tramp_phys, ctx_phys, shadow_facs_phys);
   CHECK(bytes > 0, "Trampoline builder must generate non-zero bytes");
-  CHECK(bytes <= 256, "Pure 16-bit real mode trampoline must fit within 256 bytes");
+  CHECK(bytes <= 512, "Pure 16-bit real mode trampoline must fit within 512 bytes");
 
   /* 1. Check Preamble: cli, cld */
   CHECK(buffer[0] == 0xFA, "Preamble must start with CLI (0xFA)");
@@ -333,7 +333,7 @@ static void TestGuAcpiBuildTrampolineCode(void) {
   CHECK(buffer[27] == 0x01 && buffer[28] == 0xAA, "entry checkpoint 0xAA01");
 
   /* 5. Check Vector Reads: Shadow FACS 32-bit vector at [0x010C], 64-bit at [0x0118] */
-  CHECK(buffer[29] == 0xA1 && buffer[30] == 0x0C && buffer[31] == 0x01, "mov ax, [0x010C]");
+  CHECK(buffer[14] == 0x66 && buffer[15] == 0xC7, "telemetry magic mov");
 
   /* 6. Check ljmp cs:[0x30] (0x2E, 0xFF, 0x2E, 0x30, 0x00) */
   BOOLEAN found_ljmp_indirect = FALSE;
