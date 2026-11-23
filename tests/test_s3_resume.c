@@ -217,7 +217,24 @@ static void TestGuAcpiFacsDiscoveryAndPatching(void) {
   for (UINT32 i = 0; i < mock_fadt.Header.Length; i++) sum = (UINT8)(sum + p[i]);
   CHECK(sum == 0, "Initial mock FADT checksum must be 0 mod 256");
 
-  /* Mock XSDT containing pointer to FADT */
+  /* Mock RSDT containing 32-bit pointer to FADT */
+#pragma pack(push, 1)
+  struct {
+    EFI_ACPI_DESCRIPTION_HEADER Header;
+    UINT32 Entry[1];
+  } mock_rsdt;
+#pragma pack(pop)
+  memset(&mock_rsdt, 0, sizeof(mock_rsdt));
+  mock_rsdt.Header.Signature = 0x54445352U; /* 'RSDT' */
+  mock_rsdt.Header.Length = sizeof(mock_rsdt);
+  mock_rsdt.Entry[0] = (UINT32)(uintptr_t)&mock_fadt;
+  mock_rsdt.Header.Checksum = 0;
+  UINT8 r_sum = 0;
+  UINT8 *r_p = (UINT8 *)&mock_rsdt;
+  for (UINT32 i = 0; i < mock_rsdt.Header.Length; i++) r_sum = (UINT8)(r_sum + r_p[i]);
+  mock_rsdt.Header.Checksum = (UINT8)(0 - r_sum);
+
+  /* Mock XSDT containing 64-bit pointer to FADT */
 #pragma pack(push, 1)
   struct {
     EFI_ACPI_DESCRIPTION_HEADER Header;
@@ -228,12 +245,18 @@ static void TestGuAcpiFacsDiscoveryAndPatching(void) {
   mock_xsdt.Header.Signature = 0x54445358U; /* 'XSDT' */
   mock_xsdt.Header.Length = sizeof(mock_xsdt);
   mock_xsdt.Entry[0] = (UINT64)(uintptr_t)&mock_fadt;
+  mock_xsdt.Header.Checksum = 0;
+  UINT8 x_sum = 0;
+  UINT8 *x_p = (UINT8 *)&mock_xsdt;
+  for (UINT32 i = 0; i < mock_xsdt.Header.Length; i++) x_sum = (UINT8)(x_sum + x_p[i]);
+  mock_xsdt.Header.Checksum = (UINT8)(0 - x_sum);
 
   /* Mock RSDP */
   EFI_ACPI_2_0_ROOT_SYSTEM_DESCRIPTION_POINTER mock_rsdp;
   memset(&mock_rsdp, 0, sizeof(mock_rsdp));
   mock_rsdp.Signature = GU_ACPI_RSDP_SIGNATURE;
   mock_rsdp.Revision = 2;
+  mock_rsdp.RsdtAddress = (UINT32)(uintptr_t)&mock_rsdt;
   mock_rsdp.XsdtAddress = (UINT64)(uintptr_t)&mock_xsdt;
 
   /* Mock EFI System Table */
@@ -301,17 +324,43 @@ static void TestGuAcpiFacsDiscoveryAndPatching(void) {
   CHECK(strstr(g_log_history, "S3 Prior Wake Telemetry: none found") != NULL, "Re-run must log 'none found'");
   CHECK(s == EFI_SUCCESS, "GuAcpiInstallShadowFacs must return EFI_SUCCESS");
   CHECK(info.shadow_facs_phys == mock_low_tramp_phys + 0x00200, "Shadow FACS physical address must be low_tramp + 0x200");
+  CHECK(info.shadow_fadt_phys == mock_low_tramp_phys + 0x00400, "Shadow FADT physical address must be low_tramp + 0x400");
   CHECK(info.trampoline_phys == mock_low_tramp_phys, "Trampoline physical address must be mock_low_tramp_phys (<1MB)");
 
-  /* Verify Split-FACS: FirmwareCtrl points to Real FACS (for BIOS), XFirmwareCtrl points to Shadow FACS (for 64-bit OS) */
-  CHECK(mock_fadt.FirmwareCtrl == (UINT32)info.real_facs_phys, "FADT FirmwareCtrl must point to Real FACS for BIOS");
-  CHECK(mock_fadt.XFirmwareCtrl == (UINT64)(mock_low_tramp_phys + 0x00200), "FADT XFirmwareCtrl must point to Shadow FACS for 64-bit OS");
+  /* Verify Plan B: Shadow FADT at low_tramp + 0x400 (for XSDT / 64-bit OS) */
+  EFI_ACPI_2_0_FIXED_ACPI_DESCRIPTION_TABLE *shadow_fadt =
+      (EFI_ACPI_2_0_FIXED_ACPI_DESCRIPTION_TABLE *)(mock_low_tramp + 0x00400);
+  CHECK(shadow_fadt->Header.Signature == GU_ACPI_FADT_SIGNATURE, "Shadow FADT signature must be 'FACP'");
+  CHECK(shadow_fadt->FirmwareCtrl == (UINT32)(mock_low_tramp_phys + 0x00200), "Shadow FADT FirmwareCtrl must point to Shadow FACS (0x9E200)");
+  CHECK(shadow_fadt->XFirmwareCtrl == 0, "Shadow FADT XFirmwareCtrl must be 0 for Windows mapping");
 
-  /* Verify FADT checksum was recalculated and is valid */
+  /* Verify Shadow FADT checksum was recalculated and is valid */
+  sum = 0;
+  p = (UINT8 *)shadow_fadt;
+  for (UINT32 i = 0; i < shadow_fadt->Header.Length; i++) sum = (UINT8)(sum + p[i]);
+  CHECK(sum == 0, "Shadow FADT checksum must be 0 mod 256");
+
+  /* Verify Plan B: Original FADT (for RSDT / 32-bit BIOS) */
+  CHECK(mock_fadt.FirmwareCtrl == (UINT32)info.real_facs_phys, "Original FADT FirmwareCtrl must point to Real FACS for BIOS");
+  CHECK(mock_fadt.XFirmwareCtrl == 0, "Original FADT XFirmwareCtrl must be 0");
+
+  /* Verify Original FADT checksum was recalculated and is valid */
   sum = 0;
   p = (UINT8 *)&mock_fadt;
   for (UINT32 i = 0; i < mock_fadt.Header.Length; i++) sum = (UINT8)(sum + p[i]);
-  CHECK(sum == 0, "Updated FADT checksum must be 0 mod 256");
+  CHECK(sum == 0, "Original FADT checksum must be 0 mod 256");
+
+  /* Verify Plan B: XSDT entry diverted to Shadow FADT */
+  CHECK(mock_xsdt.Entry[0] == (UINT64)(mock_low_tramp_phys + 0x00400), "XSDT Entry[0] must point to Shadow FADT");
+
+  /* Verify XSDT checksum was recalculated and is valid */
+  sum = 0;
+  p = (UINT8 *)&mock_xsdt;
+  for (UINT32 i = 0; i < mock_xsdt.Header.Length; i++) sum = (UINT8)(sum + p[i]);
+  CHECK(sum == 0, "Updated XSDT checksum must be 0 mod 256");
+
+  /* Verify RSDT entry remains pointing to Real FADT */
+  CHECK(mock_rsdt.Entry[0] == (UINT32)(uintptr_t)&mock_fadt, "RSDT Entry[0] must remain pointing to Real FADT");
 
   /* Verify Real FACS was hooked to point to Low Trampoline */
   CHECK(mock_facs.FirmwareWakingVector == (UINT32)mock_low_tramp_phys, "Real FACS FirmwareWakingVector must point to Low Trampoline");
@@ -328,10 +377,11 @@ static void TestGuAcpiFacsDiscoveryAndPatching(void) {
   CHECK(shadow_facs->FirmwareWakingVector == 0, "Shadow FACS FirmwareWakingVector initialized to 0");
   CHECK((shadow_facs->Flags & 2U) == 0, "Shadow FACS 64-bit wake flag must be cleared");
 
-  /* Verify warm reset recovery: re-running discovery when FADT points to Shadow FACS recovers Real FACS */
+  /* Verify warm reset recovery: re-running discovery when XSDT points to Shadow FADT recovers Real FADT & Real FACS */
   GU_ACPI_FACS_INFO info_warm;
   s = GuAcpiLocateFadtAndFacs(&mock_st, &info_warm);
   CHECK(s == EFI_SUCCESS, "Warm reset discovery must succeed");
+  CHECK(info_warm.fadt == &mock_fadt, "Warm reset must recover original Real FADT from RSDT");
   CHECK(info_warm.real_facs == &mock_facs, "Warm reset must recover original Real FACS table");
   CHECK(info_warm.real_facs_phys == (EFI_PHYSICAL_ADDRESS)(uintptr_t)&mock_facs, "Warm reset must recover original Real FACS address");
   printf("[6] Discovery & Shadow FACS Patching (including Warm Reset): OK!\n");

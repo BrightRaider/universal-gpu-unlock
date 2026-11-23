@@ -6,6 +6,21 @@ For packaged binaries and downloads, visit [GitHub Releases](https://github.com/
 
 ---
 
+## [v1.8.38] - 2026-11-23
+### Added & Fixed
+- **ACPI RSDT / XSDT Dual-Root Split Architecture for BIOS vs. OS S3 Resume (addresses #19):**
+  - **Empirical Live-Kernel Forensics Proof:** In-kernel WinDbg forensics (`kdX64.exe -kl`) in a running Windows session directly after a 41-second S3 standby cycle proved that Windows 64-bit `ACPI.sys` / `ntoskrnl.exe` exclusively maps `fadt->FirmwareCtrl` (`0xDC8BB000`) and completely ignores `fadt->XFirmwareCtrl` (`0x9E200`) when `FirmwareCtrl` is non-zero (`nt!HalpAcpiFacsMapping` mapped `pfn dc8bb` at `ffffc301b69cd000`). Consequently, `0x9E000` remained unmapped by Windows, and `RealFACS->FirmwareWakingVector` at `0xDC8BB00C` remained `0x0009E000` (untouched by Windows).
+  - **Plan B Dual-Root Split Implementation:** In `src/s3_facs.c` (`GuAcpiInstallShadowFacs`):
+    - **RSDT (32-bit Root for BIOS S3 Resume):** Preserved pointing to original `RealFADT` in ACPI Reclaim Memory (`FirmwareCtrl = 0xDC8BB000` / `RealFACS`, `XFirmwareCtrl = 0`, valid checksum). 32-bit AMI Aptio V BIOS S3Resume PEI driver strictly follows RSDT / 32-bit FADT $\rightarrow$ `RealFACS` $\rightarrow$ `0x9E000` 16-bit trampoline.
+    - **ShadowFADT in ACPI NVS (`0x9E400`):** Full copy of original FADT placed on the low NVS page at offset `+0x0400` (`LowTrampoline + 0x400`). In `ShadowFADT`, `FirmwareCtrl` is set to `ShadowFACS` (`0x9E200`) and `XFirmwareCtrl = 0`, matching the original OEM FADT layout. This guarantees Windows maps `0x9E000` into virtual memory (`nt!HalpAcpiFacsMapping`), writes its `HalpRMStub` waking vector to `ShadowFACS` (`0x9E20C`), and allows live kernel debugging via WinDbg (`!dd [c] 9e310 L18`).
+    - **XSDT (64-bit Root for Windows UEFI):** The 64-bit entry for `FACP`/FADT is diverted to `ShadowFADT` (`(UINT64)shadow_fadt_phys`), and `XSDT->Header.Checksum` is recalculated (0 mod 256).
+  - **Plan B Warm-Reset / Re-Entry Detection:** In `src/s3_facs.c` (`GuAcpiLocateFadtAndFacs`): dynamically detects if XSDT was previously diverted to `ShadowFADT` (`xsdt_fadt_phys < 0x00100000ULL` or `xsdt_fadt_phys != rsdt_fadt_phys`) and cleanly recovers the original `RealFADT` from `RSDT` and `RealFACS` from `fadt` / `ShadowFACS`.
+  - **Diagnostic Pre- & Post-Patch Checksum Logging:** Explicitly logs RSDT, XSDT, original FADT and Shadow FADT addresses and checksums before and after patching.
+  - **Untouched 16-Bit Real Mode Trampoline:** Machine code remains 100% untouched (zero MMIO, zero BAR0 writes, zero CMOS/RTC writes, 100% stack-free).
+  - **Host Verification Suite Passing:** All 106 unit tests passing (`MSVC_HOST_TESTS=PASS`), validating ShadowFADT creation, XSDT diversion, checksum integrity, and warm-reset recovery.
+
+---
+
 ## [v1.8.37] - 2026-11-23
 ### Added & Fixed
 - **ACPI 2.0+ Split-FACS Architecture for BIOS vs. OS Wakeup Routing (addresses #19):**

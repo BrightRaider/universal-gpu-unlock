@@ -37,12 +37,22 @@
 #define GU_TRAMP_PCI_PROBE_POST_OFF    0x0360U
 #define GU_TRAMP_SHADOW_FACS_OFF       0x0200U
 #define GU_TRAMP_REAL_FACS_MIRROR_OFF  0x0280U
+#define GU_TRAMP_SHADOW_FADT_OFF       0x0400U
 
 #pragma pack(push, 1)
 typedef struct {
   BOOLEAN found;
   EFI_ACPI_2_0_ROOT_SYSTEM_DESCRIPTION_POINTER *rsdp;
+  EFI_ACPI_DESCRIPTION_HEADER *rsdt;
+  EFI_PHYSICAL_ADDRESS rsdt_phys;
+  EFI_ACPI_DESCRIPTION_HEADER *xsdt;
+  EFI_PHYSICAL_ADDRESS xsdt_phys;
+  INTN xsdt_fadt_index;
+  INTN rsdt_fadt_index;
   EFI_ACPI_2_0_FIXED_ACPI_DESCRIPTION_TABLE *fadt;
+  EFI_PHYSICAL_ADDRESS fadt_phys;
+  EFI_ACPI_2_0_FIXED_ACPI_DESCRIPTION_TABLE *shadow_fadt;
+  EFI_PHYSICAL_ADDRESS shadow_fadt_phys;
   EFI_ACPI_2_0_FIRMWARE_ACPI_CONTROL_STRUCTURE *real_facs;
   EFI_PHYSICAL_ADDRESS real_facs_phys;
   EFI_PHYSICAL_ADDRESS shadow_facs_phys;
@@ -50,6 +60,8 @@ typedef struct {
   UINT32 original_firmware_waking_vector;
   UINT64 original_xfirmware_waking_vector;
   UINT8  fadt_original_checksum;
+  UINT8  xsdt_original_checksum;
+  UINT8  rsdt_original_checksum;
 } GU_ACPI_FACS_INFO;
 #pragma pack(pop)
 

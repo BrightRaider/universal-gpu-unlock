@@ -53,12 +53,21 @@ EFI_STATUS GuAcpiLocateFadtAndFacs(
   }
 
   Info->rsdp = rsdp;
-  EFI_ACPI_2_0_FIXED_ACPI_DESCRIPTION_TABLE *fadt = NULL;
+  Info->xsdt_fadt_index = -1;
+  Info->rsdt_fadt_index = -1;
+
+  EFI_ACPI_2_0_FIXED_ACPI_DESCRIPTION_TABLE *xsdt_fadt = NULL;
+  EFI_PHYSICAL_ADDRESS xsdt_fadt_phys = 0;
+  EFI_ACPI_2_0_FIXED_ACPI_DESCRIPTION_TABLE *rsdt_fadt = NULL;
+  EFI_PHYSICAL_ADDRESS rsdt_fadt_phys = 0;
 
   /* 2. Traverse XSDT (64-bit table pointers) if ACPI 2.0+ */
   if (rsdp->Revision >= 2 && rsdp->XsdtAddress != 0) {
     EFI_ACPI_DESCRIPTION_HEADER *xsdt = (EFI_ACPI_DESCRIPTION_HEADER *)(UINTN)rsdp->XsdtAddress;
     if (xsdt && xsdt->Length >= sizeof(EFI_ACPI_DESCRIPTION_HEADER)) {
+      Info->xsdt = xsdt;
+      Info->xsdt_phys = (EFI_PHYSICAL_ADDRESS)rsdp->XsdtAddress;
+      Info->xsdt_original_checksum = xsdt->Checksum;
       UINTN count = (xsdt->Length - sizeof(EFI_ACPI_DESCRIPTION_HEADER)) / sizeof(UINT64);
       UINT8 *entry_ptr = ((UINT8 *)xsdt) + sizeof(EFI_ACPI_DESCRIPTION_HEADER);
       for (UINTN i = 0; i < count; i++) {
@@ -66,17 +75,22 @@ EFI_STATUS GuAcpiLocateFadtAndFacs(
         memcpy(&table_phys, entry_ptr + i * sizeof(UINT64), sizeof(UINT64));
         EFI_ACPI_DESCRIPTION_HEADER *tbl = (EFI_ACPI_DESCRIPTION_HEADER *)(UINTN)table_phys;
         if (tbl && tbl->Signature == GU_ACPI_FADT_SIGNATURE) {
-          fadt = (EFI_ACPI_2_0_FIXED_ACPI_DESCRIPTION_TABLE *)tbl;
+          xsdt_fadt = (EFI_ACPI_2_0_FIXED_ACPI_DESCRIPTION_TABLE *)tbl;
+          xsdt_fadt_phys = (EFI_PHYSICAL_ADDRESS)table_phys;
+          Info->xsdt_fadt_index = (INTN)i;
           break;
         }
       }
     }
   }
 
-  /* 3. Fallback: Traverse RSDT (32-bit table pointers) */
-  if (!fadt && rsdp->RsdtAddress != 0) {
+  /* 3. Traverse RSDT (32-bit table pointers) */
+  if (rsdp->RsdtAddress != 0) {
     EFI_ACPI_DESCRIPTION_HEADER *rsdt = (EFI_ACPI_DESCRIPTION_HEADER *)(UINTN)rsdp->RsdtAddress;
     if (rsdt && rsdt->Length >= sizeof(EFI_ACPI_DESCRIPTION_HEADER)) {
+      Info->rsdt = rsdt;
+      Info->rsdt_phys = (EFI_PHYSICAL_ADDRESS)rsdp->RsdtAddress;
+      Info->rsdt_original_checksum = rsdt->Checksum;
       UINTN count = (rsdt->Length - sizeof(EFI_ACPI_DESCRIPTION_HEADER)) / sizeof(UINT32);
       UINT8 *entry_ptr = ((UINT8 *)rsdt) + sizeof(EFI_ACPI_DESCRIPTION_HEADER);
       for (UINTN i = 0; i < count; i++) {
@@ -84,11 +98,35 @@ EFI_STATUS GuAcpiLocateFadtAndFacs(
         memcpy(&table_phys, entry_ptr + i * sizeof(UINT32), sizeof(UINT32));
         EFI_ACPI_DESCRIPTION_HEADER *tbl = (EFI_ACPI_DESCRIPTION_HEADER *)(UINTN)table_phys;
         if (tbl && tbl->Signature == GU_ACPI_FADT_SIGNATURE) {
-          fadt = (EFI_ACPI_2_0_FIXED_ACPI_DESCRIPTION_TABLE *)tbl;
+          rsdt_fadt = (EFI_ACPI_2_0_FIXED_ACPI_DESCRIPTION_TABLE *)tbl;
+          rsdt_fadt_phys = (EFI_PHYSICAL_ADDRESS)table_phys;
+          Info->rsdt_fadt_index = (INTN)i;
           break;
         }
       }
     }
+  }
+
+  /*
+   * Plan B Warm-Reset / Re-Entry Detection:
+   * If XSDT already points to a low-memory table (<1MB, e.g. Shadow FADT at 0x9E400),
+   * or differs from RSDT's FADT, recover the true original Real FADT from RSDT!
+   */
+  EFI_ACPI_2_0_FIXED_ACPI_DESCRIPTION_TABLE *fadt = NULL;
+  EFI_PHYSICAL_ADDRESS fadt_phys = 0;
+
+  if (xsdt_fadt_phys != 0 && xsdt_fadt_phys < 0x00100000ULL && rsdt_fadt != NULL) {
+    GuLog("GuAcpiLocateFadtAndFacs: Existing Shadow FADT detected in XSDT at %#llx; recovered Real FADT from RSDT at %#llx\n",
+          (unsigned long long)xsdt_fadt_phys, (unsigned long long)rsdt_fadt_phys);
+    fadt = rsdt_fadt;
+    fadt_phys = rsdt_fadt_phys;
+  } else if (rsdt_fadt != NULL) {
+    /* Prefer RSDT's FADT since 32-bit BIOS always follows RSDT */
+    fadt = rsdt_fadt;
+    fadt_phys = rsdt_fadt_phys;
+  } else if (xsdt_fadt != NULL) {
+    fadt = xsdt_fadt;
+    fadt_phys = xsdt_fadt_phys;
   }
 
   if (!fadt) {
@@ -97,15 +135,25 @@ EFI_STATUS GuAcpiLocateFadtAndFacs(
   }
 
   Info->fadt = fadt;
+  Info->fadt_phys = fadt_phys;
   Info->fadt_original_checksum = fadt->Header.Checksum;
 
-  /* 4. Resolve active FACS address: per ACPI 2.0+ specification, XFirmwareCtrl takes precedence if non-zero */
+  /*
+   * 4. Resolve active Real FACS address:
+   * In normal boot, FirmwareCtrl points to Real FACS (e.g. 0xDC8BB000).
+   * If XFirmwareCtrl is set and >= 0x00100000ULL, it could also point to Real FACS.
+   * But if XFirmwareCtrl points to low memory (<1MB, e.g. 0x9E200 Shadow FACS from v1.8.37),
+   * prefer FirmwareCtrl if it points to high memory (>= 1MB).
+   */
   EFI_PHYSICAL_ADDRESS facs_phys = 0;
-  if (fadt->Header.Length >= 140 && fadt->XFirmwareCtrl != 0) {
-    facs_phys = (EFI_PHYSICAL_ADDRESS)fadt->XFirmwareCtrl;
-  }
-  if (facs_phys == 0) {
+  if (fadt->FirmwareCtrl != 0 && (EFI_PHYSICAL_ADDRESS)fadt->FirmwareCtrl >= 0x00100000ULL) {
     facs_phys = (EFI_PHYSICAL_ADDRESS)fadt->FirmwareCtrl;
+  } else if (fadt->Header.Length >= 140 && fadt->XFirmwareCtrl >= 0x00100000ULL) {
+    facs_phys = (EFI_PHYSICAL_ADDRESS)fadt->XFirmwareCtrl;
+  } else if (fadt->FirmwareCtrl != 0) {
+    facs_phys = (EFI_PHYSICAL_ADDRESS)fadt->FirmwareCtrl;
+  } else if (fadt->Header.Length >= 140 && fadt->XFirmwareCtrl != 0) {
+    facs_phys = (EFI_PHYSICAL_ADDRESS)fadt->XFirmwareCtrl;
   }
 
   if (facs_phys == 0) {
@@ -656,43 +704,122 @@ EFI_STATUS GuAcpiInstallShadowFacs(
     return EFI_DEVICE_ERROR;
   }
 
-    Info->shadow_facs_phys = shadow_facs_phys;
+  Info->shadow_facs_phys = shadow_facs_phys;
+  EFI_PHYSICAL_ADDRESS shadow_fadt_phys = LowTrampPhys + GU_TRAMP_SHADOW_FADT_OFF;
+  EFI_ACPI_2_0_FIXED_ACPI_DESCRIPTION_TABLE *shadow_fadt =
+      (EFI_ACPI_2_0_FIXED_ACPI_DESCRIPTION_TABLE *)(low_base + GU_TRAMP_SHADOW_FADT_OFF);
+  Info->shadow_fadt = shadow_fadt;
+  Info->shadow_fadt_phys = shadow_fadt_phys;
   Info->trampoline_phys = trampoline_phys;
 
-  /* 4. Split-FACS FADT Update: FirmwareCtrl (32-bit Real FACS for BIOS) vs XFirmwareCtrl (64-bit Shadow FACS for OS) */
-  EFI_ACPI_2_0_FIXED_ACPI_DESCRIPTION_TABLE *fadt = Info->fadt;
-  UINT32 orig_fw_ctrl = fadt->FirmwareCtrl;
-  UINT64 orig_xfw_ctrl = (fadt->Header.Length >= 140) ? fadt->XFirmwareCtrl : 0;
-  GuLog("S3 FADT Pre-Patch: Length=%u FirmwareCtrl=%#08x XFirmwareCtrl=%#llx\n",
-        (unsigned)fadt->Header.Length, (unsigned)orig_fw_ctrl, (unsigned long long)orig_xfw_ctrl);
+  /*
+   * Plan B: RSDT / XSDT Split Architecture
+   * 1. Log pre-patch state: RSDT, XSDT, original FADT address, and their original checksums.
+   */
+  GuLog("S3 Plan B Pre-Patch: RSDT=%#llx (Chk=%#02x) XSDT=%#llx (Chk=%#02x) OrigFADT=%#llx (Len=%u Chk=%#02x)\n",
+        (unsigned long long)Info->rsdt_phys, (unsigned)Info->rsdt_original_checksum,
+        (unsigned long long)Info->xsdt_phys, (unsigned)Info->xsdt_original_checksum,
+        (unsigned long long)Info->fadt_phys, (unsigned)Info->fadt->Header.Length,
+        (unsigned)Info->fadt_original_checksum);
 
-  if (fadt->Header.Length >= 140) {
-    /* ACPI 2.0+ Split-FACS: BIOS uses 32-bit FirmwareCtrl (Real FACS -> Trampoline), OS uses 64-bit XFirmwareCtrl (Shadow FACS) */
-    fadt->FirmwareCtrl = (UINT32)Info->real_facs_phys;
-    fadt->XFirmwareCtrl = (UINT64)shadow_facs_phys;
-  } else {
-    /* ACPI 1.0 Fallback: Only 32-bit FirmwareCtrl exists */
-    fadt->FirmwareCtrl = (UINT32)shadow_facs_phys;
+  /*
+   * 2. Populate ShadowFADT at LowTrampoline + 0x400 (e.g. 0x9E400):
+   *    Copy full Header.Length bytes from original FADT.
+   */
+  UINT32 fadt_len = Info->fadt->Header.Length;
+  if (fadt_len > (4096 - GU_TRAMP_SHADOW_FADT_OFF)) {
+    fadt_len = 4096 - GU_TRAMP_SHADOW_FADT_OFF;
+  }
+  memcpy(shadow_fadt, Info->fadt, fadt_len);
+
+  /*
+   * 3. In ShadowFADT (for XSDT / Windows):
+   *    - FirmwareCtrl = (UINT32)shadow_facs_phys (0x9E200)
+   *    - XFirmwareCtrl = 0 (exact original FADT layout so Windows maps 0x9E000 into virtual memory)
+   *    - Recalculate ShadowFADT->Header.Checksum
+   */
+  shadow_fadt->FirmwareCtrl = (UINT32)shadow_facs_phys;
+  if (shadow_fadt->Header.Length >= 140) {
+    shadow_fadt->XFirmwareCtrl = 0;
+  }
+  shadow_fadt->Header.Checksum = 0;
+  UINT8 sf_sum = 0;
+  UINT8 *sf_bytes = (UINT8 *)shadow_fadt;
+  for (UINT32 i = 0; i < shadow_fadt->Header.Length; i++) {
+    sf_sum = (UINT8)(sf_sum + sf_bytes[i]);
+  }
+  shadow_fadt->Header.Checksum = (UINT8)(0 - sf_sum);
+
+  /*
+   * 4. In Original FADT (for RSDT / 32-bit BIOS):
+   *    - FirmwareCtrl = RealFACS (0xDC8BB000)
+   *    - XFirmwareCtrl = 0 (clean original layout)
+   *    - Recalculate FADT->Header.Checksum
+   */
+  Info->fadt->FirmwareCtrl = (UINT32)Info->real_facs_phys;
+  if (Info->fadt->Header.Length >= 140) {
+    Info->fadt->XFirmwareCtrl = 0;
+  }
+  Info->fadt->Header.Checksum = 0;
+  UINT8 f_sum = 0;
+  UINT8 *f_bytes = (UINT8 *)Info->fadt;
+  for (UINT32 i = 0; i < Info->fadt->Header.Length; i++) {
+    f_sum = (UINT8)(f_sum + f_bytes[i]);
+  }
+  Info->fadt->Header.Checksum = (UINT8)(0 - f_sum);
+
+  /*
+   * 5. In XSDT:
+   *    Divert the 64-bit table pointer for FACP/FADT to shadow_fadt_phys.
+   *    Recalculate XSDT->Header.Checksum.
+   */
+  if (Info->xsdt && Info->xsdt_fadt_index >= 0) {
+    UINT8 *entry_ptr = ((UINT8 *)Info->xsdt) + sizeof(EFI_ACPI_DESCRIPTION_HEADER);
+    UINT64 sf_phys64 = (UINT64)shadow_fadt_phys;
+    memcpy(entry_ptr + Info->xsdt_fadt_index * sizeof(UINT64), &sf_phys64, sizeof(UINT64));
+
+    Info->xsdt->Checksum = 0;
+    UINT8 xsdt_sum = 0;
+    UINT8 *xsdt_bytes = (UINT8 *)Info->xsdt;
+    for (UINT32 i = 0; i < Info->xsdt->Length; i++) {
+      xsdt_sum = (UINT8)(xsdt_sum + xsdt_bytes[i]);
+    }
+    Info->xsdt->Checksum = (UINT8)(0 - xsdt_sum);
+  } else if (!Info->xsdt && Info->rsdt && Info->rsdt_fadt_index >= 0) {
+    /* ACPI 1.0 Fallback (no XSDT): update RSDT 32-bit entry */
+    UINT8 *entry_ptr = ((UINT8 *)Info->rsdt) + sizeof(EFI_ACPI_DESCRIPTION_HEADER);
+    UINT32 sf_phys32 = (UINT32)shadow_fadt_phys;
+    memcpy(entry_ptr + Info->rsdt_fadt_index * sizeof(UINT32), &sf_phys32, sizeof(UINT32));
+
+    Info->rsdt->Checksum = 0;
+    UINT8 rsdt_sum = 0;
+    UINT8 *rsdt_bytes = (UINT8 *)Info->rsdt;
+    for (UINT32 i = 0; i < Info->rsdt->Length; i++) {
+      rsdt_sum = (UINT8)(rsdt_sum + rsdt_bytes[i]);
+    }
+    Info->rsdt->Checksum = (UINT8)(0 - rsdt_sum);
   }
 
-  /* 5. Recalculate FADT table checksum */
-  fadt->Header.Checksum = 0;
-  UINT8 sum = 0;
-  UINT8 *fadt_bytes = (UINT8 *)fadt;
-  for (UINT32 i = 0; i < fadt->Header.Length; i++) {
-    sum = (UINT8)(sum + fadt_bytes[i]);
-  }
-  fadt->Header.Checksum = (UINT8)(0 - sum);
-
-  /* 6. Hook Real FACS waking vector to point to our Low Trampoline (<1MB) */
+  /*
+   * 6. Hook Real FACS waking vector to point to our Low Trampoline (<1MB)
+   */
   Info->real_facs->FirmwareWakingVector = (UINT32)trampoline_phys;
 
-  GuLog("S3 FACS Intercept: RealFACS=%#llx ShadowFACS=%#llx LowTrampoline=%#llx (FADT Checksum: %#x -> %#x)\n",
+  GuLog("S3 Plan B RSDT/XSDT Split Armed:\n"
+        "  RSDT [idx=%d] -> RealFADT=%#llx (FirmwareCtrl=%#08x XFirmwareCtrl=%#llx Chk=%#02x)\n"
+        "  XSDT [idx=%d] -> ShadowFADT=%#llx (FirmwareCtrl=%#08x XFirmwareCtrl=%#llx Chk=%#02x, XSDT Chk=%#02x)\n"
+        "  RealFACS=%#llx (WakingVector=%#08x) ShadowFACS=%#llx LowTrampoline=%#llx\n",
+        (int)Info->rsdt_fadt_index, (unsigned long long)Info->fadt_phys,
+        (unsigned)Info->fadt->FirmwareCtrl, (unsigned long long)Info->fadt->XFirmwareCtrl,
+        (unsigned)Info->fadt->Header.Checksum,
+        (int)Info->xsdt_fadt_index, (unsigned long long)shadow_fadt_phys,
+        (unsigned)shadow_fadt->FirmwareCtrl, (unsigned long long)shadow_fadt->XFirmwareCtrl,
+        (unsigned)shadow_fadt->Header.Checksum,
+        Info->xsdt ? (unsigned)Info->xsdt->Checksum : 0,
         (unsigned long long)Info->real_facs_phys,
+        (unsigned)Info->real_facs->FirmwareWakingVector,
         (unsigned long long)shadow_facs_phys,
-        (unsigned long long)trampoline_phys,
-        (unsigned)Info->fadt_original_checksum,
-        (unsigned)fadt->Header.Checksum);
+        (unsigned long long)trampoline_phys);
 
   return EFI_SUCCESS;
 }
