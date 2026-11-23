@@ -835,6 +835,7 @@ static void TestGuAcpiBuildTrampolineCode(void) {
     else if (buffer[i] == 0xB9 && buffer[i+1] == 0x1F && buffer[i+2] == 0x00 && buffer[i+3] == 0x00 && buffer[i+4] == 0x00) { instr_len = 5; desc = "mov ecx, 31                    ; 31 DWORDs = 124 bytes"; }
     else if (buffer[i] == 0xF3 && buffer[i+1] == 0xA5) { instr_len = 2; desc = "rep movsd                       ; MIRROR TELEMETRY TO HIGH MEMORY!"; }
     else if (buffer[i] == 0xC7 && buffer[i+1] == 0x05 && buffer[i+6] == 0x4B && buffer[i+7] == 0x4C && buffer[i+8] == 0x4E && buffer[i+9] == 0x55) { instr_len = 10; desc = "mov dword [dest+0x80], 'UNLK'   ; S3 Wake Unlock Telemetry Magic"; }
+    else if (buffer[i] == 0xC7 && buffer[i+1] == 0x83 && buffer[i+2] == 0x04 && buffer[i+3] == 0x38 && buffer[i+4] == 0x82 && buffer[i+5] == 0x00) { instr_len = 10; desc = "mov dword [ebx+0x823804], 0xFFFFFFFF ; Write PLM Unlatch Mask"; }
     else if (buffer[i] == 0xC7 && buffer[i+1] == 0x83 && buffer[i+2] == 0x1C && buffer[i+3] == 0x38 && buffer[i+4] == 0x82 && buffer[i+5] == 0x00) { instr_len = 10; desc = "mov dword [ebx+0x82381C], 0x88888888 ; Write SS0 Rate-Limiter Unlock"; }
     else if (buffer[i] == 0xC7 && buffer[i+1] == 0x83 && buffer[i+2] == 0x20 && buffer[i+3] == 0x38 && buffer[i+4] == 0x82 && buffer[i+5] == 0x00) { instr_len = 10; desc = "mov dword [ebx+0x823820], 0x00000008 ; Write SS1 Rate-Limiter Unlock"; }
     else if (buffer[i] == 0x8B && buffer[i+1] == 0x83 && buffer[i+2] == 0x1C && buffer[i+3] == 0x38 && buffer[i+4] == 0x82 && buffer[i+5] == 0x00) { instr_len = 6; desc = "mov eax, [ebx+0x82381C]         ; Read SS0 Selector"; }
@@ -963,6 +964,17 @@ static void TestGuAcpiBuildTrampolineCode(void) {
     }
   }
   CHECK(found_bar0_target, "Trampoline must program temporary BAR0 to 0xFB000000");
+
+  /* Verify PLM unlatch write (0xFFFFFFFF) */
+  BOOLEAN found_plm_unlock = FALSE;
+  for (UINT32 i = pm32_offset; i < pm16_offset - 9; i++) {
+    if (buffer[i] == 0xC7 && buffer[i+1] == 0x83 && *(UINT32 *)(buffer + i + 2) == 0x00823804U &&
+        *(UINT32 *)(buffer + i + 6) == 0xFFFFFFFFU) {
+      found_plm_unlock = TRUE;
+      break;
+    }
+  }
+  CHECK(found_plm_unlock, "Trampoline must write PLM = 0xFFFFFFFF to BAR0 + 0x823804");
 
   /* Verify SS0 write (0x88888888) */
   BOOLEAN found_ss0_unlock = FALSE;

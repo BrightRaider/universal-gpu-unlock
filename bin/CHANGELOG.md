@@ -6,6 +6,23 @@ For packaged binaries and downloads, visit [GitHub Releases](https://github.com/
 
 ---
 
+## [v1.8.49] - 2026-11-23
+### Added & Fixed
+- **PLM Privilege Level Mask Unlatch Write vor Rate-Limiter-Unlock über S3 Wake (addresses #19):**
+  - **Forensische Bestätigung aus dem v1.8.48 S3-Wake-Test:**
+    - Die Live-Kernel-Telemetrie (`kdX64.exe -kl`) erbrachte den definitiven Beweis: Die echte AD102 Chip-ID (`0x192000a1`) wurde über das temporäre BAR0-Fenster (`0xFB000000`) fehlerfrei ausgelesen, und der Status wechselte von 3 (Master Abort) auf 2 (Mismatch).
+    - Ursache des Mismatch: Das Privilege Level Mask Register (PLM, `0x00823804`) steht beim S3-Wake im hardwaregesperrten Zustand `0xFFFFFF8F`, wodurch die GPU direkte Host-MMIO-Schreibzugriffe auf `0x82381C` (`SS0`) und `0x823820` (`SS1`) abweist.
+  - **PLM Unlatch Schreibversuch im 32-Bit Flat Protected Mode:**
+    - Direkt nach dem Auslesen von `PLM_Before` (`0x823804`) führt das Trampolin den gezielten Entsperr-Schreibzugriff `mov dword [ebx + 0x00823804], 0xFFFFFFFF` aus, um die Privilege Mask zu öffnen, bevor `0x88888888` nach `SS0` (`0x82381C`) und `0x00000008` nach `SS1` (`0x823820`) geschrieben werden.
+    - Nach dem Unlock dokumentiert `PLM_After` bei Telemetrie `+0xAC` das Rückleseverhalten von `0x823804`.
+  - **Lückenloser Teardown & Verifikation:**
+    - Der bewährte 4-Stufen-PCIe-Teardown (GPU Cmd, GPU BAR0, Root Port Window, Root Port Cmd) bleibt zu 100 % erhalten.
+    - Maschinencode-Größe: 849 Bytes (175 Bytes Sicherheitsabstand vor GDT bei `+0x0400`).
+    - 8.816 Checks in 10 Test-Suites grün (`MSVC_HOST_TESTS=PASS`).
+    - Strikte Sicherheitsgrenzen: 0 CMOS/RTC-Mutation, `OspmFlags = 0`.
+
+---
+
 ## [v1.8.48] - 2026-11-23
 ### Added & Fixed
 - **32-Bit Port I/O Opcode-Korrektur & Lückenloser PCIe-Bridge-Teardown über S3 Wake (addresses #19):**

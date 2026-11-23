@@ -1,7 +1,7 @@
 # Technische Dokumentation: Universal GPU Unlock (Multi-Gen)
 
 > **Tool:** Universal GPU Unlock  
-> **Version:** v1.8.48  
+> **Version:** v1.8.49  
 > **Architekturen:** NVIDIA Ada Lovelace (RTX 40), Ampere (RTX 30), Turing (RTX 20 / CMP)  
 > **Unterstützte Betriebssysteme:** Windows 10, Windows 11, WSL2 / Ubuntu CUDA Container  
 
@@ -874,6 +874,37 @@ In **v1.8.34** habe ich die Architektur umfassend überarbeitet und perfektionie
    - Alle 8.815 Checks in 10 Test-Suites erfolgreich bestanden (`MSVC_HOST_TESTS=PASS`).
    - Disassembler-Validierung stellt sicher, dass alle 32-Bit-Port-Instruktionen 5 Bytes lang sind und der Teardown alle 4 PCIe-Register restauriert.
    - Strikte Sicherheitsgrenzen: 0 CMOS/RTC-Mutation, 0 SEC2-Mutation, `OspmFlags = 0`.
+
+---
+
+### 13.21 Die v1.8.49 Architektur: PLM Privilege Level Mask Unlatch Write im 32-Bit Flat Mode
+
+1. **Ausgangslage und forensische Bestätigung aus v1.8.48:**
+   - Die Live-Kernel-Telemetrie (`kdX64.exe -kl`) in Windows nach dem echten S3-Wake erbrachte den definitiven Nachweis:
+     - Das 16->32->16-Bit-Trampolin durchlief fehlerfrei (`324B4F21`, Checkpoints `0xAA01` und `0xAA02`, `WakingVector = 0x00001000`).
+     - Die echte AD102 Chip-ID `0x192000a1` wurde bei `0xFB000000` im 32-Bit Flat Mode ohne Busfehler oder PCIe Master Abort ausgelesen.
+     - Der Status wechselte von 3 (Master Abort) auf 2 (Mismatch).
+   - Die Analyse der Telemetrie erklärte die Ursache des Mismatch:
+     - `PLM_Before` (`0x00823804`) stand auf `0xFFFFFF8F` (Bits 6:4 = `0`).
+     - Bei Ada Lovelace (AD102) blockiert die GPU Host-MMIO-Schreibzugriffe auf `0x82381C` (`SS0`) und `0x823820` (`SS1`), solange `0x823804` (PLM) nicht den vollen Freigabezustand `0xFFFFFFFF` aufweist.
+
+2. **Gezielter PLM Unlatch Schreibzugriff:**
+   - Direkt nach dem Auslesen von `PLM_Before` (`0x823804`) führt das 32-Bit-Flat-Mode-Trampolin den Schreibzugriff `mov dword [ebx + 0x00823804], 0xFFFFFFFF` (`C7 83 04 38 82 00 FF FF FF FF`) aus.
+   - Anschließend werden die Rate-Limiter-Unlock-Schreibzugriffe auf `SS0` (`0x88888888`) und `SS1` (`0x00000008`) ausgeführt.
+   - Nach dem Unlock dokumentiert `PLM_After` bei Telemetrie `+0xAC` das tatsächliche Rückleseverhalten von `0x823804`.
+
+3. **Lückenloser 4-Stufen-PCIe-Teardown:**
+   - Alle modifizierten PCIe-Register werden vor der OS-Übergabe sauber auf ihre Ausgangswerte restauriert:
+     1. GPU Command Register (`0x802D0004`): Wiederherstellung auf Ausgangswert (`0x00000000`).
+     2. GPU BAR0 Register (`0x802D0010`): Wiederherstellung auf Ausgangswert (`0x00000000`).
+     3. Root Port Memory Base/Limit (`0x80001920`): Wiederherstellung des Originalzustands aus `[dest+0xB4]`.
+     4. Root Port Command Register (`0x80001904`): Wiederherstellung des Originalzustands aus `[dest+0xB0]`.
+
+4. **Verifikation & Testabdeckung:**
+   - Maschinencode-Größe: 849 Bytes (Envelope: 1024 Bytes, 175 Bytes Sicherheitsabstand vor GDT bei `+0x0400`).
+   - Alle 8.816 Checks in 10 Test-Suites erfolgreich bestanden (`MSVC_HOST_TESTS=PASS`).
+   - Strikte Sicherheitsgrenzen: 0 CMOS/RTC-Mutation, `OspmFlags = 0`.
+
 
 
 

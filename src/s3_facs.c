@@ -807,6 +807,11 @@ UINT32 GuAcpiBuildTrampolineCode(
   *e++ = 0x8B; *e++ = 0x83; *(UINT32 *)e = 0x00823818U; e += 4; /* mov eax, [ebx + 0x00823818] */
   *e++ = 0xA3; *(UINT32 *)e = (UINT32)(high_telem_dest + 0x9C); e += 4; /* mov [dest+0x9C], eax */
 
+  /* Attempt to unlatch PLM (0x00823804) by writing 0xFFFFFFFF */
+  /* mov dword [ebx + 0x00823804], 0xFFFFFFFF */
+  *e++ = 0xC7; *e++ = 0x83; *(UINT32 *)e = 0x00823804U; e += 4;
+  *e++ = 0xFF; *e++ = 0xFF; *e++ = 0xFF; *e++ = 0xFF;
+
   /* Perform Rate-Limiter Unlock Writes */
   /* mov dword [ebx + 0x0082381C], 0x88888888 */
   *e++ = 0xC7; *e++ = 0x83; *(UINT32 *)e = 0x0082381CU; e += 4;
