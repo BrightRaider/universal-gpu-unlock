@@ -2,9 +2,9 @@
 #ifndef GU_VERSION_H
 #define GU_VERSION_H
 
-#define GU_VERSION_STRING   "1.8.36"
-#define GU_VERSION_TAG      "v1.8.36"
-#define GU_VERSION_WIDE     L"1.8.36"
-#define GU_VERSION_TAG_WIDE L"v1.8.36"
+#define GU_VERSION_STRING   "1.8.37"
+#define GU_VERSION_TAG      "v1.8.37"
+#define GU_VERSION_WIDE     L"1.8.37"
+#define GU_VERSION_TAG_WIDE L"v1.8.37"
 
 #endif /* GU_VERSION_H */

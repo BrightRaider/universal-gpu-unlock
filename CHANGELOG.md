@@ -6,6 +6,21 @@ For packaged binaries and downloads, visit [GitHub Releases](https://github.com/
 
 ---
 
+## [v1.8.37] - 2026-11-23
+### Added & Fixed
+- **ACPI 2.0+ Split-FACS Architecture for BIOS vs. OS Wakeup Routing (addresses #19):**
+  - **Empirical Live-RAM Root Cause Discovery:** Live in-kernel WinDbg analysis (`kd.exe -kl`) during an active S3 sleep/wake cycle proved that the 16-bit real-mode trampoline was never executed by the AMI Aptio V firmware. Because earlier versions redirected both `fadt->FirmwareCtrl` and `fadt->XFirmwareCtrl` to `ShadowFACS` (`0x9E200`), the AMI BIOS re-parsed FADT on S3 resume and jumped directly to the OS waking vector written into `ShadowFACS`, completely bypassing `RealFACS` (`0xdc8bb000`) and the trampoline.
+  - **Split-FACS Routing Implementation:** In `src/s3_facs.c` (`GuAcpiInstallShadowFacs`):
+    - For ACPI 2.0+ FADT (`Header.Length >= 140`): `fadt->FirmwareCtrl` is strictly preserved pointing to `RealFACS` (`Info->real_facs_phys`), where `FirmwareWakingVector` hooks the low trampoline at `0x9E000` for the BIOS resume PEI driver.
+    - Concurrently, `fadt->XFirmwareCtrl` is explicitly set to `ShadowFACS` (`(UINT64)shadow_facs_phys` at `0x9E200`) so 64-bit Windows UEFI writes its waking vector into `ShadowFACS` without overwriting `RealFACS`.
+    - For legacy ACPI 1.0 FADT (`Header.Length < 140`), safely falls back to patching `fadt->FirmwareCtrl`.
+  - **Pre-Patch FADT Diagnostic Logging:** Added explicit logging of `FADT->Header.Length`, original `FirmwareCtrl`, and original `XFirmwareCtrl` prior to mutation.
+  - **FADT Discovery Header Length Guard:** Updated `GuAcpiLocateFadtAndFacs()` to check `fadt->Header.Length >= 140` (previously `> 132`) before dereferencing `XFirmwareCtrl`.
+  - **Zero-Risk Trampoline Guarantee Preserved:** Pure 16-bit config-space recon trampoline preserved untouched (zero MMIO, zero BAR0 writes, zero CMOS/RTC writes, 100% stack-free).
+  - **Host Verification Suite Passing:** All 106 unit tests passing (`MSVC_HOST_TESTS=PASS`), validating Split-FACS routing, ACPI checksum integrity, and warm-reset recovery.
+
+---
+
 ## [v1.8.36] - 2026-11-23
 ### Added & Fixed
 - **Zero-Risk S3 Config Space Reconnaissance, 100% Stack-Free Trampoline & Telemetry Preservation (addresses #19):**

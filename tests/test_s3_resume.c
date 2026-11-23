@@ -303,9 +303,9 @@ static void TestGuAcpiFacsDiscoveryAndPatching(void) {
   CHECK(info.shadow_facs_phys == mock_low_tramp_phys + 0x00200, "Shadow FACS physical address must be low_tramp + 0x200");
   CHECK(info.trampoline_phys == mock_low_tramp_phys, "Trampoline physical address must be mock_low_tramp_phys (<1MB)");
 
-  /* Verify FADT was redirected to Shadow FACS */
-  CHECK(mock_fadt.FirmwareCtrl == (UINT32)(mock_low_tramp_phys + 0x00200), "FADT FirmwareCtrl must point to Shadow FACS");
-  CHECK(mock_fadt.XFirmwareCtrl == (UINT64)(mock_low_tramp_phys + 0x00200), "FADT XFirmwareCtrl must point to Shadow FACS");
+  /* Verify Split-FACS: FirmwareCtrl points to Real FACS (for BIOS), XFirmwareCtrl points to Shadow FACS (for 64-bit OS) */
+  CHECK(mock_fadt.FirmwareCtrl == (UINT32)info.real_facs_phys, "FADT FirmwareCtrl must point to Real FACS for BIOS");
+  CHECK(mock_fadt.XFirmwareCtrl == (UINT64)(mock_low_tramp_phys + 0x00200), "FADT XFirmwareCtrl must point to Shadow FACS for 64-bit OS");
 
   /* Verify FADT checksum was recalculated and is valid */
   sum = 0;

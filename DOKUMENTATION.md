@@ -1,7 +1,7 @@
 # Technische Dokumentation: Universal GPU Unlock (Multi-Gen)
 
 > **Tool:** Universal GPU Unlock  
-> **Version:** v1.8.36  
+> **Version:** v1.8.37  
 > **Architekturen:** NVIDIA Ada Lovelace (RTX 40), Ampere (RTX 30), Turing (RTX 20 / CMP)  
 > **Unterstützte Betriebssysteme:** Windows 10, Windows 11, WSL2 / Ubuntu CUDA Container  
 
@@ -358,4 +358,16 @@ In **v1.8.34** habe ich die Architektur umfassend überarbeitet und perfektionie
 4. **Strikte Code- und Daten-Trennung im Low Trampoline Buffer:**
    Maschinencode (`0x0000..0x015B`, 347 Bytes), ACPI-Tabellen (`ShadowFACS` bei `0x0200`, `RealFACS`-Mirror bei `0x0280`) und Laufzeit-Daten/Telemetrie (`0x0300..0x036F`) sind vollständig voneinander separiert.
 5. **Verpflichtende Sanity-Checks in den Host-Tests:**
-   Alle 98 Tests im MSVC-Test-Suite laufen erfolgreich durch (`MSVC_HOST_TESTS=PASS`). Die Tests prüfen explizit, dass ausnahmslos alle 32-Bit-I/O-Instruktionen (`out dx, eax` = `66 EF`, `in eax, dx` = `66 ED`) das `0x66`-Präfix besitzen, kein Schreibzugriff auf `0x80001904` erfolgt, die Bridge-Wiederherstellung garantiert ist und die dynamischen Registeradressen stimmen.
+   Alle 106 Tests im MSVC-Test-Suite laufen erfolgreich durch (`MSVC_HOST_TESTS=PASS`). Die Tests prüfen explizit, dass ausnahmslos alle 32-Bit-I/O-Instruktionen (`out dx, eax` = `66 EF`, `in eax, dx` = `66 ED`) das `0x66`-Präfix besitzen, kein Schreibzugriff auf `0x80001904` erfolgt, die Bridge-Wiederherstellung garantiert ist und die dynamischen Registeradressen stimmen.
+
+### 13.6 Die v1.8.37 Split-FACS Architektur: FirmwareCtrl (BIOS) vs. XFirmwareCtrl (OS)
+1. **Live-Messung via Kernel-Debugger (`kd.exe`):**
+   Durch In-Kernel-Messung per Microsoft WinDbg während eines laufenden S3-Standby-Zyklus wurde empirisch bewiesen, dass das 16-Bit-Trampolin bei früheren Versionen nicht angesprungen wurde. Grund: Wenn `FirmwareCtrl` und `XFirmwareCtrl` beide auf `ShadowFACS` zeigen, liest das AMI-BIOS beim Aufwachen die FADT neu ein und springt direkt zu Windows' Vektor in `ShadowFACS`, wodurch `RealFACS` und das Trampolin umgangen werden.
+2. **ACPI 2.0+ Split-FACS Weiche:**
+   - In `GuAcpiInstallShadowFacs()` bleibt für ACPI 2.0+ FADT (`Header.Length >= 140`) das 32-Bit-Feld `fadt->FirmwareCtrl` unverändert auf `RealFACS` (`Info->real_facs_phys`) gerichtet, wo `FirmwareWakingVector` auf das Low-Trampolin (`0x9E000`) zeigt.
+   - Das 64-Bit-Feld `fadt->XFirmwareCtrl` wird separat auf `ShadowFACS` (`0x9E200`) gesetzt. 64-Bit-Windows nutzt gemäß ACPI-Spezifikation vorrangig `XFirmwareCtrl` und schreibt seinen Aufwachvektor (`HalpRMStub`) in `ShadowFACS`, ohne `RealFACS` zu überschreiben.
+   - Bei älteren ACPI 1.0 Tabellen (`Header.Length < 140`) greift ein sicherer Fallback auf `FirmwareCtrl`.
+3. **Diagnostisches Vorab-Logging:**
+   Vor dem Patchen werden `FADT->Header.Length`, originales `FirmwareCtrl` und originales `XFirmwareCtrl` im UEFI-Log erfasst.
+4. **Host-Test Suite:**
+   106/106 Tests bestanden (`MSVC_HOST_TESTS=PASS`), inklusive Verifikation von Split-FACS und Warm-Reset-Recovery.

@@ -101,7 +101,7 @@ EFI_STATUS GuAcpiLocateFadtAndFacs(
 
   /* 4. Resolve active FACS address: per ACPI 2.0+ specification, XFirmwareCtrl takes precedence if non-zero */
   EFI_PHYSICAL_ADDRESS facs_phys = 0;
-  if (fadt->Header.Length > 132 && fadt->XFirmwareCtrl != 0) {
+  if (fadt->Header.Length >= 140 && fadt->XFirmwareCtrl != 0) {
     facs_phys = (EFI_PHYSICAL_ADDRESS)fadt->XFirmwareCtrl;
   }
   if (facs_phys == 0) {
@@ -659,11 +659,20 @@ EFI_STATUS GuAcpiInstallShadowFacs(
     Info->shadow_facs_phys = shadow_facs_phys;
   Info->trampoline_phys = trampoline_phys;
 
-  /* 4. Update FADT to point to Shadow FACS in low memory */
+  /* 4. Split-FACS FADT Update: FirmwareCtrl (32-bit Real FACS for BIOS) vs XFirmwareCtrl (64-bit Shadow FACS for OS) */
   EFI_ACPI_2_0_FIXED_ACPI_DESCRIPTION_TABLE *fadt = Info->fadt;
-  fadt->FirmwareCtrl = (UINT32)shadow_facs_phys;
-  if (fadt->Header.Length > 132 && fadt->XFirmwareCtrl != 0) {
+  UINT32 orig_fw_ctrl = fadt->FirmwareCtrl;
+  UINT64 orig_xfw_ctrl = (fadt->Header.Length >= 140) ? fadt->XFirmwareCtrl : 0;
+  GuLog("S3 FADT Pre-Patch: Length=%u FirmwareCtrl=%#08x XFirmwareCtrl=%#llx\n",
+        (unsigned)fadt->Header.Length, (unsigned)orig_fw_ctrl, (unsigned long long)orig_xfw_ctrl);
+
+  if (fadt->Header.Length >= 140) {
+    /* ACPI 2.0+ Split-FACS: BIOS uses 32-bit FirmwareCtrl (Real FACS -> Trampoline), OS uses 64-bit XFirmwareCtrl (Shadow FACS) */
+    fadt->FirmwareCtrl = (UINT32)Info->real_facs_phys;
     fadt->XFirmwareCtrl = (UINT64)shadow_facs_phys;
+  } else {
+    /* ACPI 1.0 Fallback: Only 32-bit FirmwareCtrl exists */
+    fadt->FirmwareCtrl = (UINT32)shadow_facs_phys;
   }
 
   /* 5. Recalculate FADT table checksum */
