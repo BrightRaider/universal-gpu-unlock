@@ -18,6 +18,10 @@
 #define GU_ACPI_FADT_SIGNATURE    0x50434146U           /* "FACP" */
 #define GU_ACPI_FACS_SIGNATURE    0x53434146U           /* "FACS" */
 #define GU_SHADOW_FACS_SIGNATURE  0x53554753U           /* "SGUS" */
+#define GU_TRAMP_TELEMETRY_MAGIC  0x53335F54U           /* "S3_T" */
+#define GU_TRAMP_ENTRY_STATUS     0xAA01U
+#define GU_TRAMP_EXIT_STATUS      0xAA02U
+#define GU_TRAMP_FAULT_STATUS     0xDEADU
 
 #pragma pack(push, 1)
 typedef struct {

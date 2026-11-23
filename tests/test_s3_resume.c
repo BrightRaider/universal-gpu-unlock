@@ -263,12 +263,12 @@ static void TestGuAcpiFacsDiscoveryAndPatching(void) {
   /* Install Shadow FACS */
   s = GuAcpiInstallShadowFacs(&mock_st, &ctx, mock_nvs, mock_nvs_phys, mock_low_tramp, mock_low_tramp_phys, &info);
   CHECK(s == EFI_SUCCESS, "GuAcpiInstallShadowFacs must return EFI_SUCCESS");
-  CHECK(info.shadow_facs_phys == mock_nvs_phys + 0x00200, "Shadow FACS physical address must be +0x200");
+  CHECK(info.shadow_facs_phys == mock_low_tramp_phys + 0x00100, "Shadow FACS physical address must be low_tramp + 0x100");
   CHECK(info.trampoline_phys == mock_low_tramp_phys, "Trampoline physical address must be mock_low_tramp_phys (<1MB)");
 
   /* Verify FADT was redirected to Shadow FACS */
-  CHECK(mock_fadt.FirmwareCtrl == (UINT32)(mock_nvs_phys + 0x00200), "FADT FirmwareCtrl must point to Shadow FACS");
-  CHECK(mock_fadt.XFirmwareCtrl == (UINT64)(mock_nvs_phys + 0x00200), "FADT XFirmwareCtrl must point to Shadow FACS");
+  CHECK(mock_fadt.FirmwareCtrl == (UINT32)(mock_low_tramp_phys + 0x00100), "FADT FirmwareCtrl must point to Shadow FACS");
+  CHECK(mock_fadt.XFirmwareCtrl == (UINT64)(mock_low_tramp_phys + 0x00100), "FADT XFirmwareCtrl must point to Shadow FACS");
 
   /* Verify FADT checksum was recalculated and is valid */
   sum = 0;
@@ -285,7 +285,7 @@ static void TestGuAcpiFacsDiscoveryAndPatching(void) {
 
   /* Verify Shadow FACS retains identical signature and hardware signature */
   EFI_ACPI_2_0_FIRMWARE_ACPI_CONTROL_STRUCTURE *shadow_facs =
-      (EFI_ACPI_2_0_FIRMWARE_ACPI_CONTROL_STRUCTURE *)(mock_nvs + 0x00200);
+      (EFI_ACPI_2_0_FIRMWARE_ACPI_CONTROL_STRUCTURE *)(mock_low_tramp + 0x00100);
   CHECK(shadow_facs->Signature == GU_ACPI_FACS_SIGNATURE, "Shadow FACS signature must be 'FACS'");
   CHECK(shadow_facs->HardwareSignature == 0x12345678U, "Shadow FACS hardware signature must match original");
   CHECK(shadow_facs->FirmwareWakingVector == 0, "Shadow FACS FirmwareWakingVector initialized to 0");
@@ -306,44 +306,38 @@ static void TestGuAcpiBuildTrampolineCode(void) {
   fflush(stdout);
 
   UINT8 buffer[4096];
-  EFI_PHYSICAL_ADDRESS tramp_phys = 0x00088000ULL;
+  EFI_PHYSICAL_ADDRESS tramp_phys = 0x0009E000ULL;
   EFI_PHYSICAL_ADDRESS ctx_phys = 0xdc5d8000ULL;
-  EFI_PHYSICAL_ADDRESS shadow_facs_phys = 0xdc5d8200ULL;
+  EFI_PHYSICAL_ADDRESS shadow_facs_phys = 0x0009E100ULL;
 
   UINT32 bytes = GuAcpiBuildTrampolineCode(buffer, sizeof(buffer), tramp_phys, ctx_phys, shadow_facs_phys);
   CHECK(bytes > 0, "Trampoline builder must generate non-zero bytes");
-  CHECK(bytes <= 1024, "Trampoline code must fit within 1024 bytes");
+  CHECK(bytes <= 256, "Pure 16-bit real mode trampoline must fit within 256 bytes");
 
   /* 1. Check Preamble: cli, cld */
   CHECK(buffer[0] == 0xFA, "Preamble must start with CLI (0xFA)");
   CHECK(buffer[1] == 0xFC, "Preamble must have CLD (0xFC)");
 
-  /* 2. Check GDT Descriptor at +0x040 */
-  UINT16 gdt_limit = *(UINT16 *)(buffer + 0x040);
-  UINT32 gdt_base = *(UINT32 *)(buffer + 0x042);
-  CHECK(gdt_limit == 39, "GDT limit must be 39 (5 descriptors * 8 bytes - 1)");
-  CHECK(gdt_base == (UINT32)tramp_phys + 0x050, "GDT base must point to +0x050");
+  /* 2. Check Segment Setup & Stack Save */
+  CHECK(buffer[2] == 0x8C && buffer[3] == 0xC8, "mov ax, cs");
+  CHECK(buffer[4] == 0x8E && buffer[5] == 0xD8, "mov ds, ax");
+  CHECK(buffer[6] == 0x89 && buffer[7] == 0x26 && buffer[8] == 0x34 && buffer[9] == 0x00, "mov [0x0034], sp");
+  CHECK(buffer[10] == 0x8C && buffer[11] == 0x16 && buffer[12] == 0x36 && buffer[13] == 0x00, "mov [0x0036], ss");
 
-  /* 3. Check GDT Table at +0x050 */
-  UINT64 *gdt = (UINT64 *)(buffer + 0x050);
-  CHECK(gdt[0] == 0ULL, "GDT[0] must be NULL descriptor");
-  CHECK(gdt[1] == 0x00CF9A000000FFFFULL, "GDT[1] must be 32-bit Code (0x08)");
-  CHECK(gdt[2] == 0x00CF92000000FFFFULL, "GDT[2] must be 32-bit Data (0x10)");
-  CHECK(gdt[3] == 0x000092000000FFFFULL, "GDT[3] must be 16-bit Data (0x18)");
+  /* 3. Check Telemetry Magic: mov dword [0x004C], 0x53335F54 */
+  CHECK(buffer[14] == 0x66 && buffer[15] == 0xC7 && buffer[16] == 0x06 && buffer[17] == 0x4C && buffer[18] == 0x00, "telemetry magic mov");
+  CHECK(buffer[19] == 0x54 && buffer[20] == 0x5F && buffer[21] == 0x33 && buffer[22] == 0x53, "telemetry magic S3_T");
 
-  /* Check 16-bit Code Descriptor (Selector 0x20): Base must be tramp_phys */
-  UINT32 desc4_base = (UINT32)(((gdt[4] >> 16) & 0xFFFFULL) | (((gdt[4] >> 32) & 0xFFULL) << 16) | (((gdt[4] >> 56) & 0xFFULL) << 24));
-  CHECK(desc4_base == (UINT32)tramp_phys, "GDT[4] base must match TrampolinePhys");
+  /* 4. Check Entry Checkpoint: mov word [0x0040], 0xAA01 */
+  CHECK(buffer[23] == 0xC7 && buffer[24] == 0x06 && buffer[25] == 0x40 && buffer[26] == 0x00, "entry checkpoint mov");
+  CHECK(buffer[27] == 0x01 && buffer[28] == 0xAA, "entry checkpoint 0xAA01");
 
-  /* 4. Check 16-bit Protected Mode stub at +0x220 */
-  CHECK(buffer[0x220] == 0x0F && buffer[0x221] == 0x20 && buffer[0x222] == 0xC0, "PM stub: mov eax, cr0");
-  CHECK(buffer[0x223] == 0x24 && buffer[0x224] == 0xFE, "PM stub: and al, 0xFE");
-  CHECK(buffer[0x225] == 0x0F && buffer[0x226] == 0x22 && buffer[0x227] == 0xC0, "PM stub: mov cr0, eax");
+  /* 5. Check Vector Reads: Shadow FACS 32-bit vector at [0x010C], 64-bit at [0x0118] */
+  CHECK(buffer[29] == 0xA1 && buffer[30] == 0x0C && buffer[31] == 0x01, "mov ax, [0x010C]");
 
-  /* 5. Check 16-bit Real Mode Return stub at +0x240 */
-  /* ljmp cs:[0x30] (0x2E, 0xFF, 0x2E, 0x30, 0x00) */
+  /* 6. Check ljmp cs:[0x30] (0x2E, 0xFF, 0x2E, 0x30, 0x00) */
   BOOLEAN found_ljmp_indirect = FALSE;
-  for (UINT32 i = 0x240; i < bytes - 4; i++) {
+  for (UINT32 i = 0; i < bytes - 4; i++) {
     if (buffer[i] == 0x2E && buffer[i+1] == 0xFF && buffer[i+2] == 0x2E && buffer[i+3] == 0x30 && buffer[i+4] == 0x00) {
       found_ljmp_indirect = TRUE;
       break;

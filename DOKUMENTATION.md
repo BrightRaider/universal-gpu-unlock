@@ -1,7 +1,7 @@
 # Technische Dokumentation: Universal GPU Unlock (Multi-Gen)
 
 > **Tool:** Universal GPU Unlock  
-> **Version:** v1.8.34  
+> **Version:** v1.8.35  
 > **Architekturen:** NVIDIA Ada Lovelace (RTX 40), Ampere (RTX 30), Turing (RTX 20 / CMP)  
 > **Unterstützte Betriebssysteme:** Windows 10, Windows 11, WSL2 / Ubuntu CUDA Container  
 
@@ -335,3 +335,17 @@ In **v1.8.34** habe ich die Architektur umfassend überarbeitet und perfektionie
    Die Shadow FACS wird in `Reserved[0..3]` mit der Signatur `GU_SHADOW_FACS_SIGNATURE` (`0x53554753U` "SGUS") markiert und speichert die echte `RealFACS`-Adresse in `Reserved[4..11]`. Bei einem Warmstart oder Reset erkennt der Loader die bestehende Shadow FACS und stellt die originale Firmware-FACS wieder her, anstatt Schattenstrukturen rekursiv zu verschachteln.
 6. **Erzwingung des 32-Bit Wake Vectors:**
    Bit 1 in den FACS-`Flags` (64-Bit Wake Supported) sowie `XFirmwareWakingVector` werden in beiden FACS-Tabellen genullt, sodass Windows ACPI garantiert den 32-Bit Real-Mode Waking Vector verwendet.
+
+### 13.4 Die v1.8.35 Lösung: Reines 16-Bit Real-Mode Passthrough & Low-Memory Shadow FACS (0x9E100)
+1. **Ursachenanalyse des schwarzen Bildschirms in v1.8.34:**
+   Forensische Tests ergaben, dass beim Aufwachen aus S3 die diskrete GPU auf Bus 45 (PCIe-Slot 1) noch gar nicht durch den Windows-PCI-Treiber (`pci.sys`) link-trainiert und deren Root-Port-Bridge noch nicht konfiguriert ist. Wenn das Trampolin im Protected Mode versucht, über `0xFB8403C0` auf GPU BAR0 zuzugreifen, friert die CPU in einem unkorrigierbaren PCIe-Bus-Stall (Master Abort / Machine Check) ein.
+2. **Reines 16-Bit Real-Mode Trampolin ohne MMIO:**
+   In v1.8.35 führt das Trampolin während der Firmware-Aufwachphase **keinerlei riskante GPU-MMIO-Zugriffe** mehr aus. Es verbleibt zu 100 % im 16-Bit Real Mode (kein GDT, kein CR0.PE-Umschalten, kein Risiko von Triple Faults).
+3. **Co-Located Shadow FACS im Low Memory (`0x9E100`):**
+   Die Shadow FACS (64 Bytes) wird direkt in derselben Low-Memory-NVS-Page bei `+0x100` (z. B. `0x0009E100`) platziert, 256-Byte-aligned. Das 16-Bit-Trampolin liest den Waking Vector direkt aus dem gleichen Segment (`DS:[0x010C]` bzw. `DS:[0x0118]`).
+4. **4-Stufen-Waking-Vector-Resolution mit sicherem Fallback:**
+   Liest der Reihe nach (1) Shadow FACS 32-Bit Vector (`[0x10C]`), (2) Shadow FACS 64-Bit Vector (`[0x118]`), (3) Backup Real FACS 32-Bit Vector (`[0x180]`), (4) Backup Real FACS 64-Bit Vector (`[0x188]`). Ist kein Vektor vorhanden, stoppt die CPU sicher via `cli; hlt` mit Telemetrie `0xDEAD`, statt auf Adresse 0 abzustürzen.
+5. **Präzise Segment:Offset-Umrechnung & Telemetrie:**
+   Berechnet `Offset = AX & 0x0F`, `Segment = (AX >> 4) | (DX << 12)`, stellt den BIOS-Stack wieder her und springt via `jmp far ptr cs:[0x30]` direkt in Windows `HalpRMStub`. Windows wacht verzögerungsfrei auf, initialisiert die Monitore und den Desktop ohne Black Screen.
+6. **Hardware-Telemetrie bei jedem Warmstart:**
+   Hinterlässt Telemetrie-Checkpoints (`0xAA01` Entry, Vektor, Segment:Offset, `0xAA02` Jump) bei `0x0040..0x004A`, die vom DXE-Treiber beim nächsten Boot automatisch ausgelesen und in `RUN*.TXT` protokolliert werden.

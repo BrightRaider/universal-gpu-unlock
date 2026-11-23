@@ -6,6 +6,18 @@ For packaged binaries and downloads, visit [GitHub Releases](https://github.com/
 
 ---
 
+## [v1.8.35] - 2026-11-23
+### Fixed
+- **Pure 16-Bit Real-Mode S3 Resume Trampoline & Co-Located Low-Memory Shadow FACS (addresses #19):**
+  - **Eliminated Black Screen on S3 Wake:** Forensic analysis of S3 resume on AMD X570 / AM4 revealed that during the S3 wake phase, the discrete GPU on Bus 45 (PCIe slot 1) has not yet been link-trained by the OS, and downstream endpoint BARs (`0xFB000000`) are not decoded by uninitialized root port bridges. In v1.8.34, the trampoline attempted 32-bit protected mode MMIO reads and writes to `0xFB8403C0`, causing the CPU to hang indefinitely waiting for PCIe link completions and resulting in black screens. In v1.8.35, the trampoline is completely streamlined into a pure 16-bit real-mode passthrough routine (<180 bytes) that never touches the uninitialized PCIe bus or GPU MMIO during the critical firmware resume window.
+  - **Co-Located Low-Memory (<1MB) Shadow FACS (`0x9E100`):** In v1.8.34, Shadow FACS was allocated in high memory (`0xDC638200`), necessitating a mode switch from 16-bit real mode into 32-bit flat protected mode and back to read the waking vector. In v1.8.35, Shadow FACS is placed directly in the low ACPI NVS page at offset `+0x100` (e.g. `0x0009E100`), perfectly 256-byte aligned per ACPI specification. The 16-bit trampoline directly reads the waking vector from `DS:[0x010C]` and `DS:[0x0118]` without requiring any GDT descriptor reloading, CR0 control register toggling, or protected mode switches.
+  - **Quadruple-Tier Vector Resolution & Safe Fallback:** The trampoline resolves the OS waking vector across four successive tiers: (1) Shadow FACS 32-bit vector at `[0x010C]`, (2) Shadow FACS 64-bit vector at `[0x0118]`, (3) Backup Real FACS 32-bit vector mirrored at `[0x0180]`, and (4) Backup Real FACS 64-bit vector mirrored at `[0x0188]`. If no vector is found, the CPU safely executes `cli; hlt` and sets telemetry error `0xDEAD` instead of jumping to null address `0000:0000`.
+  - **Exact Real-Mode Segment:Offset Conversion:** Implemented mathematical linear-to-real-mode addressing: `Offset = AX & 0x0F`, `Segment = (AX >> 4) | (DX << 12)`. Preserves and restores the exact firmware BIOS stack (`SS:SP`), zeroes general-purpose registers (`EAX`..`EBP`), and executes an indirect far jump `jmp far ptr cs:[0x30]` directly to Windows `HalpRMStub`.
+  - **Pre-Boot Trampoline Telemetry Checkpoints:** Staged persistent telemetry magic `0x53335F54` ('S3_T') at `[0x4C]`, entry status `0xAA01` at `[0x40]`, resolved vector and segment:offset at `[0x44]..[0x4A]`, and exit status `0xAA02` at `[0x42]`. Upon any warm reboot, `GuAcpiInstallShadowFacs` detects prior wake telemetry and logs the exact execution path into `RUN*.TXT`.
+  - **Host Unit Tests Passing:** Updated `tests/test_s3_resume.c` (76/76 checks passing under MSVC, `MSVC_HOST_TESTS=PASS`).
+
+---
+
 ## [v1.8.34] - 2026-11-22
 ### Fixed
 - **Low-Memory (<1MB) ACPI S3 Resume Trampoline (addresses #19):**
