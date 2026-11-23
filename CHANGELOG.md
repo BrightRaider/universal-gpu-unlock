@@ -6,6 +6,31 @@ For packaged binaries and downloads, visit [GitHub Releases](https://github.com/
 
 ---
 
+## [v1.8.47] - 2026-11-23
+### Added & Fixed
+- **32-Bit Flat-Mode Temporärer BAR0 MMIO Hardware-Unlock über S3 Wake (addresses #19):**
+  - **Reorganisation des Low-Memory-Trampolins (< 1 MB) für kollisionsfreie Code-Ausführung:**
+    - Durch die vollständige BAR0-MMIO-Unlock-Logik wuchs der Maschinencode auf 791 Bytes (`0x0317`).
+    - Das Layout der 4-KB-Low-Trampolin-Seite (`0x0009E000`) wurde sauber modularisiert:
+      - `+0x0000 .. +0x03FF`: 1024 Bytes reiner Maschinencode-Bereich (233 Bytes Sicherheitsabstand vor GDT).
+      - `+0x0400 .. +0x0437`: `RM_IDTR` (`+0x0400`), `PM_GDTR` (`+0x0408`), 5 GDT-Deskriptoren (`+0x0410`).
+      - `+0x0500 .. +0x057F`: Telemetrie- und EBS-Sandwich-Diagnoseblock (`0x0500` Far Jump Target, `0x0504` RealRSDP Lower 32, `0x0508` EBS Call Counters, `0x0510` Entry `0xAA01`, `0x0512` Exit `0xAA02`, `0x0514` Captured Vector, `0x051C` Magic `'S3_T'`, `0x0520` Probe Addrs, `0x0540` Raw Results, `0x0560` Post-Arm Results, `0x0570`/`0x0572` Saved SP/SS).
+      - `+0x0580 .. +0x058F`: Real FACS Original Vector Backup Mirror (`+0x0580` 32-Bit, `+0x0588` 64-Bit).
+  - **S3-Wake Hardware Rate-Limiter Unlock über temporäres BAR0-Fenster:**
+    - Da GPU BAR0 (`0x802D0010`) beim S3-Wake noch `0x00000000` ist, aktiviert das Trampolin im 32-Bit Flat Mode temporär das Memory Window (`0xFC00FB00`) und MSE (`bit 1`) im Upstream Root Port (`0x80001904`).
+    - Weist GPU BAR0 temporär `0xFB000000` zu und aktiviert MSE im GPU Command Register (`0x802D0004`).
+    - Verifiziert PMC Boot0 / Chip ID (`0x192000a1` bei AD102) gegen Master Abort / Faults.
+    - Führt die bewährten Hardware-Rate-Limiter-Unlock-Schritte aus (`SS0 = 0x88888888`, `SS1 = 0x00000008`) und liest `SS0`, `SS1`, `Readout1` (`0x00000000`), `PLM` (`0xFFFFFFFF`) vor und nach dem Unlock aus.
+    - Schreibt Vorher-/Nachher-Werte, Status (`1` = Success) und Magic `0x554E4C4B` (`'UNLK'`) in die Non-NVS-Telemetrie (`telemetry_phys + 0x80..0xBC`).
+  - **100 % Sauberer PCI-Teardown vor Betriebssystem-Übergabe:**
+    - GPU Command Register, GPU BAR0 und Root Port Command Register werden vor dem Rücksprung an Windows `HalpRMStub` exakt auf ihre ursprünglichen Pre-Trampoline-Werte (`0x00000000`) zurückgesetzt.
+    - Dadurch findet Windows `pci.sys` beim Resume die exakten Ausgangs-Deskriptoren vor – garantiert frei von PCIe-Konflikten oder Enumeration-Errors.
+  - **Host-Tests & Verifikation:**
+    - 8.811 Checks in 10 Test-Suites grün (`MSVC_HOST_TESTS=PASS`).
+    - Strikte Sicherheitsgrenzen: 0 CMOS/RTC-Mutation, 0 SEC2-Mutation, `OspmFlags = 0`.
+
+---
+
 ## [v1.8.46c] - 2026-11-23
 ### Added & Fixed
 - **Dedizierte Non-NVS Telemetrie-Seite zur Umgehung von `nt!HalpRestoreNvsArea` (addresses #19):**

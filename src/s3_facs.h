@@ -25,25 +25,49 @@
 #define GU_TRAMP_EXIT_STATUS      0xAA02U
 #define GU_TRAMP_FAULT_STATUS     0xDEADU
 
-/* Telemetry and Table Offsets within Low Trampoline Memory (<1MB) */
-#define GU_TRAMP_FAR_JUMP_OFF          0x0300U
-#define GU_TRAMP_RESTORED_COUNT_OFF    0x0300U
-#define GU_TRAMP_S3_SAVE_COUNT_OFF     0x0302U
-#define GU_TRAMP_RESTORED_RSDP_OFF     0x0304U
-#define GU_TRAMP_EBS_CALL_COUNT_OFF    0x0308U
-#define GU_TRAMP_EBS_SUCCESS_COUNT_OFF 0x030AU
-#define GU_TRAMP_EBS_LAST_STATUS_OFF   0x030CU
-#define GU_TRAMP_ENTRY_STATUS_OFF      0x0310U
-#define GU_TRAMP_EXIT_STATUS_OFF       0x0312U
-#define GU_TRAMP_CAPTURED_VEC_OFF      0x0314U
-#define GU_TRAMP_TARGET_PTR_OFF        0x0318U
-#define GU_TRAMP_MAGIC_OFF             0x031CU
-#define GU_TRAMP_PCI_PROBE_ADDRS_OFF   0x0320U
-#define GU_TRAMP_PCI_PROBE_RAW_OFF     0x0340U
-#define GU_TRAMP_PCI_PROBE_POST_OFF    0x0360U
-#define GU_TRAMP_BIOS_SP_OFF           0x0370U
-#define GU_TRAMP_BIOS_SS_OFF           0x0372U
-#define GU_TRAMP_REAL_FACS_MIRROR_OFF  0x0280U
+/* Telemetry and Table Offsets within Low Trampoline Memory (<1MB) (v1.8.47: 0x0500..0x058F) */
+#define GU_TRAMP_FAR_JUMP_OFF          0x0500U
+#define GU_TRAMP_RESTORED_COUNT_OFF    0x0500U
+#define GU_TRAMP_S3_SAVE_COUNT_OFF     0x0502U
+#define GU_TRAMP_RESTORED_RSDP_OFF     0x0504U
+#define GU_TRAMP_EBS_CALL_COUNT_OFF    0x0508U
+#define GU_TRAMP_EBS_SUCCESS_COUNT_OFF 0x050AU
+#define GU_TRAMP_EBS_LAST_STATUS_OFF   0x050CU
+#define GU_TRAMP_ENTRY_STATUS_OFF      0x0510U
+#define GU_TRAMP_EXIT_STATUS_OFF       0x0512U
+#define GU_TRAMP_CAPTURED_VEC_OFF      0x0514U
+#define GU_TRAMP_TARGET_PTR_OFF        0x0518U
+#define GU_TRAMP_MAGIC_OFF             0x051CU
+#define GU_TRAMP_PCI_PROBE_ADDRS_OFF   0x0520U
+#define GU_TRAMP_PCI_PROBE_RAW_OFF     0x0540U
+#define GU_TRAMP_PCI_PROBE_POST_OFF    0x0560U
+#define GU_TRAMP_BIOS_SP_OFF           0x0570U
+#define GU_TRAMP_BIOS_SS_OFF           0x0572U
+#define GU_TRAMP_REAL_FACS_MIRROR_OFF  0x0580U
+
+/* GDT & IDTR Offsets within Low Trampoline Memory (<1MB) (v1.8.47) */
+#define GU_TRAMP_RM_IDTR_OFF           0x0400U
+#define GU_TRAMP_PM_GDTR_OFF           0x0408U
+#define GU_TRAMP_GDT_BASE_OFF          0x0410U
+
+/* S3 Wake Hardware Unlock Telemetry Offsets within Non-NVS Telemetry Page (v1.8.47) */
+#define GU_TELEM_UNLOCK_MAGIC          0x554E4C4BU /* "UNLK" */
+#define GU_TELEM_UNLOCK_MAGIC_OFF      0x0080U /* "UNLK" (0x554E4C4B) */
+#define GU_TELEM_UNLOCK_STATUS_OFF     0x0084U /* 1=OK, 2=Mismatch, 3=Fault */
+#define GU_TELEM_CHIP_ID_OFF           0x0088U /* e.g. 0x192000a1 (AD102) */
+#define GU_TELEM_BAR0_ASSIGNED_OFF     0x008CU /* e.g. 0xFB000000 */
+#define GU_TELEM_SS0_BEFORE_OFF        0x0090U /* SS0 before unlock */
+#define GU_TELEM_SS1_BEFORE_OFF        0x0094U /* SS1 before unlock */
+#define GU_TELEM_PLM_BEFORE_OFF        0x0098U /* PLM before unlock */
+#define GU_TELEM_READOUT_BEFORE_OFF    0x009CU /* Readout1 before unlock */
+#define GU_TELEM_SS0_AFTER_OFF         0x00A0U /* SS0 after unlock (0x88888888) */
+#define GU_TELEM_SS1_AFTER_OFF         0x00A4U /* SS1 after unlock (0x00000008) */
+#define GU_TELEM_READOUT_AFTER_OFF     0x00A8U /* Readout1 after unlock (0x00000000) */
+#define GU_TELEM_PLM_AFTER_OFF         0x00ACU /* PLM after unlock */
+#define GU_TELEM_RP_CMD_BEFORE_OFF     0x00B0U /* Root Port Command before */
+#define GU_TELEM_RP_MEM_BEFORE_OFF     0x00B4U /* Root Port MemBase/Limit before */
+#define GU_TELEM_GPU_CMD_BEFORE_OFF    0x00B8U /* GPU Command before */
+#define GU_TELEM_GPU_BAR0_BEFORE_OFF   0x00BCU /* GPU BAR0 before */
 
 /* Dedicated High (>1MB, <4GB) ACPI NVS Page Offsets for Shadow Tables */
 #define GU_HIGH_SHADOW_RSDP_OFF        0x0000U
@@ -139,6 +163,7 @@ UINT32 GuAcpiBuildTrampolineCode(
     IN EFI_PHYSICAL_ADDRESS ContextPhys,
     IN EFI_PHYSICAL_ADDRESS ShadowFacsPhys,
     IN EFI_PHYSICAL_ADDRESS TelemetryPhys,
+    IN EFI_PHYSICAL_ADDRESS GpuBar0Phys,
     IN UINT32 RootPortLinkReg,
     IN UINT32 GpuPmcsrReg
 );

@@ -1,7 +1,7 @@
 # Technische Dokumentation: Universal GPU Unlock (Multi-Gen)
 
 > **Tool:** Universal GPU Unlock  
-> **Version:** v1.8.46c  
+> **Version:** v1.8.47  
 > **Architekturen:** NVIDIA Ada Lovelace (RTX 40), Ampere (RTX 30), Turing (RTX 20 / CMP)  
 > **Unterstützte Betriebssysteme:** Windows 10, Windows 11, WSL2 / Ubuntu CUDA Container  
 
@@ -757,6 +757,87 @@ In **v1.8.34** habe ich die Architektur umfassend überarbeitet und perfektionie
    - Maschinencode-Größe: 420 Bytes (512-Byte-Limit eingehalten).
    - Alle 8.435 Checks in 10 MSVC-Host-Test-Suites erfolgreich bestanden (`MSVC_HOST_TESTS=PASS`).
    - Strikte Sicherheitsgrenzen: 0 MMIO-Writes, 0 SEC2-Unlock, 0 CMOS-Mutation, `OspmFlags = 0`.
+
+---
+
+### 13.19 Die v1.8.47 Architektur: 32-Bit Flat-Mode Temporärer BAR0 MMIO Hardware-Unlock über S3 Wake
+
+1. **Ausgangslage und forensische Erkenntnisse aus v1.8.46c:**
+   - Die dedizierte Non-NVS-Telemetrieseite (`0xd8261000`) in v1.8.46c bewies zweifelsfrei das fehlerfreie Durchlaufen der 16->32->16-Bit-Brücke beim echten S3-Wake (1603 ms, Marker `0x324B4F21`, Checkpoints `0xAA01` und `0xAA02`, `WakingVector = 0x00001000`, BIOS `SS = 0x0030`, `SP = 0x91B8`).
+   - Die Pre-OS-PCIe-Hardware-Telemetrie bestätigte, dass die GPU (`10DE:2684`, Bus `0x2D:0:0`) beim S3-Wake im D0-Zustand steht, ihr `BAR0` jedoch noch auf `0x00000000` initialisiert ist und Memory Space Enable (`MSE`) im GPU Command Register gelöscht ist.
+   - Da der S3-Wake im 16-Bit Real Mode beginnt und der AMI Aptio V Firmware-Waking-Vector nach `0x9E000` springt, kann im 32-Bit Flat Protected Mode temporär ein freies BAR0-Fenster zugewiesen werden, um den Hardware-Rate-Limiter vor der Übergabe an Windows `HalpRMStub` direkt freizuschalten.
+
+2. **Reorganisation der 4-KB-Low-Trampolin-Speicherseite (Kollisionsfreies Layout):**
+   - Durch das Hinzufügen der vollständigen BAR0-MMIO-Unlock-Logik wuchs die Maschinencodegröße von 420 Bytes auf 791 Bytes (`0x0317`). Um jegliche Kollision mit Datentabellen und EBS-Zählern auszuschließen, wurde die Low-Memory-Seite (`0x0009E000`) sauber modularisiert:
+     - `+0x0000 .. +0x03FF` (1024 Bytes): Ausführbarer Maschinencode (791 Bytes belegt, 233 Bytes Puffer).
+     - `+0x0400 .. +0x0437` (56 Bytes): `RM_IDTR` (`+0x0400`), `PM_GDTR` (`+0x0408`), 5 GDT-Deskriptoren (`+0x0410`).
+     - `+0x0438 .. +0x04FF` (200 Bytes): Null-Initialisierter Schutzbereich.
+     - `+0x0500 .. +0x057F` (128 Bytes): Telemetrie- und EBS-Sandwich-Diagnoseblock (`0x0500` Far Jump Target, `0x0504` RealRSDP Lower 32, `0x0508` EBS Call Counters, `0x0510` Entry `0xAA01`, `0x0512` Exit `0xAA02`, `0x0514` Captured Vector, `0x051C` Magic `'S3_T'`, `0x0520` Probe Addrs, `0x0540` Raw Results, `0x0560` Post-Arm Results, `0x0570`/`0x0572` Saved SP/SS).
+     - `+0x0580 .. +0x058F` (16 Bytes): Real FACS Original Vector Backup Mirror (32-Bit bei `+0x0580`, 64-Bit bei `+0x0588`).
+     - `+0x0590 .. +0x0FFF` (2672 Bytes): Null-Initialisierter Schutzbereich.
+
+3. **Ablauf des S3-Wake Hardware-Unlocks im 32-Bit Flat Protected Mode:**
+   - **Schritt 1: Root Port Memory Window & MSE aktivieren:**
+     - Liest Root Port Command Register (`0x80001904`), sichert den Originalwert in die Telemetrie (`+0xB0`) und setzt MSE (`bit 1`).
+     - Prüft Root Port Memory Base/Limit (`0x80001920`), sichert den Originalwert (`+0xB4`) und stellt sicher, dass das Fenster `0xFB000000..0xFC000000` geroutet wird (`mov eax, 0xFC00FB00; out dx, eax`).
+   - **Schritt 2: GPU BAR0 & MSE temporär zuweisen:**
+     - Sichert GPU Command Register (`0x802D0004`) nach `+0xB8` und setzt MSE (`bit 1`).
+     - Sichert GPU BAR0 Register (`0x802D0010`) nach `+0xBC` und weist temporär `0xFB000000` zu (`out dx, eax`).
+   - **Schritt 3: Chip-ID & Master-Abort-Prüfung:**
+     - Liest PMC Boot0 / Chip-ID an `BAR0 + 0x000000` und sichert nach `+0x88`.
+     - Prüft auf `0xFFFFFFFF` (PCIe Master Abort) oder `0xBADFxxxx`. Falls fehlerhaft, wird Status `3` geschrieben und direkt zum Teardown gesprungen.
+   - **Schritt 4: Pre-Unlock Status erfassen:**
+     - Liest `SS0` (`+0x82381C`) -> Telemetrie `+0x90`.
+     - Liest `SS1` (`+0x823820`) -> Telemetrie `+0x94`.
+     - Liest `Readout 1` (`+0x823818`) -> Telemetrie `+0x98`.
+     - Liest `PLM` (`+0x823804`) -> Telemetrie `+0x9C`.
+   - **Schritt 5: Hardware Rate-Limiter Unlock-Schreibzugriffe:**
+     - Schreibt `0x88888888` nach `BAR0 + 0x82381C` (`SS0`).
+     - Schreibt `0x00000008` nach `BAR0 + 0x823820` (`SS1`).
+   - **Schritt 6: Post-Unlock Status verifizieren & Telemetrie schreiben:**
+     - Liest `SS0` zurück -> Telemetrie `+0xA0` (Erwartung `0x88888888`).
+     - Liest `SS1` zurück -> Telemetrie `+0xA4` (Erwartung Bits 3:0 == `0x8`).
+     - Liest `Readout 1` zurück -> Telemetrie `+0xA8` (Erwartung `0x00000000` = Full Rate).
+     - Liest `PLM` zurück -> Telemetrie `+0xAC` (Erwartung `0xFFFFFFFF`).
+     - Prüft, ob `SS0 == 0x88888888` und `(SS1 & 0xF) == 0x08`. Bei Erfolg Status = `1`, bei Mismatch Status = `2`.
+     - Schreibt Telemetrie-Magic `0x554E4C4B` (`'UNLK'`) an `+0x80`.
+   - **Schritt 7: 100 % Sauberer PCI-Teardown vor Betriebssystem-Übergabe:**
+     - Schreibt den gesicherten GPU Command-Wert (`0x00000000`) zurück nach `0x802D0004`.
+     - Schreibt den gesicherten GPU BAR0-Wert (`0x00000000`) zurück nach `0x802D0010`.
+     - Schreibt den gesicherten Root Port Command-Wert zurück nach `0x80001904`.
+     - Dadurch findet Windows `pci.sys` beim Resume exakt den erwarteten, unkonfigurierten Ausgangszustand vor und initialisiert PCIe ohne Ressourcen- oder Adressraumkonflikte.
+   - **Schritt 8: Rückkehr in den 16-Bit Real Mode:**
+     - Segment-Selektoren auf 16-Bit PM (`CS=0x0018`, `DS/ES/FS/GS/SS=0x0020`) wechseln.
+     - `CR0.PE` löschen (`and al, 0xFE; mov cr0, eax`).
+     - Far Jump nach `0x9E00:rm_exit`.
+     - Real-Mode-Segmente (`DS=CS`, `ES=CS`), BIOS `SS` und `SP` von `+0x0572`/`+0x0570` wiederherstellen.
+     - Allgemeine Register (`EAX..EBP`) nullen und Far Jump zu Windows `HalpRMStub` (`0x00001000`) ausführen.
+
+4. **Struktur der erweiterten Non-NVS Telemetrie (`telemetry_phys + 0x80..0xBC`):**
+   | Offset | Name | Bedeutung / Erwarteter Wert |
+   | :---: | :--- | :--- |
+   | `+0x80` | `Magic` | `0x554E4C4B` (`'UNLK'`) |
+   | `+0x84` | `Status` | `1` = Success, `2` = Mismatch, `3` = Fault/Bad Chip |
+   | `+0x88` | `ChipID` | GPU Chip ID (`0x192000a1` bei AD102) |
+   | `+0x8C` | `AssignedBAR0` | Temporär zugewiesenes BAR0-Fenster (`0xFB000000`) |
+   | `+0x90` | `SS0_Before` | SS0-Wert vor dem Unlock |
+   | `+0x94` | `SS1_Before` | SS1-Wert vor dem Unlock |
+   | `+0x98` | `Readout1_Before` | SM Speed Status vor dem Unlock |
+   | `+0x9C` | `PLM_Before` | Permission Mask vor dem Unlock |
+   | `+0xA0` | `SS0_After` | SS0-Wert nach dem Unlock (`0x88888888`) |
+   | `+0xA4` | `SS1_After` | SS1-Wert nach dem Unlock (`0x00000008`) |
+   | `+0xA8` | `Readout1_After` | SM Speed Status nach dem Unlock (`0x00000000`) |
+   | `+0xAC` | `PLM_After` | Permission Mask nach dem Unlock (`0xFFFFFFFF`) |
+   | `+0xB0` | `OrigRootPortCmd` | Root Port Command Register vor Trampolin |
+   | `+0xB4` | `OrigRootPortMem` | Root Port Memory Base/Limit vor Trampolin |
+   | `+0xB8` | `OrigGpuCmd` | GPU Command Register vor Trampolin (`0x00000000`) |
+   | `+0xBC` | `OrigGpuBar0` | GPU BAR0 Register vor Trampolin (`0x00000000`) |
+
+5. **Verifikation & Testabdeckung:**
+   - Trampolin-Größe: 791 Bytes (Envelope: 1024 Bytes, 233 Bytes Sicherheitsabstand vor GDT).
+   - Alle 8.811 Checks in 10 Test-Suites grün (`MSVC_HOST_TESTS=PASS`).
+   - Strikte Sicherheitsgrenzen: 0 CMOS/RTC-Mutation, 0 SEC2-Mutation, `OspmFlags = 0`.
+
 
 
 
