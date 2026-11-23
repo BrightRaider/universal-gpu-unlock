@@ -12,13 +12,14 @@ typedef struct {
   VOID *orig_acpi20_vendor_table;
   VOID *orig_acpi10_vendor_table;
   VOID *shadow_rsdp;
+  VOID *low_trampoline;
   EFI_SYSTEM_TABLE *system_table;
   EFI_EXIT_BOOT_SERVICES orig_exit_boot_services;
   BOOLEAN hook_active;
 } GU_ACPI_SHADOW_CHAIN_STATE;
 
 static GU_ACPI_SHADOW_CHAIN_STATE mShadowState = {
-  FALSE, -1, -1, NULL, NULL, NULL, NULL, NULL, FALSE
+  FALSE, -1, -1, NULL, NULL, NULL, NULL, NULL, NULL, FALSE
 };
 
 VOID GuAcpiApplyShadowConfigTable(VOID) {
@@ -50,6 +51,17 @@ EFI_STATUS EFIAPI GuHookedExitBootServices(
     IN UINTN MapKey
 ) {
   /*
+   * Diagnostic counter: record EBS call in LowTrampoline buffer without BootServices calls.
+   * +0x304: EbsCallCount (UINT32)
+   * +0x308: EbsSuccessCount (UINT32)
+   * +0x30C: EbsLastStatus (UINT32)
+   */
+  if (mShadowState.low_trampoline != NULL) {
+    volatile UINT32 *diag = (volatile UINT32 *)((UINT8 *)mShadowState.low_trampoline + 0x304);
+    diag[0]++; /* EbsCallCount at +0x304 */
+  }
+
+  /*
    * PHASE 1 (Sandwich Pre-Call):
    * Revert SystemTable ConfigurationTable to RealRSDP so that firmware drivers,
    * SMM runtime handlers, and BIOS S3 state save observe clean, unmodified ACPI tables!
@@ -63,12 +75,25 @@ EFI_STATUS EFIAPI GuHookedExitBootServices(
     Status = mShadowState.orig_exit_boot_services(ImageHandle, MapKey);
   }
 
+  /* Record post-call diagnostics in LowTrampoline buffer */
+  if (mShadowState.low_trampoline != NULL) {
+    volatile UINT32 *diag = (volatile UINT32 *)((UINT8 *)mShadowState.low_trampoline + 0x304);
+    if (!EFI_ERROR(Status)) {
+      diag[1]++; /* EbsSuccessCount at +0x308 */
+    }
+    diag[2] = (UINT32)Status; /* Last Status at +0x30C */
+  }
+
   /*
    * PHASE 2 (Sandwich Post-Call):
-   * If ExitBootServices returns (for example EFI_INVALID_PARAMETER retry by winload.efi
-   * or late OS loader inspection), immediately re-apply ShadowRSDP!
+   * In v1.8.40b: ONLY re-apply ShadowRSDP if ExitBootServices failed (e.g.
+   * EFI_INVALID_PARAMETER retry by winload.efi after MapKey update).
+   * If Status == EFI_SUCCESS, RealRSDP stays permanently in ConfigurationTable!
+   * Windows winload.efi already captured ShadowRSDP prior to ExitBootServices.
    */
-  GuAcpiApplyShadowConfigTable();
+  if (EFI_ERROR(Status)) {
+    GuAcpiApplyShadowConfigTable();
+  }
 
   return Status;
 }
@@ -982,6 +1007,7 @@ EFI_STATUS GuAcpiInstallShadowFacs(
   mShadowState.orig_acpi10_vendor_table = (Info->config_table_acpi10_idx >= 0) ?
       (VOID *)(UINTN)Info->rsdp : NULL;
   mShadowState.shadow_rsdp = (VOID *)(UINTN)shadow_rsdp_phys;
+  mShadowState.low_trampoline = (VOID *)low_base;
   mShadowState.system_table = SystemTable;
   mShadowState.orig_exit_boot_services = NULL;
   mShadowState.hook_active = FALSE;

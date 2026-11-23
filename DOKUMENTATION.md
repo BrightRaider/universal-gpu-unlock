@@ -1,7 +1,7 @@
 # Technische Dokumentation: Universal GPU Unlock (Multi-Gen)
 
 > **Tool:** Universal GPU Unlock  
-> **Version:** v1.8.39  
+> **Version:** v1.8.40b  
 > **Architekturen:** NVIDIA Ada Lovelace (RTX 40), Ampere (RTX 30), Turing (RTX 20 / CMP)  
 > **Unterstützte Betriebssysteme:** Windows 10, Windows 11, WSL2 / Ubuntu CUDA Container  
 
@@ -419,3 +419,34 @@ In **v1.8.34** habe ich die Architektur umfassend überarbeitet und perfektionie
 
 5. **Host-Test Suite:**
    Alle 137 Tests in 10 Test-Suites bestanden (`MSVC_HOST_TESTS=PASS`).
+
+---
+
+### 13.10 Die v1.8.40b Optimierung: EBS-Sandwich Bedingter Retry & Low-Trampoline Diagnose-Zähler
+1. **Live-Kernel-Forensik zu `HalpSetupRealModeResume` (Windows 64-Bit):**
+   - Disassemblierung von `nt!HalpSetupRealModeResume` in `ntoskrnl.exe` via `kdX64.exe -kl` bewies:
+     Windows 64-Bit schreibt beim Einschlafen ausschließlich ein 32-Bit Dword `0x00001000` (`HalpLowStubPhysicalAddress`) in `[nt!HalpWakeVector]` (`ShadowFACS + 0x0C`):
+     ```asm
+     mov rax, qword ptr [nt!HalpWakeVector]
+     mov dword ptr [rax], edx   ; edx = 0x00001000
+     ```
+   - Windows liest, schreibt oder nullt `XFirmwareWakingVector` (`FACS + 0x18`) **nicht**.
+   - Nach EDK2 `S3Resume.c` springt die Firmware bei `XFirmwareWakingVector != 0` im 32-Bit Flat Protected Mode bzw. 64-Bit Long Mode (`AsmTransferControl32`/`64`) ab. Unser 16-Bit Real-Mode-Trampolin gehört daher unverändert exakt an `+0x0C` (`FirmwareWakingVector`).
+
+2. **Bedingte Phase 2 im ExitBootServices-Sandwich-Hook:**
+   - In v1.8.40 hatte Phase 2 `ShadowRSDP` auch bei `Status == EFI_SUCCESS` wieder in `gST->ConfigurationTable` eingetragen. Ein SMM-S3-Sleep-Handler beim Einschlafen sah dadurch erneut `ShadowRSDP -> ShadowXSDT -> ShadowFADT -> ShadowFACS` mit Windows' Vektor `0x00001000`.
+   - In v1.8.40b wird `ShadowRSDP` in Phase 2 **NUR** bei `if (EFI_ERROR(Status))` restauriert (z. B. `EFI_INVALID_PARAMETER`-Retry von `winload.efi`). Bei `EFI_SUCCESS` bleibt `RealRSDP` dauerhaft in `ConfigurationTable` stehen. Windows `winload.efi` hat die Shadow-Tabellen bereits vor `ExitBootServices` eingelesen.
+
+3. **BootServices-freie Diagnose-Zähler im Low-Trampoline-Buffer:**
+   - Direkt im Low-Trampoline-Speicher werden 3 Diagnosewerte ohne BootServices-Aufrufe festgehalten:
+     - `LowTrampoline + 0x304`: `EbsCallCount` (UINT32)
+     - `LowTrampoline + 0x308`: `EbsSuccessCount` (UINT32)
+     - `LowTrampoline + 0x30C`: `EbsLastStatus` (UINT32)
+   - Ermöglicht in Windows den direkten Nachweis via WinDbg (`!dd [c] 9e304 L3`), dass `winload.efi` den Hook erfolgreich durchlaufen hat.
+
+4. **16-Bit Real-Mode Trampolin unverändert:**
+   - Das Trampolin bleibt zu 100 % unverändert (weiterhin kein MMIO, kein SEC2-Unlock, kein CMOS/RTC).
+
+5. **Host-Test Suite:**
+   - Alle 145 Tests in 10 Test-Suites bestanden (`MSVC_HOST_TESTS=PASS`).
+

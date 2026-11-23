@@ -6,6 +6,25 @@ For packaged binaries and downloads, visit [GitHub Releases](https://github.com/
 
 ---
 
+## [v1.8.40b] - 2026-11-23
+### Added & Fixed
+- **Plan C EBS Conditional Retry & Low-Trampoline Diagnostic Counters (addresses #19):**
+  - **Live Kernel Forensics (`nt!HalpSetupRealModeResume`):** Live in-kernel disassembly via `kdX64.exe -kl` proved that the 64-bit Windows kernel (`ntoskrnl.exe`) exclusively writes the 32-bit dword `0x00001000` (`HalpLowStubPhysicalAddress`) to `[nt!HalpWakeVector]` (`ShadowFACS + 0x0C`) using `mov dword ptr [rax], edx`. Windows NEVER touches, sets, or zeroes `XFirmwareWakingVector` (`FACS + 0x18`). Furthermore, EDK2 `S3Resume.c` transitions into 32-bit flat protected mode or 64-bit long mode if `XFirmwareWakingVector != 0` (`AsmTransferControl32`/`64`), meaning our 16-bit real-mode trampoline belongs strictly at `+0x0C` (`FirmwareWakingVector`).
+  - **Conditional Phase 2 in ExitBootServices Sandwich Hook:**
+    - In v1.8.40, Phase 2 unconditionally re-applied `ShadowRSDP` into `gST->ConfigurationTable` even after `Status == EFI_SUCCESS`. Consequently, motherboard SMM sleep handlers inspecting `ConfigurationTable` upon entering S3 sleep were re-exposed to `ShadowRSDP -> ShadowXSDT -> ShadowFADT -> ShadowFACS`, seeing Windows' `0x00001000` vector instead of our trampoline.
+    - In v1.8.40b, Phase 2 is made strictly conditional: `if (EFI_ERROR(Status)) GuAcpiApplyShadowConfigTable();`.
+    - When `ExitBootServices` returns `EFI_SUCCESS`, `RealRSDP` remains in `ConfigurationTable` permanently. Windows `winload.efi` has already captured `ShadowRSDP` prior to calling EBS, while firmware/SMM sleep handlers inspect pristine OEM tables.
+  - **Zero-BootServices Diagnostic Telemetry Counters in Low Trampoline:**
+    - Recorded 3 diagnostic counters into the low trampoline buffer directly without invoking any UEFI Boot Services:
+      - `LowTrampoline + 0x0304`: `EbsCallCount` (UINT32)
+      - `LowTrampoline + 0x0308`: `EbsSuccessCount` (UINT32)
+      - `LowTrampoline + 0x030C`: `EbsLastStatus` (UINT32)
+    - Verifiable live in Windows via WinDbg (`!dd [c] 9e304 L3`).
+  - **16-Bit Real-Mode Trampoline Untouched:** Machine code preserved at 100% byte fidelity (zero MMIO, zero SEC2 unlock, zero CMOS/RTC writes, stack-free).
+  - **Host Verification Suite Passing:** All 145 checks passing across test suites (`MSVC_HOST_TESTS=PASS`).
+
+---
+
 ## [v1.8.40] - 2026-11-23
 ### Added & Fixed
 - **Plan C Complete Shadow ACPI Chain with ExitBootServices Sandwich Hook (addresses #19):**

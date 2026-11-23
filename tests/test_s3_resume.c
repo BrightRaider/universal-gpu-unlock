@@ -188,13 +188,14 @@ static void TestGuS3GuidsAndOpcodes(void) {
 
 static VOID *g_mock_ebs_observed_vendor_table = NULL;
 static EFI_SYSTEM_TABLE mock_st;
+static EFI_STATUS g_mock_ebs_return_status = EFI_SUCCESS;
 
 static EFI_STATUS EFIAPI MockOriginalExitBootServices(EFI_HANDLE ImageHandle, UINTN MapKey) {
   (VOID)ImageHandle; (VOID)MapKey;
   if (mock_st.ConfigurationTable) {
     g_mock_ebs_observed_vendor_table = mock_st.ConfigurationTable[0].VendorTable;
   }
-  return EFI_SUCCESS;
+  return g_mock_ebs_return_status;
 }
 
 static EFI_STATUS EFIAPI MockCalculateCrc32(VOID *Data, UINTN DataSize, UINT32 *Crc32) {
@@ -444,13 +445,30 @@ static void TestGuAcpiFacsDiscoveryAndPatching(void) {
   CHECK(s == EFI_SUCCESS, "GuAcpiInstallEbsHook must return EFI_SUCCESS");
   CHECK(mock_st.BootServices->ExitBootServices != MockOriginalExitBootServices, "EBS pointer must be hooked");
 
-  /* Invoke hooked EBS */
+  /* Invoke hooked EBS with EFI_SUCCESS */
   s = mock_st.BootServices->ExitBootServices((EFI_HANDLE)0x1, 0x1234);
   CHECK(s == EFI_SUCCESS, "Hooked EBS invocation must return EFI_SUCCESS");
   CHECK(g_mock_ebs_observed_vendor_table == &mock_rsdp,
         "Inside EBS sandwich: firmware/SMM must observe Real RSDP in ConfigurationTable");
+  CHECK(mock_st.ConfigurationTable[0].VendorTable == &mock_rsdp,
+        "After successful EBS: ConfigurationTable must remain Real RSDP for SMM/firmware");
+
+  /* Check diagnostic counters at LowTrampoline + 0x304 */
+  UINT32 *ebs_diag = (UINT32 *)(mock_low_tramp + 0x304);
+  CHECK(ebs_diag[0] == 1, "EbsCallCount at +0x304 must be 1");
+  CHECK(ebs_diag[1] == 1, "EbsSuccessCount at +0x308 must be 1");
+  CHECK(ebs_diag[2] == 0, "EbsLastStatus at +0x30C must be 0 (EFI_SUCCESS)");
+
+  /* Test retry behavior when EBS fails (e.g. EFI_INVALID_PARAMETER) */
+  g_mock_ebs_return_status = EFI_INVALID_PARAMETER;
+  s = mock_st.BootServices->ExitBootServices((EFI_HANDLE)0x1, 0x5678);
+  CHECK(s == EFI_INVALID_PARAMETER, "Hooked EBS must pass through error status");
   CHECK(mock_st.ConfigurationTable[0].VendorTable == (VOID *)(UINTN)(mock_low_tramp_phys + 0x00600),
-        "After EBS: ConfigurationTable must be restored to Shadow RSDP for OS bootloader");
+        "After failed EBS: ConfigurationTable must be restored to Shadow RSDP for winload retry");
+  CHECK(ebs_diag[0] == 2, "EbsCallCount at +0x304 must be 2 after retry");
+  CHECK(ebs_diag[1] == 1, "EbsSuccessCount at +0x308 must still be 1 after failed call");
+  CHECK(ebs_diag[2] == (UINT32)EFI_INVALID_PARAMETER, "EbsLastStatus at +0x30C must record EFI_INVALID_PARAMETER");
+  g_mock_ebs_return_status = EFI_SUCCESS;
 
   /* Uninstall EBS Hook */
   GuAcpiUninstallEbsHook(&mock_st);
