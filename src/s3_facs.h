@@ -40,15 +40,13 @@
 #define GU_TRAMP_PCI_PROBE_ADDRS_OFF   0x0320U
 #define GU_TRAMP_PCI_PROBE_RAW_OFF     0x0340U
 #define GU_TRAMP_PCI_PROBE_POST_OFF    0x0360U
-#define GU_TRAMP_RM_IDTR_OFF           0x01B4U
-#define GU_TRAMP_GDT_OFF               0x01C0U
-#define GU_TRAMP_GDTR_OFF              0x01E8U
-#define GU_TRAMP_FARPTR32_OFF          0x01F2U
 #define GU_TRAMP_SHADOW_FACS_OFF       0x0200U
 #define GU_TRAMP_REAL_FACS_MIRROR_OFF  0x0280U
-#define GU_TRAMP_SHADOW_FADT_OFF       0x0400U
-#define GU_TRAMP_SHADOW_RSDP_OFF       0x0600U
-#define GU_TRAMP_SHADOW_XSDT_OFF       0x0640U
+
+/* Dedicated High (>1MB, <4GB) ACPI NVS Page Offsets for Shadow Tables */
+#define GU_HIGH_SHADOW_RSDP_OFF        0x0000U
+#define GU_HIGH_SHADOW_XSDT_OFF        0x0080U
+#define GU_HIGH_SHADOW_FADT_OFF        0x0200U
 
 #pragma pack(push, 1)
 typedef struct {
@@ -71,6 +69,7 @@ typedef struct {
   EFI_ACPI_2_0_FIRMWARE_ACPI_CONTROL_STRUCTURE *real_facs;
   EFI_PHYSICAL_ADDRESS real_facs_phys;
   EFI_PHYSICAL_ADDRESS shadow_facs_phys;
+  EFI_PHYSICAL_ADDRESS high_acpi_phys;
   EFI_PHYSICAL_ADDRESS trampoline_phys;
   INTN config_table_acpi20_idx;
   INTN config_table_acpi10_idx;
@@ -82,6 +81,7 @@ typedef struct {
   UINT8  shadow_rsdp_checksum;
   UINT8  shadow_rsdp_extended_checksum;
   UINT8  shadow_xsdt_checksum;
+  BOOLEAN s3_save_hook_installed;
   BOOLEAN ebs_hook_installed;
 } GU_ACPI_FACS_INFO;
 #pragma pack(pop)
@@ -121,19 +121,18 @@ EFI_STATUS GuAcpiInstallShadowFacs(
  */
 EFI_STATUS GuAcpiInstallEbsHook(IN EFI_SYSTEM_TABLE *SystemTable);
 EFI_STATUS GuAcpiUninstallEbsHook(IN EFI_SYSTEM_TABLE *SystemTable);
-VOID GuAcpiApplyShadowConfigTable(VOID);
-VOID GuAcpiRestoreConfigTable(VOID);
+UINT32 GuAcpiApplyShadowConfigTable(VOID);
+UINT32 GuAcpiRestoreConfigTable(VOID);
 
 /*
  * Assembles the S3 Resume Trampoline machine code into the designated buffer.
- * In v1.8.41: 32-bit Flat Protected Mode Trampoline with exact PM16->RM16 mode transition.
  * Returns the size in bytes of the generated trampoline code.
  */
 UINT32 GuAcpiBuildTrampolineCode(
     OUT UINT8 *Buffer,
     IN UINT32 BufferSize,
     IN EFI_PHYSICAL_ADDRESS TrampolinePhys,
-    IN EFI_PHYSICAL_ADDRESS RealFacsPhys,
+    IN EFI_PHYSICAL_ADDRESS ContextPhys,
     IN EFI_PHYSICAL_ADDRESS ShadowFacsPhys,
     IN UINT32 RootPortLinkReg,
     IN UINT32 GpuPmcsrReg

@@ -6,6 +6,38 @@ For packaged binaries and downloads, visit [GitHub Releases](https://github.com/
 
 ---
 
+## [v1.8.44] - 2026-11-23
+### Added & Fixed
+- **Permanent Closure of 3 ACPI Leak Vectors & Return to Stable 16-Bit Real-Mode S3 Resume Path (addresses #19):**
+  - **Empirical Hardware Discovery & 64-Bit Wake Deadlock Root Cause:**
+    - Testing the 22-byte 0xCF9 diagnostic reset probe (`v1.8.43c-probe`) confirmed that when `OspmFlags |= 0x01` is active, AMI Aptio V hangs inside BIOS PEI code before ever reaching `0x9E000` (no reboot occurred, screen remained black, subsequent boot was Windows Hybrid-Sleep/Hibernate Recovery via `bootmgfw.efi -> winresume.efi` with `Kernel-Boot Event 27, BootType = 0x2`).
+    - The 64-bit wake route (`XFirmwareWakingVector` +0x18) is permanently abandoned. The engine returns cleanly to the stable 16-bit Real Mode path (`RealFACS + 0x0C = LowTrampoline = 0x9E000`) from v1.8.40b.
+  - **LEAK 1 Closed: Relocating `ShadowRSDP`, `ShadowXSDT`, and `ShadowFADT` Out of Sub-1MB Memory:**
+    - Having `ShadowRSDP` (`0x9E600`), `ShadowXSDT` (`0x9E640`), and `ShadowFADT` (`0x9E400`) in the conventional sub-1MB region allowed firmware/SMM EBDA memory scans (`0x80000..0x9FFFF`) to locate `"RSD PTR "`.
+    - Dedicated page in `EfiACPIMemoryNVS` is now allocated via `AllocatePages(AllocateMaxAddress, EfiACPIMemoryNVS, 1, &high_acpi_phys)` with upper limit `0xFFFFFFFF` (> 1 MB, < 4 GB, e.g. `0xDxxxxxxx`).
+    - `ShadowRSDP` (+0x000), `ShadowXSDT` (+0x080), and `ShadowFADT` (+0x200) reside exclusively on this high page.
+    - Only `LowTrampoline` (`0x9E000`), `ShadowFACS` (`0x9E200`), and telemetry (`0x9E300`) remain in sub-1MB memory.
+    - **Guaranteed:** ZERO bytes of `"RSD PTR "` reside in memory below 1 MB!
+  - **LEAK 2 Closed: Dynamic Live GUID Scan & CRC32 Recalculation:**
+    - Replaced cached table indices with dynamic live GUID scans in `GuAcpiApplyShadowConfigTable()` and `GuAcpiRestoreConfigTable()` over all entries `0 .. gST->NumberOfTableEntries - 1`.
+    - Both `gEfiAcpi20TableGuid` and `gEfiAcpi10TableGuid` entries are dynamically matched and synchronized.
+    - `gST->Hdr.CRC32` is recalculated immediately after table updates.
+    - In `GuHookedExitBootServices()`, recorded `RestoredCount` to `LowTrampoline + 0x300` (lower 16 bits), `orig_rsdp` lower 32 bits to `+0x304`, `EbsCallCount`/`EbsSuccessCount` to `+0x308`/`+0x30A`, and `EbsLastStatus` to `+0x30C`.
+  - **LEAK 3 Closed: Sandwich-Hooking `EFI_ACPI_S3_SAVE_PROTOCOL` (EDK2 `AcpiS3SaveDxe`):**
+    - `GuAcpiInstallShadowFacs()` queries `EFI_ACPI_S3_SAVE_PROTOCOL` (`125f2de1-fb85-440c-a54c-4d99358a8d38`).
+    - When present, `AcpiS3Save->S3Save` is wrapped with `GuHookedS3Save`:
+      - **Pre-Call:** Restores `RealRSDP` in `ConfigurationTable` so `AcpiS3SaveDxe` and SMM LockBox capture genuine OEM ACPI tables.
+      - **Post-Call:** Re-applies `ShadowRSDP` so the Windows OS loader continues to see the complete shadow chain.
+    - Call counter logged directly at `LowTrampoline + 0x302` (upper 16 bits of `+0x300`).
+  - **Clean 16-Bit Real-Mode Trampoline & Telemetry Layout:**
+    - Pure 16-bit real-mode machine code (< 380 bytes), stack-free (`SS:SP` preserved at `+0x0304`/`+0x0306`), Checkpoint 1 `0xAA01` at `+0x0310`, Magic `'S3_T'` at `+0x031C`, 8-dword PCIe CF8/CFC recon, mandatory bridge restore, waking vector resolution from `[ShadowFACS + 0x0C]` with ACPI segment:offset conversion, Checkpoint 2 `0xAA02` at `+0x0312`, register zeroing, and direct `jmp far ptr cs:[0x0300]` to Windows `HalpRMStub` (`0100:0000`).
+    - Safety parameters strictly enforced: ZERO BAR0-MMIO, ZERO SEC2-unlock, ZERO CMOS/RTC mutation.
+  - **Validation:**
+    - All MSVC host tests pass cleanly (`MSVC_HOST_TESTS=PASS`).
+    - Authenticode-signed `BOOTX64.EFI` and `AdaUnlockDxe.efi` built and synchronized to USB (`F:\`).
+
+---
+
 ## [v1.8.43b] - 2026-11-23
 ### Added & Fixed
 - **Universal Polyglot Dual-Mode S3 Trampoline: Full Long Mode Teardown (EFER/CR3/CR4), GDT-Shift, & ACPI Flags Restoration (addresses #19):**

@@ -5,45 +5,93 @@
 
 typedef char gu_s3_ctx_size_assert[(sizeof(GU_S3_RESUME_CONTEXT) == 108) ? 1 : -1];
 
+static const EFI_GUID mAcpi20TableGuid = GU_EFI_ACPI_20_TABLE_GUID;
+static const EFI_GUID mAcpi10TableGuid = GU_EFI_ACPI_10_TABLE_GUID;
+
+static inline BOOLEAN GuCompareGuid(const EFI_GUID *g1, const EFI_GUID *g2) {
+  const UINT32 *a = (const UINT32 *)g1;
+  const UINT32 *b = (const UINT32 *)g2;
+  return (a[0] == b[0] && a[1] == b[1] && a[2] == b[2] && a[3] == b[3]);
+}
+
 typedef struct {
   BOOLEAN installed;
-  INTN acpi20_idx;
-  INTN acpi10_idx;
-  VOID *orig_acpi20_vendor_table;
-  VOID *orig_acpi10_vendor_table;
+  VOID *orig_rsdp;
   VOID *shadow_rsdp;
+  VOID *high_acpi_page;
+  EFI_PHYSICAL_ADDRESS high_acpi_phys;
   VOID *low_trampoline;
   EFI_SYSTEM_TABLE *system_table;
   EFI_EXIT_BOOT_SERVICES orig_exit_boot_services;
   BOOLEAN hook_active;
+  EFI_ACPI_S3_SAVE_PROTOCOL *acpi_s3_save_protocol;
+  EFI_ACPI_S3_SAVE orig_s3_save;
+  BOOLEAN s3_save_hook_active;
+  UINT16 s3_save_call_count;
 } GU_ACPI_SHADOW_CHAIN_STATE;
 
 static GU_ACPI_SHADOW_CHAIN_STATE mShadowState = {
-  FALSE, -1, -1, NULL, NULL, NULL, NULL, NULL, NULL, FALSE
+  FALSE, NULL, NULL, NULL, 0, NULL, NULL, NULL, FALSE, NULL, NULL, FALSE, 0
 };
 
-VOID GuAcpiApplyShadowConfigTable(VOID) {
-  if (!mShadowState.installed || !mShadowState.system_table || !mShadowState.shadow_rsdp) return;
-  if (mShadowState.acpi20_idx >= 0 && (UINTN)mShadowState.acpi20_idx < mShadowState.system_table->NumberOfTableEntries) {
-    mShadowState.system_table->ConfigurationTable[mShadowState.acpi20_idx].VendorTable = mShadowState.shadow_rsdp;
+UINT32 GuAcpiApplyShadowConfigTable(VOID) {
+  if (!mShadowState.installed || !mShadowState.system_table || !mShadowState.shadow_rsdp) return 0;
+  EFI_SYSTEM_TABLE *st = mShadowState.system_table;
+  UINT32 count = 0;
+  for (UINTN i = 0; i < st->NumberOfTableEntries; i++) {
+    if (GuCompareGuid(&st->ConfigurationTable[i].VendorGuid, &mAcpi20TableGuid) ||
+        GuCompareGuid(&st->ConfigurationTable[i].VendorGuid, &mAcpi10TableGuid)) {
+      st->ConfigurationTable[i].VendorTable = mShadowState.shadow_rsdp;
+      count++;
+    }
   }
-  if (mShadowState.acpi10_idx >= 0 && (UINTN)mShadowState.acpi10_idx < mShadowState.system_table->NumberOfTableEntries) {
-    mShadowState.system_table->ConfigurationTable[mShadowState.acpi10_idx].VendorTable = mShadowState.shadow_rsdp;
-  }
+  return count;
 }
 
-VOID GuAcpiRestoreConfigTable(VOID) {
-  if (!mShadowState.installed || !mShadowState.system_table) return;
-  if (mShadowState.acpi20_idx >= 0 && (UINTN)mShadowState.acpi20_idx < mShadowState.system_table->NumberOfTableEntries) {
-    if (mShadowState.orig_acpi20_vendor_table != NULL) {
-      mShadowState.system_table->ConfigurationTable[mShadowState.acpi20_idx].VendorTable = mShadowState.orig_acpi20_vendor_table;
+UINT32 GuAcpiRestoreConfigTable(VOID) {
+  if (!mShadowState.installed || !mShadowState.system_table || !mShadowState.orig_rsdp) return 0;
+  EFI_SYSTEM_TABLE *st = mShadowState.system_table;
+  UINT32 count = 0;
+  for (UINTN i = 0; i < st->NumberOfTableEntries; i++) {
+    if (GuCompareGuid(&st->ConfigurationTable[i].VendorGuid, &mAcpi20TableGuid) ||
+        GuCompareGuid(&st->ConfigurationTable[i].VendorGuid, &mAcpi10TableGuid)) {
+      st->ConfigurationTable[i].VendorTable = mShadowState.orig_rsdp;
+      count++;
     }
   }
-  if (mShadowState.acpi10_idx >= 0 && (UINTN)mShadowState.acpi10_idx < mShadowState.system_table->NumberOfTableEntries) {
-    if (mShadowState.orig_acpi10_vendor_table != NULL) {
-      mShadowState.system_table->ConfigurationTable[mShadowState.acpi10_idx].VendorTable = mShadowState.orig_acpi10_vendor_table;
-    }
+  return count;
+}
+
+EFI_STATUS EFIAPI GuHookedS3Save(
+    IN EFI_ACPI_S3_SAVE_PROTOCOL *This,
+    IN VOID *Context
+) {
+  mShadowState.s3_save_call_count++;
+
+  if (mShadowState.low_trampoline != NULL) {
+    volatile UINT16 *words = (volatile UINT16 *)((UINT8 *)mShadowState.low_trampoline + 0x300);
+    words[1] = mShadowState.s3_save_call_count; /* +0x302: S3SaveCount */
   }
+
+  /*
+   * PHASE 1 (Sandwich Pre-Call):
+   * Revert SystemTable ConfigurationTable to RealRSDP so that AcpiS3SaveDxe
+   * and SMM LockBox observe clean, genuine BIOS ACPI tables!
+   */
+  GuAcpiRestoreConfigTable();
+
+  EFI_STATUS Status = EFI_SUCCESS;
+  if (mShadowState.orig_s3_save != NULL) {
+    Status = mShadowState.orig_s3_save(This, Context);
+  }
+
+  /*
+   * PHASE 2 (Sandwich Post-Call):
+   * Re-apply ShadowRSDP so that Windows OS loader continues to see ShadowRSDP!
+   */
+  GuAcpiApplyShadowConfigTable();
+
+  return Status;
 }
 
 EFI_STATUS EFIAPI GuHookedExitBootServices(
@@ -51,23 +99,25 @@ EFI_STATUS EFIAPI GuHookedExitBootServices(
     IN UINTN MapKey
 ) {
   /*
-   * Diagnostic counter: record EBS call in LowTrampoline buffer without BootServices calls.
-   * +0x304: EbsCallCount (UINT32)
-   * +0x308: EbsSuccessCount (UINT32)
-   * +0x30C: EbsLastStatus (UINT32)
-   */
-  if (mShadowState.low_trampoline != NULL) {
-    volatile UINT32 *diag = (volatile UINT32 *)((UINT8 *)mShadowState.low_trampoline + 0x304);
-    diag[0]++; /* EbsCallCount at +0x304 */
-  }
-
-  /*
    * PHASE 1 (Sandwich Pre-Call):
    * Revert SystemTable ConfigurationTable to RealRSDP so that firmware drivers,
    * SMM runtime handlers, and BIOS S3 state save observe clean, unmodified ACPI tables!
    * MANDATORY: ABSOLUTELY NO BootServices calls inside here (no Print, no CalculateCrc32, no Logging).
    */
-  GuAcpiRestoreConfigTable();
+  UINT32 restored_count = GuAcpiRestoreConfigTable();
+
+  /* Record pre-call diagnostics in LowTrampoline buffer */
+  if (mShadowState.low_trampoline != NULL) {
+    volatile UINT16 *words = (volatile UINT16 *)((UINT8 *)mShadowState.low_trampoline + 0x300);
+    words[0] = (UINT16)restored_count; /* +0x300: RestoredCount (lower 16 bits) */
+    /* words[1] (+0x302) preserves S3SaveCallCount */
+
+    volatile UINT32 *dwords = (volatile UINT32 *)((UINT8 *)mShadowState.low_trampoline + 0x300);
+    dwords[1] = (UINT32)(UINTN)mShadowState.orig_rsdp; /* +0x304: Lower 32 bits of restored VendorTable ptr */
+
+    volatile UINT16 *ebs_words = (volatile UINT16 *)((UINT8 *)mShadowState.low_trampoline + 0x308);
+    ebs_words[0]++; /* +0x308: EbsCallCount (lower 16 bits of +0x308) */
+  }
 
   /* Call original firmware ExitBootServices */
   EFI_STATUS Status = EFI_SUCCESS;
@@ -77,16 +127,17 @@ EFI_STATUS EFIAPI GuHookedExitBootServices(
 
   /* Record post-call diagnostics in LowTrampoline buffer */
   if (mShadowState.low_trampoline != NULL) {
-    volatile UINT32 *diag = (volatile UINT32 *)((UINT8 *)mShadowState.low_trampoline + 0x304);
+    volatile UINT16 *ebs_words = (volatile UINT16 *)((UINT8 *)mShadowState.low_trampoline + 0x308);
     if (!EFI_ERROR(Status)) {
-      diag[1]++; /* EbsSuccessCount at +0x308 */
+      ebs_words[1]++; /* +0x30A: EbsSuccessCount (upper 16 bits of +0x308) */
     }
-    diag[2] = (UINT32)Status; /* Last Status at +0x30C */
+    volatile UINT32 *dwords = (volatile UINT32 *)((UINT8 *)mShadowState.low_trampoline + 0x300);
+    dwords[3] = (UINT32)Status; /* +0x30C: EbsLastStatus */
   }
 
   /*
    * PHASE 2 (Sandwich Post-Call):
-   * In v1.8.40b: ONLY re-apply ShadowRSDP if ExitBootServices failed (e.g.
+   * In v1.8.44: ONLY re-apply ShadowRSDP if ExitBootServices failed (e.g.
    * EFI_INVALID_PARAMETER retry by winload.efi after MapKey update).
    * If Status == EFI_SUCCESS, RealRSDP stays permanently in ConfigurationTable!
    * Windows winload.efi already captured ShadowRSDP prior to ExitBootServices.
@@ -122,25 +173,29 @@ EFI_STATUS GuAcpiInstallEbsHook(IN EFI_SYSTEM_TABLE *SystemTable) {
 }
 
 EFI_STATUS GuAcpiUninstallEbsHook(IN EFI_SYSTEM_TABLE *SystemTable) {
-  if (!SystemTable || !SystemTable->BootServices) return EFI_INVALID_PARAMETER;
-  if (!mShadowState.hook_active) return EFI_SUCCESS;
+  if (mShadowState.s3_save_hook_active && mShadowState.acpi_s3_save_protocol != NULL) {
+    mShadowState.acpi_s3_save_protocol->S3Save = mShadowState.orig_s3_save;
+    mShadowState.s3_save_hook_active = FALSE;
+  }
 
-  if (mShadowState.orig_exit_boot_services != NULL) {
-    SystemTable->BootServices->ExitBootServices = mShadowState.orig_exit_boot_services;
-    if (SystemTable->BootServices->CalculateCrc32 != NULL) {
-      SystemTable->BootServices->Hdr.CRC32 = 0;
-      SystemTable->BootServices->CalculateCrc32(
-          SystemTable->BootServices,
-          SystemTable->BootServices->Hdr.HeaderSize,
-          &SystemTable->BootServices->Hdr.CRC32
-      );
+  if (mShadowState.hook_active && SystemTable && SystemTable->BootServices) {
+    if (mShadowState.orig_exit_boot_services != NULL) {
+      SystemTable->BootServices->ExitBootServices = mShadowState.orig_exit_boot_services;
+      if (SystemTable->BootServices->CalculateCrc32 != NULL) {
+        SystemTable->BootServices->Hdr.CRC32 = 0;
+        SystemTable->BootServices->CalculateCrc32(
+            SystemTable->BootServices,
+            SystemTable->BootServices->Hdr.HeaderSize,
+            &SystemTable->BootServices->Hdr.CRC32
+        );
+      }
+      mShadowState.orig_exit_boot_services = NULL;
     }
-    mShadowState.orig_exit_boot_services = NULL;
+    mShadowState.hook_active = FALSE;
+    GuLog("S3 Plan C: ExitBootServices Sandwich Hook uninstalled\n");
   }
 
   GuAcpiRestoreConfigTable();
-  mShadowState.hook_active = FALSE;
-  GuLog("S3 Plan C: ExitBootServices Sandwich Hook uninstalled\n");
   return EFI_SUCCESS;
 }
 
@@ -202,13 +257,13 @@ EFI_STATUS GuAcpiLocateFadtAndFacs(
     }
   }
 
-  /* Warm-Reset / Re-Entry Detection: If ConfigurationTable was already pointing to ShadowRSDP (< 1MB or active shadow state) */
-  if (rsdp != NULL && ((EFI_PHYSICAL_ADDRESS)(UINTN)rsdp < 0x00100000ULL ||
-                       (mShadowState.installed && (VOID *)rsdp == mShadowState.shadow_rsdp))) {
-    if (mShadowState.installed && mShadowState.orig_acpi20_vendor_table != NULL) {
+  /* Warm-Reset / Re-Entry Detection: If ConfigurationTable was already pointing to ShadowRSDP */
+  if (rsdp != NULL && ((mShadowState.installed && (VOID *)rsdp == mShadowState.shadow_rsdp) ||
+                       (mShadowState.installed && mShadowState.orig_rsdp != NULL && (VOID *)rsdp != mShadowState.orig_rsdp))) {
+    if (mShadowState.installed && mShadowState.orig_rsdp != NULL) {
       GuLog("GuAcpiLocateFadtAndFacs: Existing Shadow RSDP detected at %#llx; recovered Real RSDP at %#llx\n",
-            (unsigned long long)(UINTN)rsdp, (unsigned long long)(UINTN)mShadowState.orig_acpi20_vendor_table);
-      rsdp = (EFI_ACPI_2_0_ROOT_SYSTEM_DESCRIPTION_POINTER *)mShadowState.orig_acpi20_vendor_table;
+            (unsigned long long)(UINTN)rsdp, (unsigned long long)(UINTN)mShadowState.orig_rsdp);
+      rsdp = (EFI_ACPI_2_0_ROOT_SYSTEM_DESCRIPTION_POINTER *)mShadowState.orig_rsdp;
     }
   }
 
@@ -343,16 +398,10 @@ EFI_STATUS GuAcpiLocateFadtAndFacs(
   /* Check if this FACS table was created by our driver during a previous warm boot */
   if (facs->Length >= 64) {
     UINT32 shadow_magic = 0;
-    memcpy(&shadow_magic, (UINT8 *)facs + 0x28, sizeof(UINT32));
-    if (shadow_magic != GU_SHADOW_FACS_SIGNATURE) {
-      memcpy(&shadow_magic, facs->Reserved, sizeof(UINT32));
-    }
+    memcpy(&shadow_magic, facs->Reserved, sizeof(UINT32));
     if (shadow_magic == GU_SHADOW_FACS_SIGNATURE) {
       UINT64 orig_phys = 0;
-      memcpy(&orig_phys, (UINT8 *)facs + 0x2C, sizeof(UINT64));
-      if (orig_phys == 0) {
-        memcpy(&orig_phys, &facs->Reserved[4], sizeof(UINT64));
-      }
+      memcpy(&orig_phys, &facs->Reserved[4], sizeof(UINT64));
       if (orig_phys != 0) {
         EFI_ACPI_2_0_FIRMWARE_ACPI_CONTROL_STRUCTURE *true_real =
             (EFI_ACPI_2_0_FIRMWARE_ACPI_CONTROL_STRUCTURE *)(UINTN)orig_phys;
@@ -381,25 +430,23 @@ UINT32 GuAcpiBuildTrampolineCode(
     OUT UINT8 *Buffer,
     IN UINT32 BufferSize,
     IN EFI_PHYSICAL_ADDRESS TrampolinePhys,
-    IN EFI_PHYSICAL_ADDRESS RealFacsPhys,
+    IN EFI_PHYSICAL_ADDRESS ContextPhys,
     IN EFI_PHYSICAL_ADDRESS ShadowFacsPhys,
     IN UINT32 RootPortLinkReg,
     IN UINT32 GpuPmcsrReg
 ) {
   if (!Buffer || BufferSize < 1024) return 0;
+  (VOID)ContextPhys;
+  (VOID)ShadowFacsPhys;
 
   /*
    * Layout within Low Trampoline buffer (<1MB, 4096 bytes):
-   * +0x000: 32-bit Flat Protected Mode S3 Resume Trampoline Machine Code
-   * +0x180: 3-Entry GDT (24 bytes, 8-byte aligned)
-   * +0x198: GDTR (6 bytes: limit=0x0017, base=TrampolinePhys + 0x180)
-   * +0x1A0: Real-Mode IDTR (6 bytes: limit=0x03FF, base=0x00000000)
+   * +0x000: 16-bit Pure Real Mode S3 Resume Trampoline Machine Code (<380 bytes)
    * +0x200: Shadow FACS (64 bytes, 512-byte aligned per ACPI spec)
    * +0x280: Real FACS Vector Mirror (32-bit at 0x280, 64-bit at 0x288)
    * +0x300: Far Jump Target: [0x300] = Offset (16-bit), [0x302] = Segment (16-bit)
-   * +0x304: EBS Call Count / Saved BIOS SP
-   * +0x308: EBS Success Count / Saved BIOS SS
-   * +0x30C: EBS Last Status
+   * +0x304: Saved BIOS SP
+   * +0x306: Saved BIOS SS
    * +0x310: Telemetry Entry Status (0xAA01) or Fault (0xDEAD)
    * +0x312: Telemetry Exit Status (0xAA02)
    * +0x314: Telemetry Captured Vector (32-bit dword)
@@ -424,256 +471,177 @@ UINT32 GuAcpiBuildTrampolineCode(
 
   UINT8 *e = Buffer + 0x000;
 
-  /* =========================================================================
-   * SECTION 0: POLYGLOT PREAMBLE (Valid in both 32-bit PM and 64-bit Long Mode)
-   * Bytes 0..10:
-   *   cli                  (FA)
-   *   cld                  (FC)
-   *   xor eax, eax         (31 C0)
-   *   inc eax              (40: in 32-bit: inc eax -> ZF=0; in 64-bit: REX prefix -> ZF=1)
-   *   jz near .is_64bit    (0F 84 <disp32>: 32-bit: no jump; 64-bit: jump!)
-   * ========================================================================= */
   *e++ = 0xFA; /* cli */
   *e++ = 0xFC; /* cld */
-  *e++ = 0x31; *e++ = 0xC0; /* xor eax, eax */
-  *e++ = 0x40;             /* inc eax (32-bit) / REX (64-bit) */
-  *e++ = 0x0F; *e++ = 0x84; /* jz near .is_64bit */
-  UINT8 *jz_64bit_disp = e; e += 4; /* placeholder for 32-bit displacement */
+  *e++ = 0x8C; *e++ = 0xC8; /* mov ax, cs */
+  *e++ = 0x8E; *e++ = 0xD8; /* mov ds, ax */
+  *e++ = 0x89; *e++ = 0x26; *e++ = 0x04; *e++ = 0x03; /* mov [0x0304], sp */
+  *e++ = 0x8C; *e++ = 0x16; *e++ = 0x06; *e++ = 0x03; /* mov [0x0306], ss */
 
-  /* =========================================================================
-   * SECTION 1: 32-BIT FLAT PROTECTED MODE PATH (BITS 32, stack-free)
-   * Entered when firmware invokes XFirmwareWakingVector in 32-bit PM (OspmFlags=0).
-   * Paging is OFF, flat 4GB linear memory.
-   * ========================================================================= */
-  /* Checkpoint 1 (32-bit entry): mov dword ptr [TrampolinePhys + 0x0310], 0x00003201 */
-  *e++ = 0xC7; *e++ = 0x05;
-  *(UINT32 *)e = (UINT32)(TrampolinePhys + 0x0310); e += 4;
-  *(UINT32 *)e = 0x00003201U; e += 4;
-
-  /* Magic: mov dword ptr [TrampolinePhys + 0x031C], 0x53335F54 ('S3_T') */
-  *e++ = 0xC7; *e++ = 0x05;
-  *(UINT32 *)e = (UINT32)(TrampolinePhys + 0x031C); e += 4;
-  *(UINT32 *)e = 0x53335F54U; e += 4;
-
-  UINT8 *sec1_common_start = e;
-
-  /* 32-bit PCI Probe Loop (8 dwords): esi=probe_addrs, edi=raw_results, ecx=8, dx=0x0CF8 */
-  *e++ = 0xBE; *(UINT32 *)e = (UINT32)(TrampolinePhys + 0x0320); e += 4; /* mov esi, imm32 */
-  *e++ = 0xBF; *(UINT32 *)e = (UINT32)(TrampolinePhys + 0x0340); e += 4; /* mov edi, imm32 */
-  *e++ = 0xB9; *(UINT32 *)e = 8; e += 4;                                 /* mov ecx, 8 */
-  *e++ = 0x66; *e++ = 0xBA; *e++ = 0xF8; *e++ = 0x0C;                   /* mov dx, 0x0CF8 */
-
-  UINT8 *pci_loop32_start = e;
-  *e++ = 0x8B; *e++ = 0x06;                         /* mov eax, [esi] */
-  *e++ = 0xEF;                                     /* out dx, eax */
-  *e++ = 0x80; *e++ = 0xC2; *e++ = 0x04;             /* add dl, 4 (0x0CFC) */
-  *e++ = 0xED;                                     /* in eax, dx */
-  *e++ = 0x80; *e++ = 0xEA; *e++ = 0x04;             /* sub dl, 4 (0x0CF8) */
-  *e++ = 0x89; *e++ = 0x07;                         /* mov [rdi], eax */
-  *e++ = 0x83; *e++ = 0xC6; *e++ = 0x04;             /* add esi, 4 */
-  *e++ = 0x83; *e++ = 0xC7; *e++ = 0x04;             /* add edi, 4 */
-  *e++ = 0xE2;                                     /* loop .pci_loop */
-  *e++ = (UINT8)(pci_loop32_start - (e + 1));
-
-  /* Check AMD Vendor ID 0x1022 at [TrampolinePhys + 0x0340] */
-  *e++ = 0x66; *e++ = 0xA1; *(UINT32 *)e = (UINT32)(TrampolinePhys + 0x0340); e += 4; /* mov ax, [0x9E340] */
-  *e++ = 0x66; *e++ = 0x3D; *e++ = 0x22; *e++ = 0x10; /* cmp ax, 0x1022 */
-  *e++ = 0x75; UINT8 *skip_bridge32_disp = e++;      /* jne short .skip_bridge32 */
-
-  /* Bridge arming */
-  *e++ = 0xA1; *(UINT32 *)e = (UINT32)(TrampolinePhys + 0x0348); e += 4; /* mov eax, [0x9E348] */
-  *e++ = 0x25; *e++ = 0x00; *e++ = 0x00; *e++ = 0x00; *e++ = 0xFF;     /* and eax, 0xFF000000 */
-  *e++ = 0x0D; *e++ = 0x00; *e++ = 0x2D; *e++ = 0x2D; *e++ = 0x00;     /* or eax, 0x002D2D00 */
-  *e++ = 0x89; *e++ = 0xC1;                                             /* mov ecx, eax */
-
-  *e++ = 0xB8; *e++ = 0x18; *e++ = 0x19; *e++ = 0x00; *e++ = 0x80;     /* mov eax, 0x80001918 */
-  *e++ = 0xEF;                                                         /* out dx, eax */
-  *e++ = 0x89; *e++ = 0xC8;                                             /* mov eax, ecx */
-  *e++ = 0x80; *e++ = 0xC2; *e++ = 0x04;                               /* add dl, 4 */
-  *e++ = 0xEF;                                                         /* out dx, eax */
-  *e++ = 0x80; *e++ = 0xEA; *e++ = 0x04;                               /* sub dl, 4 */
-
-  /* GPU Probe (4 dwords) */
-  *e++ = 0xBE; *(UINT32 *)e = (UINT32)(TrampolinePhys + 0x0330); e += 4;
-  *e++ = 0xBF; *(UINT32 *)e = (UINT32)(TrampolinePhys + 0x0360); e += 4;
-  *e++ = 0xB9; *(UINT32 *)e = 4; e += 4;
-
-  UINT8 *gpu_loop32_start = e;
-  *e++ = 0x8B; *e++ = 0x06;
-  *e++ = 0xEF;
-  *e++ = 0x80; *e++ = 0xC2; *e++ = 0x04;
-  *e++ = 0xED;
-  *e++ = 0x80; *e++ = 0xEA; *e++ = 0x04;
-  *e++ = 0x89; *e++ = 0x07;
-  *e++ = 0x83; *e++ = 0xC6; *e++ = 0x04;
-  *e++ = 0x83; *e++ = 0xC7; *e++ = 0x04;
-  *e++ = 0xE2;
-  *e++ = (UINT8)(gpu_loop32_start - (e + 1));
-
-  /* Restore Bridge */
-  *e++ = 0xB8; *e++ = 0x18; *e++ = 0x19; *e++ = 0x00; *e++ = 0x80;
-  *e++ = 0xEF;
-  *e++ = 0xA1; *(UINT32 *)e = (UINT32)(TrampolinePhys + 0x0348); e += 4;
-  *e++ = 0x80; *e++ = 0xC2; *e++ = 0x04;
-  *e++ = 0xEF;
-
-  *skip_bridge32_disp = (UINT8)(e - (skip_bridge32_disp + 1));
-
-  /* Read 32-bit waking vector from Shadow FACS at [ShadowFacsPhys + 0x0C] */
-  *e++ = 0xA1; *(UINT32 *)e = (UINT32)(ShadowFacsPhys + 0x0C); e += 4; /* mov eax, [ShadowFacsPhys + 0x0C] */
-  *e++ = 0x85; *e++ = 0xC0;                                            /* test eax, eax */
-  *e++ = 0x75; UINT8 *f_vec32_0 = e++;                                /* jnz .got_vec32 */
-
-  /* Fallback: Read backup from Real FACS [RealFacsPhys + 0x0C] */
-  *e++ = 0xA1; *(UINT32 *)e = (UINT32)(RealFacsPhys + 0x0C); e += 4;
-  *e++ = 0x85; *e++ = 0xC0;
-  *e++ = 0x75; UINT8 *f_vec32_1 = e++;
-
-  /* Ultimate fallback: 0x00001000 */
-  *e++ = 0xB8; *(UINT32 *)e = 0x00001000U; e += 4;
-
-  *f_vec32_0 = (UINT8)(e - (f_vec32_0 + 1));
-  *f_vec32_1 = (UINT8)(e - (f_vec32_1 + 1));
-
-  /* Save captured vector to [TrampolinePhys + 0x0314] */
-  *e++ = 0xA3; *(UINT32 *)e = (UINT32)(TrampolinePhys + 0x0314); e += 4;
-
-  /* Calculate IP = EAX & 0x0F, CS = EAX >> 4, EAX = (CS << 16) | IP */
-  *e++ = 0x89; *e++ = 0xC3;             /* mov ebx, eax */
-  *e++ = 0x83; *e++ = 0xE3; *e++ = 0x0F; /* and ebx, 0x0F */
-  *e++ = 0xC1; *e++ = 0xE8; *e++ = 0x04; /* shr eax, 4 */
-  *e++ = 0xC1; *e++ = 0xE0; *e++ = 0x10; /* shl eax, 16 */
-  *e++ = 0x09; *e++ = 0xD8;             /* or eax, ebx */
-  *e++ = 0xA3; *(UINT32 *)e = (UINT32)(TrampolinePhys + 0x0318); e += 4; /* Telemetry at +0x0318 */
-
-  /* Directly patch the real-mode tail's far jump target */
-  *e++ = 0xA3;
-  UINT8 *rm16_patch_dest32 = e; e += 4; /* mov [rm16_tail_patch], eax */
-
-  /* Load GDTR from [TrampolinePhys + GU_TRAMP_GDTR_OFF] (loads 6-byte GDTR in 32-bit mode) */
-  *e++ = 0x0F; *e++ = 0x01; *e++ = 0x15;
-  *(UINT32 *)e = (UINT32)(TrampolinePhys + GU_TRAMP_GDTR_OFF); e += 4;
-
-  /* Direct Far Jump to 16-bit Protected Mode: jmp far 0x0018:pm16_rel_off */
-  *e++ = 0xEA;
-  UINT8 *pm16_jmp_offset32 = e; e += 4;
-  *e++ = 0x18; *e++ = 0x00; /* selector 0x0018 (16-bit Code Segment) */
-
-  /* =========================================================================
-   * SECTION 2: 64-BIT LONG MODE PATH (BITS 64, stack-free)
-   * Entered when firmware jumps in 64-bit Long Mode.
-   * Drops from 64-bit Long Mode into 32-bit Compatibility Mode, disables paging,
-   * and branches directly to .sec1_common to execute native flat 32-bit recon & resume.
-   * ========================================================================= */
-  *(INT32 *)jz_64bit_disp = (INT32)(e - (jz_64bit_disp + 4));
-
-  /* Checkpoint 1 (64-bit entry): mov dword ptr [rip + disp32], 0x00006401 */
-  *e++ = 0xC7; *e++ = 0x05;
-  UINT8 *chk64_disp = e; e += 4;
-  *e++ = 0x01; *e++ = 0x64; *e++ = 0x00; *e++ = 0x00;
-  *(INT32 *)chk64_disp = (INT32)(0x0310 - (e - Buffer));
-
-  /* Magic: mov dword ptr [rip + disp32], 0x53335F54 ('S3_T') */
-  *e++ = 0xC7; *e++ = 0x05;
-  UINT8 *magic64_disp = e; e += 4;
+  /* Set Telemetry Magic: mov dword [0x031C], 0x53335F54 ('S3_T') */
+  *e++ = 0x66; *e++ = 0xC7; *e++ = 0x06; *e++ = 0x1C; *e++ = 0x03;
   *e++ = 0x54; *e++ = 0x5F; *e++ = 0x33; *e++ = 0x53;
-  *(INT32 *)magic64_disp = (INT32)(0x031C - (e - Buffer));
 
-  /* Load GDTR64 (10-byte descriptor at GU_TRAMP_GDTR_OFF 0x01A8) */
-  *e++ = 0x0F; *e++ = 0x01; *e++ = 0x15;
-  UINT8 *lgdt64_disp = e; e += 4;
-  *(INT32 *)lgdt64_disp = (INT32)(GU_TRAMP_GDTR_OFF - (e - Buffer));
+  /* Telemetry Entry Checkpoint: mov word [0x0310], 0xAA01 */
+  *e++ = 0xC7; *e++ = 0x06; *e++ = 0x10; *e++ = 0x03; *e++ = 0x01; *e++ = 0xAA;
 
-  /* Indirect Far Jump into 32-bit Compatibility Mode: jmp fword ptr [rip + disp32] (FF 2D) */
-  *e++ = 0xFF; *e++ = 0x2D;
-  UINT8 *far_jmp32_disp = e; e += 4;
-  *(INT32 *)far_jmp32_disp = (INT32)(GU_TRAMP_FARPTR32_OFF - (e - Buffer));
+  /* Probe loop: si=0x0320, di=0x0340, cx=8 */
+  *e++ = 0xBE; *e++ = 0x20; *e++ = 0x03; /* mov si, 0x0320 */
+  *e++ = 0xBF; *e++ = 0x40; *e++ = 0x03; /* mov di, 0x0340 */
+  *e++ = 0xB9; *e++ = 0x08; *e++ = 0x00; /* mov cx, 8 */
+  UINT8 *pci_loop_start = e;
+  *e++ = 0x66; *e++ = 0x8B; *e++ = 0x04; /* mov eax, [si] */
+  *e++ = 0xBA; *e++ = 0xF8; *e++ = 0x0C; /* mov dx, 0x0CF8 */
+  *e++ = 0x66; *e++ = 0xEF;             /* out dx, eax */
+  *e++ = 0xBA; *e++ = 0xFC; *e++ = 0x0C; /* mov dx, 0x0CFC */
+  *e++ = 0x66; *e++ = 0xED;             /* in eax, dx */
+  *e++ = 0x66; *e++ = 0x89; *e++ = 0x05; /* mov [di], eax */
+  *e++ = 0x83; *e++ = 0xC6; *e++ = 0x04; /* add si, 4 */
+  *e++ = 0x83; *e++ = 0xC7; *e++ = 0x04; /* add di, 4 */
+  *e++ = 0xE2;                           /* loop */
+  INT8 loop_disp = (INT8)(pci_loop_start - (e + 1));
+  *e++ = (UINT8)loop_disp;
 
-  /* .pm32_compat: In 32-bit Compatibility Mode (CS=0x0008, L=0, D=1): Disable paging */
-  UINT8 *pm32_compat_start = e;
-  UINT32 pm32_rel = (UINT32)(pm32_compat_start - Buffer);
+  /* Check if Bridge DevID is AMD (Vendor ID 0x1022 at [0x0340]) */
+  *e++ = 0xA1; *e++ = 0x40; *e++ = 0x03; /* mov ax, [0x0340] */
+  *e++ = 0x3D; *e++ = 0x22; *e++ = 0x10; /* cmp ax, 0x1022 */
+  *e++ = 0x0F; *e++ = 0x85;              /* jne near .skip_bridge (4 bytes) */
+  UINT8 *skip_bridge_disp = e;
+  *e++ = 0x00; *e++ = 0x00;              /* placeholder rel16 */
 
-  /* Load 32-bit Flat Data selector 0x0010 into DS, ES, FS, GS, SS */
-  *e++ = 0x66; *e++ = 0xB8; *e++ = 0x10; *e++ = 0x00; /* mov ax, 0x0010 */
-  *e++ = 0x8E; *e++ = 0xD8;                         /* mov ds, ax */
-  *e++ = 0x8E; *e++ = 0xC0;                         /* mov es, ax */
-  *e++ = 0x8E; *e++ = 0xE0;                         /* mov fs, ax */
-  *e++ = 0x8E; *e++ = 0xE8;                         /* mov gs, ax */
-  *e++ = 0x8E; *e++ = 0xD0;                         /* mov ss, ax */
+  /*
+   * 1. Load original Bus Numbers from [0x0348], preserve Latency Timer (bits 31:24),
+   * set Pri=0, Sec=0x2D, Sub=0x2D:
+   */
+  *e++ = 0x66; *e++ = 0xA1; *e++ = 0x48; *e++ = 0x03;             /* mov eax, [0x0348] */
+  *e++ = 0x66; *e++ = 0x25; *e++ = 0x00; *e++ = 0x00; *e++ = 0x00; *e++ = 0xFF; /* and eax, 0xFF000000 */
+  *e++ = 0x66; *e++ = 0x0D; *e++ = 0x00; *e++ = 0x2D; *e++ = 0x2D; *e++ = 0x00; /* or eax, 0x002D2D00 */
 
-  /* Disable Paging: mov eax, cr0; and eax, 0x7FFFFFFF; mov cr0, eax (deactivates IA-32e mode!) */
-  *e++ = 0x0F; *e++ = 0x20; *e++ = 0xC0;                             /* mov eax, cr0 */
-  *e++ = 0x25; *e++ = 0xFF; *e++ = 0xFF; *e++ = 0xFF; *e++ = 0x7F; /* and eax, 0x7FFFFFFF */
-  *e++ = 0x0F; *e++ = 0x22; *e++ = 0xC0;                             /* mov cr0, eax */
+  /* Write new bus numbers to Root Port 0:3:1 offset 0x18 (0x80001918) */
+  *e++ = 0x66; *e++ = 0x89; *e++ = 0xC1;                         /* mov ecx, eax (save in ECX, 100% stack-free) */
+  *e++ = 0x66; *e++ = 0xB8; *e++ = 0x18; *e++ = 0x19; *e++ = 0x00; *e++ = 0x80; /* mov eax, 0x80001918 */
+  *e++ = 0xBA; *e++ = 0xF8; *e++ = 0x0C;                         /* mov dx, 0x0CF8 */
+  *e++ = 0x66; *e++ = 0xEF;                                       /* out dx, eax */
+  *e++ = 0x66; *e++ = 0x89; *e++ = 0xC8;                         /* mov eax, ecx (restore from ECX, 100% stack-free) */
+  *e++ = 0xBA; *e++ = 0xFC; *e++ = 0x0C;                         /* mov dx, 0x0CFC */
+  *e++ = 0x66; *e++ = 0xEF;                                       /* out dx, eax */
 
-  /* Disable Long Mode in IA32_EFER MSR (0xC0000080): rdmsr; and eax, 0xFFFFF6FF; wrmsr */
-  *e++ = 0xB9; *e++ = 0x80; *e++ = 0x00; *e++ = 0x00; *e++ = 0xC0; /* mov ecx, 0xC0000080 */
-  *e++ = 0x0F; *e++ = 0x32;                                         /* rdmsr */
-  *e++ = 0x25; *e++ = 0xFF; *e++ = 0xF6; *e++ = 0xFF; *e++ = 0xFF; /* and eax, 0xFFFFF6FF (clears LME bit 8, NXE bit 11) */
-  *e++ = 0x0F; *e++ = 0x30;                                         /* wrmsr */
+  /* 2. Probe GPU 45:0:0 now that bridge is routing: */
+  /* Read GPU DevID at 0x802D0000 -> [0x0360] */
+  *e++ = 0x66; *e++ = 0xB8; *e++ = 0x00; *e++ = 0x00; *e++ = 0x2D; *e++ = 0x80; /* mov eax, 0x802D0000 */
+  *e++ = 0xBA; *e++ = 0xF8; *e++ = 0x0C; *e++ = 0x66; *e++ = 0xEF;             /* out dx, eax */
+  *e++ = 0xBA; *e++ = 0xFC; *e++ = 0x0C; *e++ = 0x66; *e++ = 0xED;             /* in eax, dx */
+  *e++ = 0x66; *e++ = 0xA3; *e++ = 0x60; *e++ = 0x03;                         /* mov [0x0360], eax */
 
-  /* Clear CR3: xor eax, eax; mov cr3, eax */
-  *e++ = 0x31; *e++ = 0xC0;                                         /* xor eax, eax */
-  *e++ = 0x0F; *e++ = 0x22; *e++ = 0xD8;                             /* mov cr3, eax */
+  /* Read GPU Cmd/Stat at 0x802D0004 -> [0x0364] */
+  *e++ = 0x66; *e++ = 0xB8; *e++ = 0x04; *e++ = 0x00; *e++ = 0x2D; *e++ = 0x80; /* mov eax, 0x802D0004 */
+  *e++ = 0xBA; *e++ = 0xF8; *e++ = 0x0C; *e++ = 0x66; *e++ = 0xEF;             /* out dx, eax */
+  *e++ = 0xBA; *e++ = 0xFC; *e++ = 0x0C; *e++ = 0x66; *e++ = 0xED;             /* in eax, dx */
+  *e++ = 0x66; *e++ = 0xA3; *e++ = 0x64; *e++ = 0x03;                         /* mov [0x0364], eax */
 
-  /* Disable PAE in CR4: mov eax, cr4; and eax, 0xFFFFFFDF; mov cr4, eax */
-  *e++ = 0x0F; *e++ = 0x20; *e++ = 0xE0;                             /* mov eax, cr4 */
-  *e++ = 0x25; *e++ = 0xDF; *e++ = 0xFF; *e++ = 0xFF; *e++ = 0xFF; /* and eax, 0xFFFFFFDF (clears PAE bit 5) */
-  *e++ = 0x0F; *e++ = 0x22; *e++ = 0xE0;                             /* mov cr4, eax */
+  /* Read GPU BAR0 at 0x802D0010 -> [0x0368] */
+  *e++ = 0x66; *e++ = 0xB8; *e++ = 0x10; *e++ = 0x00; *e++ = 0x2D; *e++ = 0x80; /* mov eax, 0x802D0010 */
+  *e++ = 0xBA; *e++ = 0xF8; *e++ = 0x0C; *e++ = 0x66; *e++ = 0xEF;             /* out dx, eax */
+  *e++ = 0xBA; *e++ = 0xFC; *e++ = 0x0C; *e++ = 0x66; *e++ = 0xED;             /* in eax, dx */
+  *e++ = 0x66; *e++ = 0xA3; *e++ = 0x68; *e++ = 0x03;                         /* mov [0x0368], eax */
 
-  /* Jump to common 32-bit reconnaissance & resume path: jmp rel32 .sec1_common */
-  *e++ = 0xE9;
-  UINT8 *jmp_sec1_disp = e; e += 4;
-  *(INT32 *)jmp_sec1_disp = (INT32)(sec1_common_start - (jmp_sec1_disp + 4));
+  /* Read GPU PMCSR using address from probe_addrs[7] at [0x033C] -> [0x036C] */
+  *e++ = 0x66; *e++ = 0xA1; *e++ = 0x3C; *e++ = 0x03;                         /* mov eax, [0x033C] */
+  *e++ = 0xBA; *e++ = 0xF8; *e++ = 0x0C; *e++ = 0x66; *e++ = 0xEF;             /* out dx, eax */
+  *e++ = 0xBA; *e++ = 0xFC; *e++ = 0x0C; *e++ = 0x66; *e++ = 0xED;             /* in eax, dx */
+  *e++ = 0x66; *e++ = 0xA3; *e++ = 0x6C; *e++ = 0x03;                         /* mov [0x036C], eax */
 
-  /* =========================================================================
-   * SECTION 3: 16-BIT PROTECTED MODE (BITS 16, stack-free)
-   * Entered via direct far jump from Section 1 (CS = Selector 0x0018).
-   * Base of Selector 0x0018 is TrampolinePhys (<1MB).
-   * ========================================================================= */
-  UINT8 *pm16_start = e;
-  UINT32 pm16_rel = (UINT32)(pm16_start - Buffer);
-  *(UINT32 *)pm16_jmp_offset32 = pm16_rel;
+  /*
+   * 3. MANDATORY BRIDGE RESTORE: Restore Root Port Offset 0x18 to exact original value!
+   * Windows pci.sys must find the bridge in its exact pre-trampoline state.
+   */
+  *e++ = 0x66; *e++ = 0xB8; *e++ = 0x18; *e++ = 0x19; *e++ = 0x00; *e++ = 0x80; /* mov eax, 0x80001918 */
+  *e++ = 0xBA; *e++ = 0xF8; *e++ = 0x0C; *e++ = 0x66; *e++ = 0xEF;             /* out dx, eax */
+  *e++ = 0x66; *e++ = 0xA1; *e++ = 0x48; *e++ = 0x03;                         /* mov eax, [0x0348] */
+  *e++ = 0xBA; *e++ = 0xFC; *e++ = 0x0C; *e++ = 0x66; *e++ = 0xEF;             /* out dx, eax */
 
-  /* Load data segment registers with 16-bit data selector 0x0020 (Base = TrampolinePhys) */
-  *e++ = 0xB8; *e++ = 0x20; *e++ = 0x00;             /* mov ax, 0x0020 */
-  *e++ = 0x8E; *e++ = 0xD8;                         /* mov ds, ax */
-  *e++ = 0x8E; *e++ = 0xC0;                         /* mov es, ax */
-  *e++ = 0x8E; *e++ = 0xE0;                         /* mov fs, ax */
-  *e++ = 0x8E; *e++ = 0xE8;                         /* mov gs, ax */
-  *e++ = 0x8E; *e++ = 0xD0;                         /* mov ss, ax */
+  /* Patch .skip_bridge near jne displacement (relative to end of 4-byte instruction) */
+  INT32 skip_disp = (INT32)(e - (skip_bridge_disp + 2));
+  skip_bridge_disp[0] = (UINT8)(skip_disp & 0xFF);
+  skip_bridge_disp[1] = (UINT8)((skip_disp >> 8) & 0xFF);
 
-  /* lidt [0x01B4] (Real-Mode IDTR relative to DS Base = TrampolinePhys) */
-  *e++ = 0x0F; *e++ = 0x01; *e++ = 0x1E; *e++ = 0xB4; *e++ = 0x01;
+  /* Read 32-bit waking vector from Shadow FACS at 0x0200: [0x020C] */
+  *e++ = 0xA1; *e++ = 0x0C; *e++ = 0x02;             /* mov ax, [0x020C] */
+  *e++ = 0x8B; *e++ = 0x16; *e++ = 0x0E; *e++ = 0x02; /* mov dx, [0x020E] */
+  *e++ = 0x85; *e++ = 0xC0;                         /* test ax, ax */
+  *e++ = 0x75; UINT8 *f_ax0 = e++;                   /* jnz .have_vec */
+  *e++ = 0x85; *e++ = 0xD2;                         /* test dx, dx */
+  *e++ = 0x75; UINT8 *f_dx0 = e++;                   /* jnz .have_vec */
 
-  /* Clear PE bit in CR0 to switch into Real Mode */
-  *e++ = 0x0F; *e++ = 0x20; *e++ = 0xC0;             /* mov eax, cr0 */
-  *e++ = 0x24; *e++ = 0xFE;                         /* and al, 0xFE */
-  *e++ = 0x0F; *e++ = 0x22; *e++ = 0xC0;             /* mov cr0, eax */
+  /* Read 64-bit waking vector from Shadow FACS at 0x0200: [0x0218] */
+  *e++ = 0xA1; *e++ = 0x18; *e++ = 0x02;             /* mov ax, [0x0218] */
+  *e++ = 0x8B; *e++ = 0x16; *e++ = 0x1A; *e++ = 0x02; /* mov dx, [0x021A] */
+  *e++ = 0x85; *e++ = 0xC0;                         /* test ax, ax */
+  *e++ = 0x75; UINT8 *f_ax1 = e++;                   /* jnz .have_vec */
+  *e++ = 0x85; *e++ = 0xD2;                         /* test dx, dx */
+  *e++ = 0x75; UINT8 *f_dx1 = e++;                   /* jnz .have_vec */
 
-  /* Far jump to serialize and flush pipeline: jmp far (TrampolinePhys >> 4):rm16_rel_off */
-  *e++ = 0xEA;
-  UINT8 *rm16_jmp_offset = e; e += 2;               /* 16-bit offset placeholder */
-  UINT16 rm_cs = (UINT16)(TrampolinePhys >> 4);
-  *e++ = (UINT8)(rm_cs & 0xFF);
-  *e++ = (UINT8)((rm_cs >> 8) & 0xFF);
+  /* Fallback: Read backup 32-bit vector from Real FACS mirror at [0x0280] */
+  *e++ = 0xA1; *e++ = 0x80; *e++ = 0x02;             /* mov ax, [0x0280] */
+  *e++ = 0x8B; *e++ = 0x16; *e++ = 0x82; *e++ = 0x02; /* mov dx, [0x0282] */
+  *e++ = 0x85; *e++ = 0xC0;                         /* test ax, ax */
+  *e++ = 0x75; UINT8 *f_ax2 = e++;                   /* jnz .have_vec */
+  *e++ = 0x85; *e++ = 0xD2;                         /* test dx, dx */
+  *e++ = 0x75; UINT8 *f_dx2 = e++;                   /* jnz .have_vec */
 
-  /* =========================================================================
-   * SECTION 4: 16-BIT REAL MODE (BITS 16, stack-free)
-   * Entered via direct far jump from Section 3 (CS = TrampolinePhys >> 4).
-   * ========================================================================= */
-  UINT8 *rm16_start = e;
-  UINT16 rm16_rel = (UINT16)(rm16_start - Buffer);
-  *(UINT16 *)rm16_jmp_offset = rm16_rel;
+  /* Fallback: Read backup 64-bit vector from Real FACS mirror at [0x0288] */
+  *e++ = 0xA1; *e++ = 0x88; *e++ = 0x02;             /* mov ax, [0x0288] */
+  *e++ = 0x8B; *e++ = 0x16; *e++ = 0x8A; *e++ = 0x02; /* mov dx, [0x028A] */
+  *e++ = 0x85; *e++ = 0xC0;                         /* test ax, ax */
+  *e++ = 0x75; UINT8 *f_ax3 = e++;                   /* jnz .have_vec */
+  *e++ = 0x85; *e++ = 0xD2;                         /* test dx, dx */
+  *e++ = 0x75; UINT8 *f_dx3 = e++;                   /* jnz .have_vec */
 
-  /* Set DS = CS */
-  *e++ = 0x8C; *e++ = 0xC8;                         /* mov ax, cs */
-  *e++ = 0x8E; *e++ = 0xD8;                         /* mov ds, ax */
+  /* No vector found in any FACS table! Flag error 0xDEAD and halt safely */
+  *e++ = 0xC7; *e++ = 0x06; *e++ = 0x10; *e++ = 0x03; *e++ = 0xAD; *e++ = 0xDE;
+  *e++ = 0xF4; /* hlt */
 
-  /* Telemetry Checkpoint 2 (proves survived Real-Mode transition!): mov word [0x0312], 0xAA02 */
+  /* .have_vec target */
+  UINT8 have_vec_disp = (UINT8)(e - (f_ax0 + 1));
+  *f_ax0 = have_vec_disp;
+  *f_dx0 = (UINT8)(e - (f_dx0 + 1));
+  *f_ax1 = (UINT8)(e - (f_ax1 + 1));
+  *f_dx1 = (UINT8)(e - (f_dx1 + 1));
+  *f_ax2 = (UINT8)(e - (f_ax2 + 1));
+  *f_dx2 = (UINT8)(e - (f_dx2 + 1));
+  *f_ax3 = (UINT8)(e - (f_ax3 + 1));
+  *f_dx3 = (UINT8)(e - (f_dx3 + 1));
+
+  /* Save captured vector to telemetry [0x0314], [0x0316] */
+  *e++ = 0xA3; *e++ = 0x14; *e++ = 0x03;             /* mov [0x0314], ax */
+  *e++ = 0x89; *e++ = 0x16; *e++ = 0x16; *e++ = 0x03; /* mov [0x0316], dx */
+
+  /* Convert linear DX:AX into Segment:Offset */
+  /* Offset = AX & 0x000F */
+  *e++ = 0x89; *e++ = 0xC3;                         /* mov bx, ax */
+  *e++ = 0x83; *e++ = 0xE3; *e++ = 0x0F;             /* and bx, 0x0F */
+
+  /* Segment = (AX >> 4) | (DX << 12) */
+  *e++ = 0xC1; *e++ = 0xE8; *e++ = 0x04;             /* shr ax, 4 */
+  *e++ = 0xC1; *e++ = 0xE2; *e++ = 0x0C;             /* shl dx, 12 */
+  *e++ = 0x09; *e++ = 0xD0;                         /* or ax, dx */
+
+  /* Store far pointer into [0x0300]: bx=Offset, ax=Segment */
+  *e++ = 0x89; *e++ = 0x1E; *e++ = 0x00; *e++ = 0x03; /* mov [0x0300], bx */
+  *e++ = 0xA3; *e++ = 0x02; *e++ = 0x03;             /* mov [0x0302], ax */
+
+  /* Telemetry: save computed Segment:Offset into [0x0318], [0x031A] */
+  *e++ = 0x89; *e++ = 0x1E; *e++ = 0x18; *e++ = 0x03; /* mov [0x0318], bx */
+  *e++ = 0xA3; *e++ = 0x1A; *e++ = 0x03;             /* mov [0x031A], ax */
+
+  /* Telemetry Checkpoint 2: about to jump! mov word [0x0312], 0xAA02 */
   *e++ = 0xC7; *e++ = 0x06; *e++ = 0x12; *e++ = 0x03; *e++ = 0x02; *e++ = 0xAA;
 
-  /* Zero general purpose registers for clean Windows handoff (EAX=0 also zeroes AX) */
+  /* Restore BIOS stack */
+  *e++ = 0x8E; *e++ = 0x16; *e++ = 0x06; *e++ = 0x03; /* mov ss, [0x0306] */
+  *e++ = 0x8B; *e++ = 0x26; *e++ = 0x04; *e++ = 0x03; /* mov sp, [0x0304] */
+
+  /* Zero general purpose registers for clean Windows handoff */
   *e++ = 0x66; *e++ = 0x31; *e++ = 0xC0;             /* xor eax, eax */
   *e++ = 0x66; *e++ = 0x31; *e++ = 0xDB;             /* xor ebx, ebx */
   *e++ = 0x66; *e++ = 0x31; *e++ = 0xC9;             /* xor ecx, ecx */
@@ -682,75 +650,8 @@ UINT32 GuAcpiBuildTrampolineCode(
   *e++ = 0x66; *e++ = 0x31; *e++ = 0xFF;             /* xor edi, edi */
   *e++ = 0x66; *e++ = 0x31; *e++ = 0xED;             /* xor ebp, ebp */
 
-  /* Zero data segments using AX = 0 */
-  *e++ = 0x8E; *e++ = 0xD8;                         /* mov ds, ax */
-  *e++ = 0x8E; *e++ = 0xC0;                         /* mov es, ax */
-  *e++ = 0x8E; *e++ = 0xE0;                         /* mov fs, ax */
-  *e++ = 0x8E; *e++ = 0xE8;                         /* mov gs, ax */
-  *e++ = 0x8E; *e++ = 0xD0;                         /* mov ss, ax */
-
-  /* Directly patched far jump to Windows HalpRMStub (EA ip_lo ip_hi cs_lo cs_hi) */
-  UINT8 *far_jump_inst = e;
-  *e++ = 0xEA;
-  *e++ = 0x00; *e++ = 0x00;                         /* ip placeholder */
-  *e++ = 0x00; *e++ = 0x01;                         /* cs placeholder (0x0100) */
-
-  /* Fix up patch displacements from Section 1 */
-  *(UINT32 *)rm16_patch_dest32 = (UINT32)(TrampolinePhys + (far_jump_inst + 1 - Buffer));
-
-  /*
-   * =========================================================================
-   * SECTION 5: EMBED 5-ENTRY GDT, 10-BYTE GDTR64, RM_IDTR, AND FARPTR32
-   * =========================================================================
-   */
-  /* GDT Entry 0 (Selector 0x0000): Null Descriptor */
-  memset(Buffer + GU_TRAMP_GDT_OFF, 0, 8);
-
-  /* GDT Entry 1 (Selector 0x0008): 32-bit Compatibility Code Descriptor (Base=0, Limit=4GB, Access=0x9A, Flags=0xCF) */
-  UINT8 *c32_desc = Buffer + GU_TRAMP_GDT_OFF + 8;
-  c32_desc[0] = 0xFF; c32_desc[1] = 0xFF;
-  c32_desc[2] = 0x00; c32_desc[3] = 0x00;
-  c32_desc[4] = 0x00; c32_desc[5] = 0x9A;
-  c32_desc[6] = 0xCF; c32_desc[7] = 0x00;
-
-  /* GDT Entry 2 (Selector 0x0010): 32-bit Flat Data Descriptor (Base=0, Limit=4GB, Access=0x92, Flags=0xCF) */
-  UINT8 *d32_desc = Buffer + GU_TRAMP_GDT_OFF + 16;
-  d32_desc[0] = 0xFF; d32_desc[1] = 0xFF;
-  d32_desc[2] = 0x00; d32_desc[3] = 0x00;
-  d32_desc[4] = 0x00; d32_desc[5] = 0x92;
-  d32_desc[6] = 0xCF; d32_desc[7] = 0x00;
-
-  /* GDT Entry 3 (Selector 0x0018): 16-bit Code Descriptor (Base=TrampolinePhys, Limit=64KB, Access=0x9A, Flags=0x00) */
-  UINT8 *c16_desc = Buffer + GU_TRAMP_GDT_OFF + 24;
-  c16_desc[0] = 0xFF; c16_desc[1] = 0xFF;
-  c16_desc[2] = (UINT8)(TrampolinePhys & 0xFF);
-  c16_desc[3] = (UINT8)((TrampolinePhys >> 8) & 0xFF);
-  c16_desc[4] = (UINT8)((TrampolinePhys >> 16) & 0xFF);
-  c16_desc[5] = 0x9A;
-  c16_desc[6] = 0x00;
-  c16_desc[7] = (UINT8)((TrampolinePhys >> 24) & 0xFF);
-
-  /* GDT Entry 4 (Selector 0x0020): 16-bit Data Descriptor (Base=TrampolinePhys, Limit=64KB, Access=0x92, Flags=0x00) */
-  UINT8 *d16_desc = Buffer + GU_TRAMP_GDT_OFF + 32;
-  d16_desc[0] = 0xFF; d16_desc[1] = 0xFF;
-  d16_desc[2] = (UINT8)(TrampolinePhys & 0xFF);
-  d16_desc[3] = (UINT8)((TrampolinePhys >> 8) & 0xFF);
-  d16_desc[4] = (UINT8)((TrampolinePhys >> 16) & 0xFF);
-  d16_desc[5] = 0x92;
-  d16_desc[6] = 0x00;
-  d16_desc[7] = (UINT8)((TrampolinePhys >> 24) & 0xFF);
-
-  /* GDTR64 at GU_TRAMP_GDTR_OFF (0x01A8): 10 bytes packed (UINT16 Limit=0x0027, UINT64 Base=TrampolinePhys + 0x0180) */
-  *(UINT16 *)(Buffer + GU_TRAMP_GDTR_OFF) = 0x0027; /* 5 descriptors * 8 bytes - 1 = 39 */
-  *(UINT64 *)(Buffer + GU_TRAMP_GDTR_OFF + 2) = (UINT64)(TrampolinePhys + GU_TRAMP_GDT_OFF);
-
-  /* Real-Mode IDTR at GU_TRAMP_RM_IDTR_OFF (0x01B4): 6 bytes packed (UINT16 Limit=0x03FF, UINT32 Base=0x00000000) */
-  *(UINT16 *)(Buffer + GU_TRAMP_RM_IDTR_OFF) = 0x03FF;
-  *(UINT32 *)(Buffer + GU_TRAMP_RM_IDTR_OFF + 2) = 0x00000000;
-
-  /* FARPTR32 at GU_TRAMP_FARPTR32_OFF (0x01C0): 6 bytes packed (UINT32 Offset=TrampolinePhys + pm32_rel, UINT16 Selector=0x0008) */
-  *(UINT32 *)(Buffer + GU_TRAMP_FARPTR32_OFF) = (UINT32)(TrampolinePhys + pm32_rel);
-  *(UINT16 *)(Buffer + GU_TRAMP_FARPTR32_OFF + 4) = 0x0008;
+  /* Far indirect jump directly to Windows HalpRMStub */
+  *e++ = 0x2E; *e++ = 0xFF; *e++ = 0x2E; *e++ = 0x00; *e++ = 0x03; /* jmp far ptr cs:[0x0300] */
 
   return (UINT32)(e - Buffer);
 }
@@ -893,7 +794,7 @@ EFI_STATUS GuAcpiInstallShadowFacs(
 
   if (*(UINT32 *)(low_base + GU_TRAMP_MAGIC_OFF) == GU_TRAMP_TELEMETRY_MAGIC) {
     UINT16 entry_chk = *(UINT16 *)(low_base + GU_TRAMP_ENTRY_STATUS_OFF);
-    if (entry_chk == 0x3201 || entry_chk == 0x6401 || entry_chk == 0xAA01 || entry_chk == 0xDEAD) {
+    if (entry_chk == 0xAA01 || entry_chk == 0xDEAD) {
       telemetry_page = low_base;
       telemetry_phys = LowTrampPhys;
     }
@@ -905,7 +806,7 @@ EFI_STATUS GuAcpiInstallShadowFacs(
       UINT8 *candidate = (UINT8 *)(UINTN)page_addr;
       if (*(UINT32 *)(candidate + GU_TRAMP_MAGIC_OFF) == GU_TRAMP_TELEMETRY_MAGIC) {
         UINT16 entry_chk = *(UINT16 *)(candidate + GU_TRAMP_ENTRY_STATUS_OFF);
-        if (entry_chk == 0x3201 || entry_chk == 0x6401 || entry_chk == 0xAA01 || entry_chk == 0xDEAD) {
+        if (entry_chk == 0xAA01 || entry_chk == 0xDEAD) {
           telemetry_page = candidate;
           telemetry_phys = page_addr;
           break;
@@ -920,12 +821,8 @@ EFI_STATUS GuAcpiInstallShadowFacs(
     UINT32 full_vec     = *(UINT32 *)(telemetry_page + GU_TRAMP_CAPTURED_VEC_OFF);
     UINT16 tgt_off      = *(UINT16 *)(telemetry_page + GU_TRAMP_TARGET_PTR_OFF);
     UINT16 tgt_seg      = *(UINT16 *)(telemetry_page + GU_TRAMP_TARGET_PTR_OFF + 2);
-    const char *mode_str = "Unknown";
-    if (entry_status == 0x3201) mode_str = "32-Bit Flat PM";
-    else if (entry_status == 0x6401) mode_str = "64-Bit Long Mode";
-    else if (entry_status == 0xAA01) mode_str = "Legacy PM/LM";
-    GuLog("S3 Prior Wake Telemetry (Page %#llx): Magic=S3_T Mode=%a Entry=%#04x Vector=%#08x Target=%04x:%04x Exit=%#04x\n",
-          (unsigned long long)telemetry_phys, mode_str,
+    GuLog("S3 Prior Wake Telemetry (Page %#llx): Magic=S3_T Entry=%#04x Vector=%#08x Target=%04x:%04x Exit=%#04x\n",
+          (unsigned long long)telemetry_phys,
           (unsigned)entry_status, (unsigned)full_vec, (unsigned)tgt_seg, (unsigned)tgt_off, (unsigned)exit_status);
 
     UINT32 br_id   = *(UINT32 *)(telemetry_page + GU_TRAMP_PCI_PROBE_RAW_OFF + 0x00);
@@ -987,23 +884,25 @@ EFI_STATUS GuAcpiInstallShadowFacs(
 
   /* 2. Clone Real FACS into Shadow FACS */
   memcpy(shadow_facs, Info->real_facs, sizeof(EFI_ACPI_2_0_FIRMWARE_ACPI_CONTROL_STRUCTURE));
-  if (shadow_facs->Version < 2) shadow_facs->Version = 2;
-  if (Info->real_facs->Version < 2) Info->real_facs->Version = 2;
+  shadow_facs->FirmwareWakingVector = 0;
+  shadow_facs->XFirmwareWakingVector = 0;
+  shadow_facs->Flags = 0;
+  UINT8 *sf_raw = (UINT8 *)shadow_facs;
+  *(UINT32 *)(sf_raw + 0x20) = 0; /* Version at +0x20 */
+  *(UINT32 *)(sf_raw + 0x24) = 0; /* OspmFlags at +0x24 */
 
-  shadow_facs->FirmwareWakingVector = (UINT32)trampoline_phys;
-  shadow_facs->XFirmwareWakingVector = (UINT64)trampoline_phys;
-  shadow_facs->Flags |= 0x00000002U; /* 64-bit wake supported */
-  *(UINT32 *)((UINT8 *)shadow_facs + 0x24) |= 0x00000001U; /* OspmFlags: 64-bit wake enabled */
+  /* Tag Shadow FACS with signature and real FACS address for warm reset recovery */
+  *(UINT32 *)(sf_raw + 0x28) = GU_SHADOW_FACS_SIGNATURE;
+  memcpy(sf_raw + 0x2C, &Info->real_facs_phys, sizeof(UINT64));
 
-  /* Tag Shadow FACS with signature and real FACS address at +0x28 / +0x2C (Reserved1) for warm reset recovery */
-  *(UINT32 *)((UINT8 *)shadow_facs + 0x28) = GU_SHADOW_FACS_SIGNATURE;
-  memcpy((UINT8 *)shadow_facs + 0x2C, &Info->real_facs_phys, sizeof(UINT64));
-
-  /* Set 64-bit wake in Real FACS as well so EDK2 S3Resume2Pei enters via XFirmwareWakingVector */
-  Info->real_facs->Flags |= 0x00000002U;
-  *(UINT32 *)((UINT8 *)Info->real_facs + 0x24) |= 0x00000001U;
-  Info->real_facs->XFirmwareWakingVector = (UINT64)trampoline_phys;
-  Info->real_facs->FirmwareWakingVector = (UINT32)trampoline_phys;
+  /* Clear all 64-bit wake flags in both tables for rock-solid 16-bit real mode wake */
+  Info->real_facs->Flags = 0;
+  Info->real_facs->XFirmwareWakingVector = 0;
+  if (Info->real_facs->Length >= 64) {
+    UINT8 *rf_raw = (UINT8 *)Info->real_facs;
+    *(UINT32 *)(rf_raw + 0x20) = 0; /* Version at +0x20 */
+    *(UINT32 *)(rf_raw + 0x24) = 0; /* OspmFlags at +0x24 */
+  }
 
   /* Store Real FACS original vectors as backup mirror in low memory at +0x280 / +0x288 */
   *(UINT32 *)(low_base + 0x0280) = Info->original_firmware_waking_vector;
@@ -1021,12 +920,12 @@ EFI_STATUS GuAcpiInstallShadowFacs(
   GuLog("S3 Hardware Recon Config: Root Port LinkReg=%#08x (Cap 0x10+0x10), GPU PMCSR=%#08x (Cap 0x01+0x04)\n",
         (unsigned)root_port_link_reg, (unsigned)gpu_pmcsr_reg);
 
-  /* 3. Build 64-bit Long Mode S3 Resume Trampoline machine code in low memory (<1MB) */
+  /* 3. Build Pure 16-bit Real Mode S3 Resume Trampoline machine code in low memory (<1MB) */
   UINT32 tramp_bytes = GuAcpiBuildTrampolineCode(
       low_base,
       4096,
       trampoline_phys,
-      Info->real_facs_phys,
+      NvsPhys,
       shadow_facs_phys,
       root_port_link_reg,
       gpu_pmcsr_reg
@@ -1038,18 +937,48 @@ EFI_STATUS GuAcpiInstallShadowFacs(
   }
 
   Info->shadow_facs_phys = shadow_facs_phys;
-  EFI_PHYSICAL_ADDRESS shadow_fadt_phys = LowTrampPhys + GU_TRAMP_SHADOW_FADT_OFF;
-  EFI_ACPI_2_0_FIXED_ACPI_DESCRIPTION_TABLE *shadow_fadt =
-      (EFI_ACPI_2_0_FIXED_ACPI_DESCRIPTION_TABLE *)(low_base + GU_TRAMP_SHADOW_FADT_OFF);
-  Info->shadow_fadt = shadow_fadt;
-  Info->shadow_fadt_phys = shadow_fadt_phys;
   Info->trampoline_phys = trampoline_phys;
 
   /*
-   * Plan C: Complete Shadow Chain Architecture (v1.8.40)
+   * LEAK 1 FIX:
+   * Allocate dedicated high ACPI NVS page (>1MB, <4GB) for Shadow ACPI tables:
+   * ShadowRSDP, ShadowXSDT, ShadowFADT.
+   * This ensures ZERO bytes of "RSD PTR " reside below 1MB (EBDA 0x80000..0x9FFFF / ROM 0xE0000..0xFFFFF)!
+   */
+  EFI_PHYSICAL_ADDRESS high_acpi_phys = 0xFFFFFFFFULL;
+  UINT8 *high_acpi_base = NULL;
+  if (SystemTable->BootServices && SystemTable->BootServices->AllocatePages) {
+    EFI_STATUS as = SystemTable->BootServices->AllocatePages(
+        AllocateMaxAddress,
+        EfiACPIMemoryNVS,
+        1,
+        &high_acpi_phys
+    );
+    if (!EFI_ERROR(as) && high_acpi_phys >= 0x00100000ULL) {
+      high_acpi_base = (UINT8 *)(UINTN)high_acpi_phys;
+      memset(high_acpi_base, 0, 4096);
+    }
+  }
+
+  if (high_acpi_base == NULL) {
+    /* Fallback if high allocation unavailable: use NvsBuffer (>1MB) */
+    high_acpi_base = (UINT8 *)NvsBuffer + 0x30000;
+    high_acpi_phys = NvsPhys + 0x30000;
+    memset(high_acpi_base, 0, 4096);
+  }
+
+  Info->high_acpi_phys = high_acpi_phys;
+  EFI_PHYSICAL_ADDRESS shadow_fadt_phys = high_acpi_phys + GU_HIGH_SHADOW_FADT_OFF;
+  EFI_ACPI_2_0_FIXED_ACPI_DESCRIPTION_TABLE *shadow_fadt =
+      (EFI_ACPI_2_0_FIXED_ACPI_DESCRIPTION_TABLE *)(high_acpi_base + GU_HIGH_SHADOW_FADT_OFF);
+  Info->shadow_fadt = shadow_fadt;
+  Info->shadow_fadt_phys = shadow_fadt_phys;
+
+  /*
+   * Plan C: Complete Shadow Chain Architecture (v1.8.44)
    * Real ACPI tables (RealRSDP, RealRSDT, RealXSDT, RealFADT) remain 100% UNTOUCHED byte-for-byte.
-   * Complete shadow hierarchy is constructed in EfiACPIMemoryNVS:
-   * ShadowRSDP (0x9E600) -> ShadowXSDT (0x9E640) -> ShadowFADT (0x9E400) -> ShadowFACS (0x9E200)
+   * Complete shadow hierarchy is constructed in high EfiACPIMemoryNVS:
+   * ShadowRSDP -> ShadowXSDT -> ShadowFADT -> ShadowFACS (0x9E200)
    */
   GuLog("S3 Plan C Pre-Build: RealRSDP=%#llx RealXSDT=%#llx (Chk=%#02x) RealFADT=%#llx (Len=%u Chk=%#02x)\n",
         (unsigned long long)(UINTN)Info->rsdp,
@@ -1058,14 +987,14 @@ EFI_STATUS GuAcpiInstallShadowFacs(
         (unsigned)Info->fadt_original_checksum);
 
   /*
-   * 1. Populate ShadowFADT at LowTrampoline + 0x400 (e.g. 0x9E400):
+   * 1. Populate ShadowFADT at HighAcpiPage + 0x200:
    *    Copy full Header.Length bytes from original RealFADT.
    *    Set FirmwareCtrl = ShadowFACS (0x9E200), XFirmwareCtrl = 0.
    *    Recalculate ShadowFADT->Header.Checksum.
    */
   UINT32 fadt_len = Info->fadt->Header.Length;
-  if (fadt_len > (GU_TRAMP_SHADOW_RSDP_OFF - GU_TRAMP_SHADOW_FADT_OFF)) {
-    fadt_len = GU_TRAMP_SHADOW_RSDP_OFF - GU_TRAMP_SHADOW_FADT_OFF;
+  if (fadt_len > (4096 - GU_HIGH_SHADOW_FADT_OFF)) {
+    fadt_len = 4096 - GU_HIGH_SHADOW_FADT_OFF;
   }
   memcpy(shadow_fadt, Info->fadt, fadt_len);
   shadow_fadt->FirmwareCtrl = (UINT32)shadow_facs_phys;
@@ -1081,19 +1010,17 @@ EFI_STATUS GuAcpiInstallShadowFacs(
   shadow_fadt->Header.Checksum = (UINT8)(0 - sf_sum);
 
   /*
-   * 2. Populate ShadowXSDT:
-   *    If RealXSDT fits in remaining LowTrampoline buffer (Length <= 0x9C0 = 2496 bytes),
-   *    place at LowTrampoline + 0x640 (e.g. 0x9E640). Otherwise allocate a page under 4GB.
+   * 2. Populate ShadowXSDT at HighAcpiPage + 0x080:
    *    Copy RealXSDT, update FACP/FADT entry to point to ShadowFADT, recalculate Checksum.
    */
   EFI_ACPI_DESCRIPTION_HEADER *shadow_xsdt = NULL;
   EFI_PHYSICAL_ADDRESS shadow_xsdt_phys = 0;
 
   if (Info->xsdt != NULL) {
-    UINT32 max_inline_xsdt = 4096 - GU_TRAMP_SHADOW_XSDT_OFF;
+    UINT32 max_inline_xsdt = GU_HIGH_SHADOW_FADT_OFF - GU_HIGH_SHADOW_XSDT_OFF; /* 0x180 = 384 bytes */
     if (Info->xsdt->Length <= max_inline_xsdt) {
-      shadow_xsdt = (EFI_ACPI_DESCRIPTION_HEADER *)(low_base + GU_TRAMP_SHADOW_XSDT_OFF);
-      shadow_xsdt_phys = LowTrampPhys + GU_TRAMP_SHADOW_XSDT_OFF;
+      shadow_xsdt = (EFI_ACPI_DESCRIPTION_HEADER *)(high_acpi_base + GU_HIGH_SHADOW_XSDT_OFF);
+      shadow_xsdt_phys = high_acpi_phys + GU_HIGH_SHADOW_XSDT_OFF;
     } else if (SystemTable->BootServices && SystemTable->BootServices->AllocatePages) {
       EFI_PHYSICAL_ADDRESS alloc_phys = 0xFFFFFFFFULL;
       EFI_STATUS as = SystemTable->BootServices->AllocatePages(
@@ -1126,15 +1053,15 @@ EFI_STATUS GuAcpiInstallShadowFacs(
   }
 
   /*
-   * 3. Populate ShadowRSDP at LowTrampoline + 0x600 (e.g. 0x9E600):
+   * 3. Populate ShadowRSDP at HighAcpiPage + 0x000:
    *    Copy RealRSDP (36 bytes for Revision >= 2).
    *    Set XsdtAddress = ShadowXSDT.
    *    Leave RsdtAddress = RealRSDP->RsdtAddress untouched.
    *    Recalculate 20-byte legacy Checksum (Offset 8), THEN 36-byte ExtendedChecksum (Offset 32).
    */
   EFI_ACPI_2_0_ROOT_SYSTEM_DESCRIPTION_POINTER *shadow_rsdp =
-      (EFI_ACPI_2_0_ROOT_SYSTEM_DESCRIPTION_POINTER *)(low_base + GU_TRAMP_SHADOW_RSDP_OFF);
-  EFI_PHYSICAL_ADDRESS shadow_rsdp_phys = LowTrampPhys + GU_TRAMP_SHADOW_RSDP_OFF;
+      (EFI_ACPI_2_0_ROOT_SYSTEM_DESCRIPTION_POINTER *)(high_acpi_base + GU_HIGH_SHADOW_RSDP_OFF);
+  EFI_PHYSICAL_ADDRESS shadow_rsdp_phys = high_acpi_phys + GU_HIGH_SHADOW_RSDP_OFF;
 
   UINT32 rsdp_len = (Info->rsdp->Revision >= 2 && Info->rsdp->Length >= 36) ? Info->rsdp->Length : 36;
   memcpy(shadow_rsdp, Info->rsdp, rsdp_len);
@@ -1159,34 +1086,61 @@ EFI_STATUS GuAcpiInstallShadowFacs(
   shadow_rsdp->ExtendedChecksum = (UINT8)(0 - rsdp_sum36);
 
   /*
-   * 4. In-Place Patch SystemTable->ConfigurationTable:
-   *    Save original VendorTable pointers, point entries to ShadowRSDP.
+   * 4. State registration and In-Place Patching of ConfigurationTable:
    */
   mShadowState.installed = TRUE;
-  mShadowState.acpi20_idx = Info->config_table_acpi20_idx;
-  mShadowState.acpi10_idx = Info->config_table_acpi10_idx;
-  mShadowState.orig_acpi20_vendor_table = (Info->config_table_acpi20_idx >= 0) ?
-      (VOID *)(UINTN)Info->rsdp : NULL;
-  mShadowState.orig_acpi10_vendor_table = (Info->config_table_acpi10_idx >= 0) ?
-      (VOID *)(UINTN)Info->rsdp : NULL;
+  mShadowState.orig_rsdp = (VOID *)(UINTN)Info->rsdp;
   mShadowState.shadow_rsdp = (VOID *)(UINTN)shadow_rsdp_phys;
+  mShadowState.high_acpi_page = (VOID *)high_acpi_base;
+  mShadowState.high_acpi_phys = high_acpi_phys;
   mShadowState.low_trampoline = (VOID *)low_base;
   mShadowState.system_table = SystemTable;
   mShadowState.orig_exit_boot_services = NULL;
   mShadowState.hook_active = FALSE;
+  mShadowState.acpi_s3_save_protocol = NULL;
+  mShadowState.orig_s3_save = NULL;
+  mShadowState.s3_save_hook_active = FALSE;
+  mShadowState.s3_save_call_count = 0;
 
-  GuAcpiApplyShadowConfigTable();
+  UINT32 applied_count = GuAcpiApplyShadowConfigTable();
 
   /*
-   * 5. Hook Real FACS waking vector to point to our Low Trampoline (<1MB)
+   * 5. Hook Real FACS waking vector to point to Low Trampoline (<1MB)
    *    RealFACS is what AMI Aptio V PEI wakes to!
    *    RealFADT and RealXSDT are 100% UNTOUCHED!
    */
-  if (Info->real_facs->Version < 2) Info->real_facs->Version = 2;
-  Info->real_facs->Flags |= 0x00000002U;
-  *(UINT32 *)((UINT8 *)Info->real_facs + 0x24) |= 0x00000001U; /* OspmFlags: 64-bit wake enabled */
   Info->real_facs->FirmwareWakingVector = (UINT32)trampoline_phys;
-  Info->real_facs->XFirmwareWakingVector = (UINT64)trampoline_phys;
+  Info->real_facs->XFirmwareWakingVector = 0;
+  Info->real_facs->Flags = 0;
+  if (Info->real_facs->Length >= 64) {
+    UINT8 *rf_raw = (UINT8 *)Info->real_facs;
+    *(UINT32 *)(rf_raw + 0x20) = 0; /* Version at +0x20 */
+    *(UINT32 *)(rf_raw + 0x24) = 0; /* OspmFlags at +0x24 */
+  }
+
+  /*
+   * 6. LEAK 3: Detect and sandwich EFI_ACPI_S3_SAVE_PROTOCOL (EDK2 AcpiS3SaveDxe)
+   */
+  static EFI_GUID s3_save_guid = EFI_ACPI_S3_SAVE_PROTOCOL_GUID;
+  EFI_ACPI_S3_SAVE_PROTOCOL *acpi_s3_save = NULL;
+  EFI_STATUS s_s3save = EFI_NOT_FOUND;
+  if (SystemTable->BootServices && SystemTable->BootServices->LocateProtocol) {
+    s_s3save = SystemTable->BootServices->LocateProtocol(&s3_save_guid, NULL, (VOID **)&acpi_s3_save);
+  }
+
+  if (!EFI_ERROR(s_s3save) && acpi_s3_save != NULL && acpi_s3_save->S3Save != NULL) {
+    GuLog("S3 Plan C: EFI_ACPI_S3_SAVE_PROTOCOL found at %#llx (S3Save=%#llx)\n",
+          (unsigned long long)(UINTN)acpi_s3_save,
+          (unsigned long long)(UINTN)acpi_s3_save->S3Save);
+    mShadowState.acpi_s3_save_protocol = acpi_s3_save;
+    mShadowState.orig_s3_save = acpi_s3_save->S3Save;
+    acpi_s3_save->S3Save = GuHookedS3Save;
+    mShadowState.s3_save_hook_active = TRUE;
+    Info->s3_save_hook_installed = TRUE;
+  } else {
+    GuLog("S3 Plan C: EFI_ACPI_S3_SAVE_PROTOCOL not found (%#llx)\n", (unsigned long long)s_s3save);
+    Info->s3_save_hook_installed = FALSE;
+  }
 
   /* Record pointers and checksums into Info for telemetry & tests */
   Info->shadow_fadt = shadow_fadt;
@@ -1202,23 +1156,23 @@ EFI_STATUS GuAcpiInstallShadowFacs(
   Info->ebs_hook_installed = FALSE;
 
   GuLog("S3 Plan C Complete Shadow Chain Armed:\n"
-        "  RealRSDP=%#llx RealXSDT=%#llx RealFADT=%#llx RealFACS=%#llx (Wake=%#08x XWake=%#llx)\n"
+        "  RealRSDP=%#llx RealXSDT=%#llx RealFADT=%#llx RealFACS=%#llx (WakingVector=%#08x)\n"
         "  ShadowRSDP=%#llx (Chk20=%#02x ExtChk36=%#02x) -> ShadowXSDT=%#llx (Chk=%#02x)\n"
         "  ShadowXSDT [idx=%d] -> ShadowFADT=%#llx (FirmwareCtrl=%#08x XFirmwareCtrl=0 Chk=%#02x)\n"
-        "  ShadowFACS=%#llx (XWake=%#llx) LowTrampoline=%#llx\n"
-        "  ConfigTable In-Place Patched: Acpi20Idx=%d (RealRSDP=%#llx -> ShadowRSDP=%#llx) Acpi10Idx=%d\n",
+        "  ShadowFACS=%#llx LowTrampoline=%#llx HighAcpiPage=%#llx\n"
+        "  ConfigTable In-Place Patched: RealRSDP=%#llx -> ShadowRSDP=%#llx (AppliedCount=%u)\n",
         (unsigned long long)(UINTN)Info->rsdp, (unsigned long long)Info->xsdt_phys,
         (unsigned long long)Info->fadt_phys, (unsigned long long)Info->real_facs_phys,
         (unsigned)Info->real_facs->FirmwareWakingVector,
-        (unsigned long long)Info->real_facs->XFirmwareWakingVector,
         (unsigned long long)shadow_rsdp_phys, (unsigned)shadow_rsdp->Checksum, (unsigned)shadow_rsdp->ExtendedChecksum,
         (unsigned long long)shadow_xsdt_phys, shadow_xsdt ? (unsigned)shadow_xsdt->Checksum : 0,
         (int)Info->xsdt_fadt_index, (unsigned long long)shadow_fadt_phys,
         (unsigned)shadow_fadt->FirmwareCtrl, (unsigned)shadow_fadt->Header.Checksum,
-        (unsigned long long)shadow_facs_phys, (unsigned long long)shadow_facs->XFirmwareWakingVector,
-        (unsigned long long)trampoline_phys,
-        (int)mShadowState.acpi20_idx, (unsigned long long)(UINTN)mShadowState.orig_acpi20_vendor_table,
-        (unsigned long long)shadow_rsdp_phys, (int)mShadowState.acpi10_idx);
+        (unsigned long long)shadow_facs_phys, (unsigned long long)trampoline_phys,
+        (unsigned long long)high_acpi_phys,
+        (unsigned long long)(UINTN)mShadowState.orig_rsdp,
+        (unsigned long long)shadow_rsdp_phys,
+        (unsigned)applied_count);
 
   return EFI_SUCCESS;
 }

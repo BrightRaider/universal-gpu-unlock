@@ -1,7 +1,7 @@
 # Technische Dokumentation: Universal GPU Unlock (Multi-Gen)
 
 > **Tool:** Universal GPU Unlock  
-> **Version:** v1.8.43b  
+> **Version:** v1.8.44  
 > **Architekturen:** NVIDIA Ada Lovelace (RTX 40), Ampere (RTX 30), Turing (RTX 20 / CMP)  
 > **Unterstützte Betriebssysteme:** Windows 10, Windows 11, WSL2 / Ubuntu CUDA Container  
 
@@ -582,5 +582,51 @@ In **v1.8.34** habe ich die Architektur umfassend überarbeitet und perfektionie
    - Alle 187 Checks in 10 Test-Suites erfolgreich bestanden (`MSVC_HOST_TESTS=PASS`).
    - Der Opcode-Stepper prüft jeden RIP-relativen Offset in Section 2, die MSR/CR-Befehle, `lidt [0x01B4]`, `rm16_rel < 0x1000` und die GDT-Alignments.
    - Reines PCI Config Space Recon (CF8/CFC), KEIN BAR0-MMIO, KEIN SEC2-Unlock, KEINE CMOS/RTC-Mutation.
+
+---
+
+### 13.14 Die v1.8.44 Architektur: Endgültige Schließung der 3 ACPI-Leck-Vektoren & Rückkehr zum stabilen 16-Bit Real-Mode Pfad
+
+1. **Hardware-Befund zur 64-Bit-Wake-Sackgasse (RUN0057.TXT & WinDbg Live-Forensik):**
+   - Die empirische 22-Byte-0xCF9-Reset-Sonde (`v1.8.43c-probe`) bei `0x9E000` wurde beim S3-Aufwachen nicht erreicht (kein Hardware-Reboot). Der Bildschirm blieb schwarz, und der folgende Neustart war ein Windows-Hybrid-Sleep/Hibernate-Recovery via `bootmgfw.efi -> winresume.efi` (`Kernel-Boot Event 27, BootType = 0x2`).
+   - AMI Aptio V auf AMD AM4 hängt bei gesetztem `OspmFlags |= 0x01` bereits im BIOS PEI-Code vor dem Waking-Vector-Sprung.
+   - Der 64-Bit-Wake (`XFirmwareWakingVector` +0x18) wurde daher endgültig aufgegeben. Ich kehre vollständig zum stabilen 16-Bit Real-Mode Pfad (`RealFACS + 0x0C = LowTrampoline = 0x9E000`) aus v1.8.40b zurück.
+
+2. **LEAK 1 geschlossen: `ShadowRSDP`, `ShadowXSDT` und `ShadowFADT` im High-Memory (> 1 MB, < 4 GB):**
+   - In v1.8.40b lagen `ShadowRSDP` (`0x9E600`), `ShadowXSDT` (`0x9E640`) und `ShadowFADT` (`0x9E400`) im konventionellen Speicher unter 1 MB innerhalb des EBDA-Suchbereichs (`0x80000..0x9FFFF`).
+   - In v1.8.44 allokiert der Loader eine eigene dedizierte Seite im `EfiACPIMemoryNVS` über `AllocatePages(AllocateMaxAddress, EfiACPIMemoryNVS, 1, &high_acpi_phys)` mit Limit `0xFFFFFFFF` (> 1 MB, < 4 GB, z. B. im Bereich `0xDxxxxxxx`).
+   - `ShadowRSDP` (+0x000), `ShadowXSDT` (+0x080) und `ShadowFADT` (+0x200) residieren ausschließlich auf dieser High-Page.
+   - Im Low-Memory unter 1 MB verbleiben nur noch `LowTrampoline` (`0x9E000`), `ShadowFACS` (`0x9E200`) und die Telemetrie (`0x9E300`).
+   - **Garantie:** Unterhalb von 1 MB existiert **kein einziges Byte** mit der Signatur `"RSD PTR "` mehr, wodurch Firmware-/SMM-Memory-Scans die Schattenkette nicht mehr aufspüren können.
+
+3. **LEAK 2 geschlossen: Dynamischer Live-GUID-Scan & CRC32-Neuberechnung:**
+   - Statt gecachter Indizes iterieren `GuAcpiApplyShadowConfigTable()` und `GuAcpiRestoreConfigTable()` nun live über alle `0 .. gST->NumberOfTableEntries - 1` Einträge der `ConfigurationTable`.
+   - Sowohl `gEfiAcpi20TableGuid` als auch `gEfiAcpi10TableGuid` werden dynamisch abgeglichen und synchronisiert.
+   - Nach jedem Patching- oder Wiederherstellungsvorgang wird die Header-Prüfsumme `gST->Hdr.CRC32` sauber neu berechnet.
+   - In `GuHookedExitBootServices()` wird die Anzahl restaurierter Tabellen als `RestoredCount` nach `LowTrampoline + 0x300` (untere 16 Bit) und die unteren 32 Bit der echten RSDP-Adresse nach `+0x304` geschrieben.
+
+4. **LEAK 3 geschlossen: Sandwich-Hooking des EDK2 `EFI_ACPI_S3_SAVE_PROTOCOL`:**
+   - In `GuAcpiInstallShadowFacs()` sucht der Loader nach `EFI_ACPI_S3_SAVE_PROTOCOL` (`125f2de1-fb85-440c-a54c-4d99358a8d38`).
+   - Ist das Protokoll registriert (EDK2 `AcpiS3SaveDxe`), wird `AcpiS3Save->S3Save` mit `GuHookedS3Save` gesandwicht:
+     - **Pre-Call:** Einhängen der echten `RealRSDP` in `ConfigurationTable`. `AcpiS3SaveDxe` und der SMM LockBox sichern die unberührte genuine OEM-FACS.
+     - **Post-Call:** Wiedereinhängen der `ShadowRSDP` in `ConfigurationTable`. Der Windows OS Loader sieht weiterhin die vollständige Schattenkette.
+   - Die Anzahl der `S3Save`-Aufrufe wird in `LowTrampoline + 0x302` (obere 16 Bit von `+0x300`) protokolliert.
+
+5. **Reines 16-Bit Real-Mode-Trampolin & Telemetrie-Layout:**
+   - Das Trampolin (< 380 Bytes) läuft vollständig im 16-Bit Real Mode:
+     - `cli; cld`
+     - Rettung des BIOS-Stacks (`SS:SP`) nach `[0x0304]` / `[0x0306]`
+     - Telemetrie-Magic `'S3_T'` (`0x53335F54`) bei `[0x031C]`, Checkpoint 1 `0xAA01` bei `[0x0310]`
+     - 8-Dword PCIe Recon (Root Port 0:3:1 und GPU 45:0:0) mit temporärer Bridge-Aktivierung und zwingendem Bridge-Restore auf Originalwerte
+     - Waking Vector Capture aus `[ShadowFACS + 0x0C]` nach `[0x0314]`
+     - ACPI-konforme Segment:Offset-Umrechnung (`Offset = AX & 0x0F`, `Segment = (AX >> 4) | (DX << 12)`)
+     - Wiederherstellung des BIOS-Stacks, Checkpoint 2 `0xAA02` bei `[0x0312]`
+     - Nullen aller x86-GPRs und Segmentregister
+     - Direkter Far Jump `jmp far ptr cs:[0x0300]` in Windows `HalpRMStub` (`0100:0000`).
+   - Weiterhin: **KEIN BAR0-MMIO, KEIN SEC2-Unlock, KEINE CMOS-Mutation**.
+
+6. **Host-Test Suite:**
+   - Alle MSVC Host-Tests erfolgreich bestanden (`MSVC_HOST_TESTS=PASS`).
+
 
 
