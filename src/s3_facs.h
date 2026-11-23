@@ -24,9 +24,17 @@
 #define GU_TRAMP_FAULT_STATUS     0xDEADU
 
 /* Telemetry and Table Offsets within Low Trampoline Memory (<1MB) */
-#define GU_TRAMP_PCI_PROBE_ADDRS_OFF   0x0050U
-#define GU_TRAMP_PCI_PROBE_RAW_OFF     0x0070U
-#define GU_TRAMP_PCI_PROBE_POST_OFF    0x0090U
+#define GU_TRAMP_FAR_JUMP_OFF          0x0300U
+#define GU_TRAMP_BIOS_SP_OFF           0x0304U
+#define GU_TRAMP_BIOS_SS_OFF           0x0306U
+#define GU_TRAMP_ENTRY_STATUS_OFF      0x0310U
+#define GU_TRAMP_EXIT_STATUS_OFF       0x0312U
+#define GU_TRAMP_CAPTURED_VEC_OFF      0x0314U
+#define GU_TRAMP_TARGET_PTR_OFF        0x0318U
+#define GU_TRAMP_MAGIC_OFF             0x031CU
+#define GU_TRAMP_PCI_PROBE_ADDRS_OFF   0x0320U
+#define GU_TRAMP_PCI_PROBE_RAW_OFF     0x0340U
+#define GU_TRAMP_PCI_PROBE_POST_OFF    0x0360U
 #define GU_TRAMP_SHADOW_FACS_OFF       0x0200U
 #define GU_TRAMP_REAL_FACS_MIRROR_OFF  0x0280U
 
@@ -81,7 +89,9 @@ UINT32 GuAcpiBuildTrampolineCode(
     IN UINT32 BufferSize,
     IN EFI_PHYSICAL_ADDRESS TrampolinePhys,
     IN EFI_PHYSICAL_ADDRESS ContextPhys,
-    IN EFI_PHYSICAL_ADDRESS ShadowFacsPhys
+    IN EFI_PHYSICAL_ADDRESS ShadowFacsPhys,
+    IN UINT32 RootPortLinkReg,
+    IN UINT32 GpuPmcsrReg
 );
 
 #endif /* GU_S3_FACS_H */

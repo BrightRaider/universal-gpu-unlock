@@ -8,21 +8,14 @@ For packaged binaries and downloads, visit [GitHub Releases](https://github.com/
 
 ## [v1.8.36] - 2026-11-23
 ### Added
-- **S3 Resume Pre-OS Hardware Telemetry & PCIe Root Bridge Active Arming (addresses #19):**
-  - **Non-Intrusive 16-Bit Real-Mode PCI Config Probe Loop:** Integrated a 32-byte non-blocking I/O loop using standard x86 PCI Configuration Mechanism #1 (`0x0CF8` / `0x0CFC`) directly into the S3 wake trampoline preamble. Probes and captures 8 critical PCIe registers at the earliest millisecond of S3 resume:
-    1. AMD Root Port `0:3:1` Device/Vendor ID (`0x80001900`)
-    2. AMD Root Port `0:3:1` Command/Status (`0x80001904`)
-    3. AMD Root Port `0:3:1` Primary/Secondary/Subordinate Bus Numbers (`0x80001918`)
-    4. AMD Root Port `0:3:1` Memory Base/Limit (`0x80001920`)
-    5. NVIDIA RTX 4090 `45:0:0` Device/Vendor ID (`0x802D0000`)
-    6. NVIDIA RTX 4090 `45:0:0` Command/Status (`0x802D0004`)
-    7. NVIDIA RTX 4090 `45:0:0` BAR0 Physical Address (`0x802D0010`)
-    8. NVIDIA RTX 4090 `45:0:0` Power Management Control/Status (`0x802D0064`)
-  - **Autonomous Root Bridge Secondary Bus Arming:** If AMD PCIe Root Port `0:3:1` is detected on S3 wake, the trampoline actively programs Secondary and Subordinate Bus numbers to `45` (`0x2D`) via `0x80001918` and asserts Memory Space Enable (`MSE`) and Bus Master Enable (`BME`) via `0x80001904`. It immediately re-probes the GPU DevID, Command, PMCSR, and BAR0, recording the post-arm state into telemetry buffer `+0x0090`.
-  - **Co-Located Shadow FACS at 512-Byte Alignment (`+0x0200`):** Relocated `ShadowFACS` to offset `+0x0200` in the low ACPI NVS page, ensuring 512-byte alignment per ACPI specification and providing a full 512-byte execution envelope for the real-mode trampoline without structural overlap.
-  - **Full S3 Prior Wake Forensic Telemetry in `RUN*.TXT`:** Boot-time initialization reads and logs all 12 raw and post-arm PCIe configuration registers into `RUN*.TXT`, providing instant diagnostic verification of hardware link training and bridge decoding across S3 sleep cycles.
-  - **Boot Menu Clarification:** Updated on-screen boot text to distinguish between `[P]` (S3 Standby Persistence Unlock via ACPI FACS Low-Trampoline) and `[U]` (Standard RAM-only Unlock without S3 hook).
-  - **Host Unit Tests Passing:** All 76 checks passing under MSVC test suite (`MSVC_HOST_TESTS=PASS`).
+- **Zero-Risk S3 Config Space Reconnaissance & Root Bridge Mandatory Restore (addresses #19):**
+  - **Zero MSE/BME (`0x0006`) on Root Port `0:3:1`:** Completely eliminated writing to Offset `0x04` (Command Register) of Root Port `0:3:1`. Prevents any risk of low-memory shadowing/aliasing if Offset `0x20` (Memory Base/Limit) is unconfigured (`0x00000000`), ensuring the CPU memory controller always accesses physical DRAM `<1MB` where the trampoline and `HalpRMStub` reside. Configuration cycles via `0xCF8/0xCFC` operate independently of `MSE` and `BME`.
+  - **Safer Bridge Bus Routing & Mandatory Restoration:** Trampoline captures original Root Port Offset `0x18` (Primary/Secondary/Subordinate Bus Numbers and Secondary Latency Timer) from `[0x0348]`, preserves upper byte bits 31:24 (`Latency Timer`), temporarily sets `Pri=0x00, Sec=0x2D, Sub=0x2D`, performs config space reads on Bus 45, and immediately restores Offset `0x18` back to its exact original value before jumping to Windows `HalpRMStub`. Windows `pci.sys` finds the bridge completely unaltered.
+  - **PCIe Link Status (`DLLLA` / Bit 13 & Training / Bit 11) Telemetry:** Dynamically discovers PCIe Capability ID `0x10` on Root Port `0:3:1` at boot (`CapPtr + 0x10`), reads the 32-bit register containing Link Control (low 16) and Link Status (high 16), and logs `DLLLA` (Data Link Layer Link Active), `Training`, `Speed` (Gen1-4), and `Width` (x1-x16) into `RUN*.TXT`.
+  - **Dynamic PMCSR Discovery:** Dynamically discovers NVIDIA RTX 4090 Power Management Capability ID `0x01` at boot, computes PMCSR offset (`CapPtr + 0x04` -> `0x802D0064`), passes it in NVS context (`GU_S3_RESUME_CONTEXT.gpu_pmcsr_reg`), and probes PMCSR dynamically via `[0x033C]`.
+  - **Clean Code & Data Segregation (`0x0300`):** Relocated all trampoline runtime variables, telemetry checkpoints, and PCI probe tables to `+0x0300..+0x036F`, completely separating machine code (`0x0000..0x015B`, 347 bytes) from data and ACPI tables (`ShadowFACS` at `+0x0200`, `RealFACS` mirror at `+0x0280`).
+  - **Host Verification Suite Passing:** All 98 checks passing (`MSVC_HOST_TESTS=PASS`), including automated verification that every 32-bit I/O instruction contains the `0x66` prefix (`66 EF` and `66 ED`), bridge restore verification, no MSE/BME write verification, and complete annotated disassembly output.
+  - **Boot Menu Clarification:** Distinguishes between `[P]` (S3 Standby Persistence Unlock via ACPI FACS Low-Trampoline) and `[U]` (Standard RAM-only Unlock without S3 hook).
 
 ---
 

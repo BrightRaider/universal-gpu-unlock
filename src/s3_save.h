@@ -80,6 +80,10 @@ typedef struct {
   UINT32 resume_status;     /* 1 = Success, 0 = Pending, negative = Error */
   UINT32 resume_count;      /* Number of S3 resume cycles handled */
   UINT32 last_sec2_marker;  /* Readback of SEC2 marker register */
+
+  /* Dynamically discovered PCIe registers for S3 resume reconnaissance */
+  UINT32 root_port_link_reg; /* 0xCF8 address for Root Port PCIe Link Control/Status (Cap 0x10 + 0x10) */
+  UINT32 gpu_pmcsr_reg;      /* 0xCF8 address for GPU PMCSR (Cap 0x01 + 0x04) */
 } GU_S3_RESUME_CONTEXT;
 #pragma pack(pop)
 
@@ -96,3 +100,5 @@ typedef struct {
 #define GU_S3_CTX_OFF_STATUS        0x58
 #define GU_S3_CTX_OFF_COUNT         0x5C
 #define GU_S3_CTX_OFF_SEC2_MARKER   0x60
+#define GU_S3_CTX_OFF_ROOT_PORT_LNK 0x64
+#define GU_S3_CTX_OFF_GPU_PMCSR     0x68

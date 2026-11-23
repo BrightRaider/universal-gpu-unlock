@@ -3,7 +3,7 @@
 #include "port.h"
 #include "compat/compat.h"
 
-typedef char gu_s3_ctx_size_assert[(sizeof(GU_S3_RESUME_CONTEXT) == 100) ? 1 : -1];
+typedef char gu_s3_ctx_size_assert[(sizeof(GU_S3_RESUME_CONTEXT) == 108) ? 1 : -1];
 
 static BOOLEAN GuidMatch(const EFI_GUID *a, const EFI_GUID *b) {
   const UINT8 *p1 = (const UINT8 *)a;
@@ -158,7 +158,9 @@ UINT32 GuAcpiBuildTrampolineCode(
     IN UINT32 BufferSize,
     IN EFI_PHYSICAL_ADDRESS TrampolinePhys,
     IN EFI_PHYSICAL_ADDRESS ContextPhys,
-    IN EFI_PHYSICAL_ADDRESS ShadowFacsPhys
+    IN EFI_PHYSICAL_ADDRESS ShadowFacsPhys,
+    IN UINT32 RootPortLinkReg,
+    IN UINT32 GpuPmcsrReg
 ) {
   if (!Buffer || BufferSize < 1024) return 0;
   (VOID)ContextPhys;
@@ -166,34 +168,33 @@ UINT32 GuAcpiBuildTrampolineCode(
 
   /*
    * Layout within Low Trampoline buffer (<1MB, 4096 bytes):
-   * +0x000: 16-bit Pure Real Mode S3 Resume Trampoline Machine Code (<350 bytes)
-   * +0x030: Far Jump Target: [0x30] = Offset (16-bit), [0x32] = Segment (16-bit)
-   * +0x034: Saved BIOS SP
-   * +0x036: Saved BIOS SS
-   * +0x040: Telemetry Entry Status (0xAA01) or Fault (0xDEAD)
-   * +0x042: Telemetry Exit Status (0xAA02)
-   * +0x044: Telemetry Captured Vector (Low 16 bits)
-   * +0x046: Telemetry Captured Vector (High 16 bits)
-   * +0x048: Telemetry Target Offset
-   * +0x04A: Telemetry Target Segment
-   * +0x04C: Telemetry Magic (0x53335F54 "S3_T")
-   * +0x050: PCI Probe Addresses Table (8 dwords = 32 bytes)
-   * +0x070: PCI Probe Raw Results (8 dwords = 32 bytes)
-   * +0x090: PCI Probe Post-Arm Results (4 dwords = 16 bytes)
+   * +0x000: 16-bit Pure Real Mode S3 Resume Trampoline Machine Code (<380 bytes)
    * +0x200: Shadow FACS (64 bytes, 512-byte aligned per ACPI spec)
    * +0x280: Real FACS Vector Mirror (32-bit at 0x280, 64-bit at 0x288)
+   * +0x300: Far Jump Target: [0x300] = Offset (16-bit), [0x302] = Segment (16-bit)
+   * +0x304: Saved BIOS SP
+   * +0x306: Saved BIOS SS
+   * +0x310: Telemetry Entry Status (0xAA01) or Fault (0xDEAD)
+   * +0x312: Telemetry Exit Status (0xAA02)
+   * +0x314: Telemetry Captured Vector (32-bit dword)
+   * +0x318: Telemetry Target Offset (16-bit)
+   * +0x31A: Telemetry Target Segment (16-bit)
+   * +0x31C: Telemetry Magic (0x53335F54 "S3_T")
+   * +0x320: PCI Probe Addresses Table (8 dwords = 32 bytes)
+   * +0x340: PCI Probe Raw Results (8 dwords = 32 bytes)
+   * +0x360: PCI Probe Post-Arm Results (4 dwords = 16 bytes)
    */
 
-  /* Pre-populate PCI probe addresses at +0x0050 (8 dwords = 32 bytes) */
-  UINT32 *probe_addrs = (UINT32 *)(Buffer + 0x0050);
+  /* Pre-populate PCI probe addresses at +0x0320 (8 dwords = 32 bytes) */
+  UINT32 *probe_addrs = (UINT32 *)(Buffer + 0x0320);
   probe_addrs[0] = 0x80001900U; /* Bridge 0:3:1 DevID (Expected 0x14831022) */
   probe_addrs[1] = 0x80001904U; /* Bridge 0:3:1 Cmd/Stat */
   probe_addrs[2] = 0x80001918U; /* Bridge 0:3:1 Bus Numbers (Pri, Sec, Sub) */
-  probe_addrs[3] = 0x80001920U; /* Bridge 0:3:1 Memory Base/Limit */
+  probe_addrs[3] = RootPortLinkReg ? RootPortLinkReg : 0x80001960U; /* Bridge 0:3:1 Link Ctrl/Status (Cap 0x10) */
   probe_addrs[4] = 0x802D0000U; /* GPU 45:0:0 DevID (Expected 0x268410de if up) */
   probe_addrs[5] = 0x802D0004U; /* GPU 45:0:0 Cmd/Stat */
   probe_addrs[6] = 0x802D0010U; /* GPU 45:0:0 BAR0 */
-  probe_addrs[7] = 0x802D0064U; /* GPU 45:0:0 PMCSR */
+  probe_addrs[7] = GpuPmcsrReg ? GpuPmcsrReg : 0x802D0064U; /* GPU 45:0:0 PMCSR (Cap 0x01) */
 
   UINT8 *e = Buffer + 0x000;
 
@@ -201,19 +202,19 @@ UINT32 GuAcpiBuildTrampolineCode(
   *e++ = 0xFC; /* cld */
   *e++ = 0x8C; *e++ = 0xC8; /* mov ax, cs */
   *e++ = 0x8E; *e++ = 0xD8; /* mov ds, ax */
-  *e++ = 0x89; *e++ = 0x26; *e++ = 0x34; *e++ = 0x00; /* mov [0x0034], sp */
-  *e++ = 0x8C; *e++ = 0x16; *e++ = 0x36; *e++ = 0x00; /* mov [0x0036], ss */
+  *e++ = 0x89; *e++ = 0x26; *e++ = 0x04; *e++ = 0x03; /* mov [0x0304], sp */
+  *e++ = 0x8C; *e++ = 0x16; *e++ = 0x06; *e++ = 0x03; /* mov [0x0306], ss */
 
-  /* Set Telemetry Magic: mov dword [0x004C], 0x53335F54 ('S3_T') */
-  *e++ = 0x66; *e++ = 0xC7; *e++ = 0x06; *e++ = 0x4C; *e++ = 0x00;
+  /* Set Telemetry Magic: mov dword [0x031C], 0x53335F54 ('S3_T') */
+  *e++ = 0x66; *e++ = 0xC7; *e++ = 0x06; *e++ = 0x1C; *e++ = 0x03;
   *e++ = 0x54; *e++ = 0x5F; *e++ = 0x33; *e++ = 0x53;
 
-  /* Telemetry Entry Checkpoint: mov word [0x0040], 0xAA01 */
-  *e++ = 0xC7; *e++ = 0x06; *e++ = 0x40; *e++ = 0x00; *e++ = 0x01; *e++ = 0xAA;
+  /* Telemetry Entry Checkpoint: mov word [0x0310], 0xAA01 */
+  *e++ = 0xC7; *e++ = 0x06; *e++ = 0x10; *e++ = 0x03; *e++ = 0x01; *e++ = 0xAA;
 
-  /* Probe loop: si=0x0050, di=0x0070, cx=8 */
-  *e++ = 0xBE; *e++ = 0x50; *e++ = 0x00; /* mov si, 0x0050 */
-  *e++ = 0xBF; *e++ = 0x70; *e++ = 0x00; /* mov di, 0x0070 */
+  /* Probe loop: si=0x0320, di=0x0340, cx=8 */
+  *e++ = 0xBE; *e++ = 0x20; *e++ = 0x03; /* mov si, 0x0320 */
+  *e++ = 0xBF; *e++ = 0x40; *e++ = 0x03; /* mov di, 0x0340 */
   *e++ = 0xB9; *e++ = 0x08; *e++ = 0x00; /* mov cx, 8 */
   UINT8 *pci_loop_start = e;
   *e++ = 0x66; *e++ = 0x8B; *e++ = 0x04; /* mov eax, [si] */
@@ -228,50 +229,68 @@ UINT32 GuAcpiBuildTrampolineCode(
   INT8 loop_disp = (INT8)(pci_loop_start - (e + 1));
   *e++ = (UINT8)loop_disp;
 
-  /* Check if Bridge DevID is AMD (Vendor ID 0x1022 at [0x0070]) */
-  *e++ = 0xA1; *e++ = 0x70; *e++ = 0x00; /* mov ax, [0x0070] */
+  /* Check if Bridge DevID is AMD (Vendor ID 0x1022 at [0x0340]) */
+  *e++ = 0xA1; *e++ = 0x40; *e++ = 0x03; /* mov ax, [0x0340] */
   *e++ = 0x3D; *e++ = 0x22; *e++ = 0x10; /* cmp ax, 0x1022 */
-  *e++ = 0x75; UINT8 *skip_bridge_disp = e++; /* jne .skip_bridge */
+  *e++ = 0x0F; *e++ = 0x85;              /* jne near .skip_bridge (4 bytes) */
+  UINT8 *skip_bridge_disp = e;
+  *e++ = 0x00; *e++ = 0x00;              /* placeholder rel16 */
 
-  /* Bridge detected! Ensure Secondary/Subordinate bus is 45 (0x2D): write 0x002D2D00 to 0x80001918 */
+  /*
+   * 1. Load original Bus Numbers from [0x0348], preserve Latency Timer (bits 31:24),
+   * set Pri=0, Sec=0x2D, Sub=0x2D:
+   */
+  *e++ = 0x66; *e++ = 0xA1; *e++ = 0x48; *e++ = 0x03;             /* mov eax, [0x0348] */
+  *e++ = 0x66; *e++ = 0x25; *e++ = 0x00; *e++ = 0x00; *e++ = 0x00; *e++ = 0xFF; /* and eax, 0xFF000000 */
+  *e++ = 0x66; *e++ = 0x0D; *e++ = 0x00; *e++ = 0x2D; *e++ = 0x2D; *e++ = 0x00; /* or eax, 0x002D2D00 */
+
+  /* Write new bus numbers to Root Port 0:3:1 offset 0x18 (0x80001918) */
+  *e++ = 0x66; *e++ = 0x50;                                       /* push eax */
   *e++ = 0x66; *e++ = 0xB8; *e++ = 0x18; *e++ = 0x19; *e++ = 0x00; *e++ = 0x80; /* mov eax, 0x80001918 */
-  *e++ = 0xBA; *e++ = 0xF8; *e++ = 0x0C; *e++ = 0x66; *e++ = 0xEF;             /* out 0xCF8, eax */
-  *e++ = 0x66; *e++ = 0xB8; *e++ = 0x00; *e++ = 0x2D; *e++ = 0x2D; *e++ = 0x00; /* mov eax, 0x002D2D00 */
-  *e++ = 0xBA; *e++ = 0xFC; *e++ = 0x0C; *e++ = 0x66; *e++ = 0xEF;             /* out 0xCFC, eax */
+  *e++ = 0xBA; *e++ = 0xF8; *e++ = 0x0C;                         /* mov dx, 0x0CF8 */
+  *e++ = 0x66; *e++ = 0xEF;                                       /* out dx, eax */
+  *e++ = 0x66; *e++ = 0x58;                                       /* pop eax */
+  *e++ = 0xBA; *e++ = 0xFC; *e++ = 0x0C;                         /* mov dx, 0x0CFC */
+  *e++ = 0x66; *e++ = 0xEF;                                       /* out dx, eax */
 
-  /* Enable Bridge Command (bit 1 Memory Space, bit 2 Bus Master) at 0x80001904 */
-  *e++ = 0x66; *e++ = 0xB8; *e++ = 0x04; *e++ = 0x19; *e++ = 0x00; *e++ = 0x80; /* mov eax, 0x80001904 */
-  *e++ = 0xBA; *e++ = 0xF8; *e++ = 0x0C; *e++ = 0x66; *e++ = 0xEF;             /* out 0xCF8, eax */
-  *e++ = 0xBA; *e++ = 0xFC; *e++ = 0x0C; *e++ = 0x66; *e++ = 0xED;             /* in eax, 0xCFC */
-  *e++ = 0x83; *e++ = 0xC8; *e++ = 0x06;                                       /* or ax, 0x0006 */
-  *e++ = 0x66; *e++ = 0xEF;                                                     /* out 0xCFC, eax */
-
-  /* Probe GPU DevID at 0x802D0000 -> [0x0090] */
+  /* 2. Probe GPU 45:0:0 now that bridge is routing: */
+  /* Read GPU DevID at 0x802D0000 -> [0x0360] */
   *e++ = 0x66; *e++ = 0xB8; *e++ = 0x00; *e++ = 0x00; *e++ = 0x2D; *e++ = 0x80; /* mov eax, 0x802D0000 */
-  *e++ = 0xBA; *e++ = 0xF8; *e++ = 0x0C; *e++ = 0x66; *e++ = 0xEF;             /* out 0xCF8, eax */
-  *e++ = 0xBA; *e++ = 0xFC; *e++ = 0x0C; *e++ = 0x66; *e++ = 0xED;             /* in eax, 0xCFC */
-  *e++ = 0x66; *e++ = 0xA3; *e++ = 0x90; *e++ = 0x00;                         /* mov [0x0090], eax */
+  *e++ = 0xBA; *e++ = 0xF8; *e++ = 0x0C; *e++ = 0x66; *e++ = 0xEF;             /* out dx, eax */
+  *e++ = 0xBA; *e++ = 0xFC; *e++ = 0x0C; *e++ = 0x66; *e++ = 0xED;             /* in eax, dx */
+  *e++ = 0x66; *e++ = 0xA3; *e++ = 0x60; *e++ = 0x03;                         /* mov [0x0360], eax */
 
-  /* Probe GPU Cmd at 0x802D0004 -> [0x0094] */
+  /* Read GPU Cmd/Stat at 0x802D0004 -> [0x0364] */
   *e++ = 0x66; *e++ = 0xB8; *e++ = 0x04; *e++ = 0x00; *e++ = 0x2D; *e++ = 0x80; /* mov eax, 0x802D0004 */
-  *e++ = 0xBA; *e++ = 0xF8; *e++ = 0x0C; *e++ = 0x66; *e++ = 0xEF;             /* out 0xCF8, eax */
-  *e++ = 0xBA; *e++ = 0xFC; *e++ = 0x0C; *e++ = 0x66; *e++ = 0xED;             /* in eax, 0xCFC */
-  *e++ = 0x66; *e++ = 0xA3; *e++ = 0x94; *e++ = 0x00;                         /* mov [0x0094], eax */
+  *e++ = 0xBA; *e++ = 0xF8; *e++ = 0x0C; *e++ = 0x66; *e++ = 0xEF;             /* out dx, eax */
+  *e++ = 0xBA; *e++ = 0xFC; *e++ = 0x0C; *e++ = 0x66; *e++ = 0xED;             /* in eax, dx */
+  *e++ = 0x66; *e++ = 0xA3; *e++ = 0x64; *e++ = 0x03;                         /* mov [0x0364], eax */
 
-  /* Probe GPU PMCSR at 0x802D0064 -> [0x0098] */
-  *e++ = 0x66; *e++ = 0xB8; *e++ = 0x64; *e++ = 0x00; *e++ = 0x2D; *e++ = 0x80; /* mov eax, 0x802D0064 */
-  *e++ = 0xBA; *e++ = 0xF8; *e++ = 0x0C; *e++ = 0x66; *e++ = 0xEF;             /* out 0xCF8, eax */
-  *e++ = 0xBA; *e++ = 0xFC; *e++ = 0x0C; *e++ = 0x66; *e++ = 0xED;             /* in eax, 0xCFC */
-  *e++ = 0x66; *e++ = 0xA3; *e++ = 0x98; *e++ = 0x00;                         /* mov [0x0098], eax */
-
-  /* Probe GPU BAR0 at 0x802D0010 -> [0x009C] */
+  /* Read GPU BAR0 at 0x802D0010 -> [0x0368] */
   *e++ = 0x66; *e++ = 0xB8; *e++ = 0x10; *e++ = 0x00; *e++ = 0x2D; *e++ = 0x80; /* mov eax, 0x802D0010 */
-  *e++ = 0xBA; *e++ = 0xF8; *e++ = 0x0C; *e++ = 0x66; *e++ = 0xEF;             /* out 0xCF8, eax */
-  *e++ = 0xBA; *e++ = 0xFC; *e++ = 0x0C; *e++ = 0x66; *e++ = 0xED;             /* in eax, 0xCFC */
-  *e++ = 0x66; *e++ = 0xA3; *e++ = 0x9C; *e++ = 0x00;                         /* mov [0x009C], eax */
+  *e++ = 0xBA; *e++ = 0xF8; *e++ = 0x0C; *e++ = 0x66; *e++ = 0xEF;             /* out dx, eax */
+  *e++ = 0xBA; *e++ = 0xFC; *e++ = 0x0C; *e++ = 0x66; *e++ = 0xED;             /* in eax, dx */
+  *e++ = 0x66; *e++ = 0xA3; *e++ = 0x68; *e++ = 0x03;                         /* mov [0x0368], eax */
 
-  /* Patch .skip_bridge target */
-  *skip_bridge_disp = (UINT8)(e - (skip_bridge_disp + 1));
+  /* Read GPU PMCSR using address from probe_addrs[7] at [0x033C] -> [0x036C] */
+  *e++ = 0x66; *e++ = 0xA1; *e++ = 0x3C; *e++ = 0x03;                         /* mov eax, [0x033C] */
+  *e++ = 0xBA; *e++ = 0xF8; *e++ = 0x0C; *e++ = 0x66; *e++ = 0xEF;             /* out dx, eax */
+  *e++ = 0xBA; *e++ = 0xFC; *e++ = 0x0C; *e++ = 0x66; *e++ = 0xED;             /* in eax, dx */
+  *e++ = 0x66; *e++ = 0xA3; *e++ = 0x6C; *e++ = 0x03;                         /* mov [0x036C], eax */
+
+  /*
+   * 3. MANDATORY BRIDGE RESTORE: Restore Root Port Offset 0x18 to exact original value!
+   * Windows pci.sys must find the bridge in its exact pre-trampoline state.
+   */
+  *e++ = 0x66; *e++ = 0xB8; *e++ = 0x18; *e++ = 0x19; *e++ = 0x00; *e++ = 0x80; /* mov eax, 0x80001918 */
+  *e++ = 0xBA; *e++ = 0xF8; *e++ = 0x0C; *e++ = 0x66; *e++ = 0xEF;             /* out dx, eax */
+  *e++ = 0x66; *e++ = 0xA1; *e++ = 0x48; *e++ = 0x03;                         /* mov eax, [0x0348] */
+  *e++ = 0xBA; *e++ = 0xFC; *e++ = 0x0C; *e++ = 0x66; *e++ = 0xEF;             /* out dx, eax */
+
+  /* Patch .skip_bridge near jne displacement (relative to end of 4-byte instruction) */
+  INT32 skip_disp = (INT32)(e - (skip_bridge_disp + 2));
+  skip_bridge_disp[0] = (UINT8)(skip_disp & 0xFF);
+  skip_bridge_disp[1] = (UINT8)((skip_disp >> 8) & 0xFF);
 
   /* Read 32-bit waking vector from Shadow FACS at 0x0200: [0x020C] */
   *e++ = 0xA1; *e++ = 0x0C; *e++ = 0x02;             /* mov ax, [0x020C] */
@@ -306,7 +325,7 @@ UINT32 GuAcpiBuildTrampolineCode(
   *e++ = 0x75; UINT8 *f_dx3 = e++;                   /* jnz .have_vec */
 
   /* No vector found in any FACS table! Flag error 0xDEAD and halt safely */
-  *e++ = 0xC7; *e++ = 0x06; *e++ = 0x40; *e++ = 0x00; *e++ = 0xAD; *e++ = 0xDE;
+  *e++ = 0xC7; *e++ = 0x06; *e++ = 0x10; *e++ = 0x03; *e++ = 0xAD; *e++ = 0xDE;
   *e++ = 0xF4; /* hlt */
 
   /* .have_vec target */
@@ -320,9 +339,9 @@ UINT32 GuAcpiBuildTrampolineCode(
   *f_ax3 = (UINT8)(e - (f_ax3 + 1));
   *f_dx3 = (UINT8)(e - (f_dx3 + 1));
 
-  /* Save captured vector to telemetry [0x0044], [0x0046] */
-  *e++ = 0xA3; *e++ = 0x44; *e++ = 0x00;             /* mov [0x0044], ax */
-  *e++ = 0x89; *e++ = 0x16; *e++ = 0x46; *e++ = 0x00; /* mov [0x0046], dx */
+  /* Save captured vector to telemetry [0x0314], [0x0316] */
+  *e++ = 0xA3; *e++ = 0x14; *e++ = 0x03;             /* mov [0x0314], ax */
+  *e++ = 0x89; *e++ = 0x16; *e++ = 0x16; *e++ = 0x03; /* mov [0x0316], dx */
 
   /* Convert linear DX:AX into Segment:Offset */
   /* Offset = AX & 0x000F */
@@ -334,20 +353,20 @@ UINT32 GuAcpiBuildTrampolineCode(
   *e++ = 0xC1; *e++ = 0xE2; *e++ = 0x0C;             /* shl dx, 12 */
   *e++ = 0x09; *e++ = 0xD0;                         /* or ax, dx */
 
-  /* Store far pointer into [0x0030]: bx=Offset, ax=Segment */
-  *e++ = 0x89; *e++ = 0x1E; *e++ = 0x30; *e++ = 0x00; /* mov [0x0030], bx */
-  *e++ = 0xA3; *e++ = 0x32; *e++ = 0x00;             /* mov [0x0032], ax */
+  /* Store far pointer into [0x0300]: bx=Offset, ax=Segment */
+  *e++ = 0x89; *e++ = 0x1E; *e++ = 0x00; *e++ = 0x03; /* mov [0x0300], bx */
+  *e++ = 0xA3; *e++ = 0x02; *e++ = 0x03;             /* mov [0x0302], ax */
 
-  /* Telemetry: save computed Segment:Offset into [0x0048], [0x004A] */
-  *e++ = 0x89; *e++ = 0x1E; *e++ = 0x48; *e++ = 0x00; /* mov [0x0048], bx */
-  *e++ = 0xA3; *e++ = 0x4A; *e++ = 0x00;             /* mov [0x004A], ax */
+  /* Telemetry: save computed Segment:Offset into [0x0318], [0x031A] */
+  *e++ = 0x89; *e++ = 0x1E; *e++ = 0x18; *e++ = 0x03; /* mov [0x0318], bx */
+  *e++ = 0xA3; *e++ = 0x1A; *e++ = 0x03;             /* mov [0x031A], ax */
 
-  /* Telemetry Checkpoint 2: about to jump! mov word [0x0042], 0xAA02 */
-  *e++ = 0xC7; *e++ = 0x06; *e++ = 0x42; *e++ = 0x00; *e++ = 0x02; *e++ = 0xAA;
+  /* Telemetry Checkpoint 2: about to jump! mov word [0x0312], 0xAA02 */
+  *e++ = 0xC7; *e++ = 0x06; *e++ = 0x12; *e++ = 0x03; *e++ = 0x02; *e++ = 0xAA;
 
   /* Restore BIOS stack */
-  *e++ = 0x8E; *e++ = 0x16; *e++ = 0x36; *e++ = 0x00; /* mov ss, [0x0036] */
-  *e++ = 0x8B; *e++ = 0x26; *e++ = 0x34; *e++ = 0x00; /* mov sp, [0x0034] */
+  *e++ = 0x8E; *e++ = 0x16; *e++ = 0x06; *e++ = 0x03; /* mov ss, [0x0306] */
+  *e++ = 0x8B; *e++ = 0x26; *e++ = 0x04; *e++ = 0x03; /* mov sp, [0x0304] */
 
   /* Zero general purpose registers for clean Windows handoff */
   *e++ = 0x66; *e++ = 0x31; *e++ = 0xC0;             /* xor eax, eax */
@@ -359,9 +378,112 @@ UINT32 GuAcpiBuildTrampolineCode(
   *e++ = 0x66; *e++ = 0x31; *e++ = 0xED;             /* xor ebp, ebp */
 
   /* Far indirect jump directly to Windows HalpRMStub */
-  *e++ = 0x2E; *e++ = 0xFF; *e++ = 0x2E; *e++ = 0x30; *e++ = 0x00; /* jmp far ptr cs:[0x30] */
+  *e++ = 0x2E; *e++ = 0xFF; *e++ = 0x2E; *e++ = 0x00; *e++ = 0x03; /* jmp far ptr cs:[0x0300] */
 
   return (UINT32)(e - Buffer);
+}
+
+/*
+ * Discovers the PCIe Link Control & Status Register on the upstream bridge for target_bus.
+ */
+static UINT32 GuFindRootPortLinkReg(EFI_BOOT_SERVICES *bs, UINT8 target_bus) {
+  UINT32 fallback_reg = 0x80001960U; /* Default AMD Root Port 0:3:1 Link Ctrl/Status (cap=0x50+0x10) */
+  if (!bs || !bs->LocateHandleBuffer || !bs->HandleProtocol || !bs->FreePool) return fallback_reg;
+
+  EFI_GUID pci_guid = { 0x4cf5b200, 0x68b8, 0x41fb, { 0x88, 0xae, 0xb2, 0xec, 0x17, 0x93, 0xac, 0x5d } };
+  EFI_HANDLE *handles = NULL;
+  UINTN count = 0;
+  EFI_STATUS s = bs->LocateHandleBuffer(ByProtocol, &pci_guid, NULL, &count, &handles);
+  if (EFI_ERROR(s) || !handles) return fallback_reg;
+
+  for (UINTN i = 0; i < count; i++) {
+    EFI_PCI_IO_PROTOCOL *io = NULL;
+    if (EFI_ERROR(bs->HandleProtocol(handles[i], &pci_guid, (VOID **)&io)) || !io) continue;
+
+    UINT8 hdr_type = 0, sec_bus = 0;
+    (VOID)io->Pci.Read(io, EfiPciIoWidthUint8, 0x0E, 1, &hdr_type);
+    if ((hdr_type & 0x7FU) == 0x01) { /* PCI-to-PCI Bridge */
+      (VOID)io->Pci.Read(io, EfiPciIoWidthUint8, 0x19, 1, &sec_bus);
+      UINTN seg = 0, bus = 0, dev = 0, func = 0;
+      if (io->GetLocation) {
+        (VOID)io->GetLocation(io, &seg, &bus, &dev, &func);
+      }
+      if (sec_bus == target_bus || (bus == 0 && dev == 3 && func == 1)) {
+        UINT8 cap_ptr = 0;
+        (VOID)io->Pci.Read(io, EfiPciIoWidthUint8, 0x34, 1, &cap_ptr);
+        UINTN steps = 0;
+        while (cap_ptr >= 0x40 && cap_ptr <= 0xFC && (cap_ptr & 3) == 0 && ++steps < 48) {
+          UINT8 cap_id = 0, next_ptr = 0;
+          (VOID)io->Pci.Read(io, EfiPciIoWidthUint8, cap_ptr, 1, &cap_id);
+          (VOID)io->Pci.Read(io, EfiPciIoWidthUint8, cap_ptr + 1, 1, &next_ptr);
+          if (cap_id == 0x10) { /* PCI Express Capability */
+            UINT32 reg_off = (UINT32)(cap_ptr + 0x10);
+            UINT32 pci_addr = 0x80000000U | ((UINT32)bus << 16) | ((UINT32)dev << 11) | ((UINT32)func << 8) | (reg_off & ~3U);
+            bs->FreePool(handles);
+            return pci_addr;
+          }
+          cap_ptr = next_ptr;
+        }
+      }
+    }
+  }
+  bs->FreePool(handles);
+  return fallback_reg;
+}
+
+/*
+ * Discovers the Power Management Control/Status Register (PMCSR) on the GPU via PCI Cap 0x01.
+ */
+static UINT32 GuFindGpuPmcsrReg(EFI_BOOT_SERVICES *bs, EFI_PCI_IO_PROTOCOL *gpu_io, UINT8 gpu_bus) {
+  UINT32 fallback_reg = 0x80000000U | ((UINT32)gpu_bus << 16) | 0x64U; /* Default RTX 4090 pm_cap=0x60 + 0x04 */
+  if (Gu.pm_cap >= 0x40 && Gu.pm_cap <= 0xFC) {
+    UINT32 reg_off = (UINT32)(Gu.pm_cap + 0x04);
+    return 0x80000000U | ((UINT32)gpu_bus << 16) | (reg_off & ~3U);
+  }
+
+  if (!gpu_io && bs && bs->LocateHandleBuffer && bs->HandleProtocol && bs->FreePool) {
+    EFI_GUID pci_guid = { 0x4cf5b200, 0x68b8, 0x41fb, { 0x88, 0xae, 0xb2, 0xec, 0x17, 0x93, 0xac, 0x5d } };
+    EFI_HANDLE *handles = NULL;
+    UINTN count = 0;
+    if (!EFI_ERROR(bs->LocateHandleBuffer(ByProtocol, &pci_guid, NULL, &count, &handles)) && handles) {
+      for (UINTN i = 0; i < count; i++) {
+        EFI_PCI_IO_PROTOCOL *io = NULL;
+        if (!EFI_ERROR(bs->HandleProtocol(handles[i], &pci_guid, (VOID **)&io)) && io) {
+          UINTN seg = 0, bus = 0, dev = 0, func = 0;
+          if (io->GetLocation && !EFI_ERROR(io->GetLocation(io, &seg, &bus, &dev, &func))) {
+            if (bus == gpu_bus && dev == 0 && func == 0) {
+              gpu_io = io;
+              break;
+            }
+          }
+        }
+      }
+      bs->FreePool(handles);
+    }
+  }
+
+  if (gpu_io) {
+    UINT8 cap_ptr = 0;
+    (VOID)gpu_io->Pci.Read(gpu_io, EfiPciIoWidthUint8, 0x34, 1, &cap_ptr);
+    UINTN steps = 0;
+    while (cap_ptr >= 0x40 && cap_ptr <= 0xFC && (cap_ptr & 3) == 0 && ++steps < 48) {
+      UINT8 cap_id = 0, next_ptr = 0;
+      (VOID)gpu_io->Pci.Read(gpu_io, EfiPciIoWidthUint8, cap_ptr, 1, &cap_id);
+      (VOID)gpu_io->Pci.Read(gpu_io, EfiPciIoWidthUint8, cap_ptr + 1, 1, &next_ptr);
+      if (cap_id == 0x01) { /* PCI Power Management Capability */
+        UINT32 reg_off = (UINT32)(cap_ptr + 0x04);
+        UINTN seg = 0, bus = gpu_bus, dev = 0, func = 0;
+        if (gpu_io->GetLocation) {
+          (VOID)gpu_io->GetLocation(gpu_io, &seg, &bus, &dev, &func);
+        }
+        UINT32 pci_addr = 0x80000000U | ((UINT32)bus << 16) | ((UINT32)dev << 11) | ((UINT32)func << 8) | (reg_off & ~3U);
+        return pci_addr;
+      }
+      cap_ptr = next_ptr;
+    }
+  }
+
+  return fallback_reg;
 }
 
 EFI_STATUS GuAcpiInstallShadowFacs(
@@ -386,49 +508,58 @@ EFI_STATUS GuAcpiInstallShadowFacs(
 
   /* Check for prior wake telemetry in low trampoline memory */
   UINT8 *low_base = (UINT8 *)LowTrampBuffer;
-  UINT32 prior_magic = *(UINT32 *)(low_base + 0x004C);
+  UINT32 prior_magic = *(UINT32 *)(low_base + GU_TRAMP_MAGIC_OFF);
   if (prior_magic == GU_TRAMP_TELEMETRY_MAGIC) {
-    UINT16 entry_status = *(UINT16 *)(low_base + 0x0040);
-    UINT16 exit_status  = *(UINT16 *)(low_base + 0x0042);
-    UINT16 vec_lo       = *(UINT16 *)(low_base + 0x0044);
-    UINT16 vec_hi       = *(UINT16 *)(low_base + 0x0046);
-    UINT16 tgt_off      = *(UINT16 *)(low_base + 0x0048);
-    UINT16 tgt_seg      = *(UINT16 *)(low_base + 0x004A);
-    UINT32 full_vec     = ((UINT32)vec_hi << 16) | vec_lo;
+    UINT16 entry_status = *(UINT16 *)(low_base + GU_TRAMP_ENTRY_STATUS_OFF);
+    UINT16 exit_status  = *(UINT16 *)(low_base + GU_TRAMP_EXIT_STATUS_OFF);
+    UINT32 full_vec     = *(UINT32 *)(low_base + GU_TRAMP_CAPTURED_VEC_OFF);
+    UINT16 tgt_off      = *(UINT16 *)(low_base + GU_TRAMP_TARGET_PTR_OFF);
+    UINT16 tgt_seg      = *(UINT16 *)(low_base + GU_TRAMP_TARGET_PTR_OFF + 2);
     GuLog("S3 Prior Wake Telemetry: Magic=S3_T Entry=%#04x Vector=%#08x Target=%04x:%04x Exit=%#04x\n",
           (unsigned)entry_status, (unsigned)full_vec, (unsigned)tgt_seg, (unsigned)tgt_off, (unsigned)exit_status);
 
-    UINT32 br_id   = *(UINT32 *)(low_base + 0x0070);
-    UINT32 br_cmd  = *(UINT32 *)(low_base + 0x0074);
-    UINT32 br_bus  = *(UINT32 *)(low_base + 0x0078);
-    UINT32 br_mem  = *(UINT32 *)(low_base + 0x007C);
-    UINT32 gpu_id  = *(UINT32 *)(low_base + 0x0080);
-    UINT32 gpu_cmd = *(UINT32 *)(low_base + 0x0084);
-    UINT32 gpu_bar = *(UINT32 *)(low_base + 0x0088);
-    UINT32 gpu_pm  = *(UINT32 *)(low_base + 0x008C);
-    UINT32 post_id = *(UINT32 *)(low_base + 0x0090);
-    UINT32 post_cmd= *(UINT32 *)(low_base + 0x0094);
-    UINT32 post_pm = *(UINT32 *)(low_base + 0x0098);
-    UINT32 post_bar= *(UINT32 *)(low_base + 0x009C);
-    GuLog("S3 Wake PCI Telemetry (Raw Before Bridge Arming):\n"
-          "  Bridge (0:3:1) -> DevID=%#08x Cmd/Stat=%#08x BusNum=%#08x MemBaseLim=%#08x\n"
-          "  GPU   (45:0:0) -> DevID=%#08x Cmd/Stat=%#08x BAR0=%#08x PMCSR=%#08x\n"
-          "S3 Wake PCI Telemetry (After Bridge Arming):\n"
-          "  GPU   (45:0:0) -> DevID=%#08x Cmd/Stat=%#08x BAR0=%#08x PMCSR=%#08x\n",
-          (unsigned)br_id, (unsigned)br_cmd, (unsigned)br_bus, (unsigned)br_mem,
+    UINT32 br_id   = *(UINT32 *)(low_base + GU_TRAMP_PCI_PROBE_RAW_OFF + 0x00);
+    UINT32 br_cmd  = *(UINT32 *)(low_base + GU_TRAMP_PCI_PROBE_RAW_OFF + 0x04);
+    UINT32 br_bus  = *(UINT32 *)(low_base + GU_TRAMP_PCI_PROBE_RAW_OFF + 0x08);
+    UINT32 br_lnk  = *(UINT32 *)(low_base + GU_TRAMP_PCI_PROBE_RAW_OFF + 0x0C);
+    UINT32 gpu_id  = *(UINT32 *)(low_base + GU_TRAMP_PCI_PROBE_RAW_OFF + 0x10);
+    UINT32 gpu_cmd = *(UINT32 *)(low_base + GU_TRAMP_PCI_PROBE_RAW_OFF + 0x14);
+    UINT32 gpu_bar = *(UINT32 *)(low_base + GU_TRAMP_PCI_PROBE_RAW_OFF + 0x18);
+    UINT32 gpu_pm  = *(UINT32 *)(low_base + GU_TRAMP_PCI_PROBE_RAW_OFF + 0x1C);
+    UINT32 post_id = *(UINT32 *)(low_base + GU_TRAMP_PCI_PROBE_POST_OFF + 0x00);
+    UINT32 post_cmd= *(UINT32 *)(low_base + GU_TRAMP_PCI_PROBE_POST_OFF + 0x04);
+    UINT32 post_bar= *(UINT32 *)(low_base + GU_TRAMP_PCI_PROBE_POST_OFF + 0x08);
+    UINT32 post_pm = *(UINT32 *)(low_base + GU_TRAMP_PCI_PROBE_POST_OFF + 0x0C);
+
+    UINT16 lnk_status = (UINT16)(br_lnk >> 16);
+    BOOLEAN dllla = (lnk_status & 0x2000U) != 0;
+    BOOLEAN training = (lnk_status & 0x0800U) != 0;
+    UINT8 speed = (UINT8)(lnk_status & 0x000FU);
+    UINT8 width = (UINT8)((lnk_status >> 4) & 0x003FU);
+
+    GuLog("S3 Wake Pre-OS Hardware Telemetry (Raw Before Config):\n"
+          "  Root Port (0:3:1) -> DevID=%#08x Cmd/Stat=%#08x BusNum=%#08x\n"
+          "  PCIe Link Status  -> Raw=%#04x (DLLLA=%u Training=%u Speed=Gen%u Width=x%u)\n"
+          "  GPU       (45:0:0)-> DevID=%#08x Cmd/Stat=%#08x BAR0=%#08x PMCSR=%#08x\n"
+          "S3 Wake Pre-OS Hardware Telemetry (After Temporary Bridge Arming):\n"
+          "  GPU       (45:0:0)-> DevID=%#08x Cmd/Stat=%#08x BAR0=%#08x PMCSR=%#08x\n"
+          "  Root Port (0:3:1) -> BusNum restored to original (%#08x)\n",
+          (unsigned)br_id, (unsigned)br_cmd, (unsigned)br_bus,
+          (unsigned)lnk_status, dllla ? 1 : 0, training ? 1 : 0, (unsigned)speed, (unsigned)width,
           (unsigned)gpu_id, (unsigned)gpu_cmd, (unsigned)gpu_bar, (unsigned)gpu_pm,
-          (unsigned)post_id, (unsigned)post_cmd, (unsigned)post_bar, (unsigned)post_pm);
+          (unsigned)post_id, (unsigned)post_cmd, (unsigned)post_bar, (unsigned)post_pm,
+          (unsigned)br_bus);
   }
 
   /*
    * Low (<1MB) ACPI NVS Allocation (4096 bytes):
-   * +0x00000: Pure 16-bit Real Mode S3 Resume Trampoline Machine Code (<350 bytes)
-   * +0x00040: Telemetry Checkpoints & Waking Vector capture
-   * +0x00050: PCI Probe Addresses Table (8 dwords)
-   * +0x00070: PCI Probe Raw Results (8 dwords)
-   * +0x00090: PCI Probe Post-Arm Results (4 dwords)
+   * +0x00000: Pure 16-bit Real Mode S3 Resume Trampoline Machine Code (<380 bytes)
    * +0x00200: Shadow FACS (64 bytes, 512-byte aligned per ACPI spec)
    * +0x00280: Real FACS Vector Mirror (32-bit at 0x280, 64-bit at 0x288)
+   * +0x00300: Telemetry Checkpoints & Waking Vector capture
+   * +0x00320: PCI Probe Addresses Table (8 dwords)
+   * +0x00340: PCI Probe Raw Results (8 dwords)
+   * +0x00360: PCI Probe Post-Arm Results (4 dwords)
    */
   EFI_PHYSICAL_ADDRESS shadow_facs_phys = LowTrampPhys + 0x00200;
   EFI_PHYSICAL_ADDRESS trampoline_phys  = LowTrampPhys;
@@ -458,13 +589,27 @@ EFI_STATUS GuAcpiInstallShadowFacs(
   *(UINT32 *)(low_base + 0x0280) = Info->original_firmware_waking_vector;
   *(UINT64 *)(low_base + 0x0288) = Info->original_xfirmware_waking_vector;
 
+  /* Dynamically discover Root Port Link Status and GPU PMCSR register addresses */
+  UINT8 target_gpu_bus = (Context && Context->bus) ? Context->bus : 45U;
+  UINT32 root_port_link_reg = GuFindRootPortLinkReg(SystemTable->BootServices, target_gpu_bus);
+  UINT32 gpu_pmcsr_reg = GuFindGpuPmcsrReg(SystemTable->BootServices, Gu.pci, target_gpu_bus);
+
+  if (Context) {
+    Context->root_port_link_reg = root_port_link_reg;
+    Context->gpu_pmcsr_reg = gpu_pmcsr_reg;
+  }
+  GuLog("S3 Hardware Recon Config: Root Port LinkReg=%#08x (Cap 0x10+0x10), GPU PMCSR=%#08x (Cap 0x01+0x04)\n",
+        (unsigned)root_port_link_reg, (unsigned)gpu_pmcsr_reg);
+
   /* 3. Build Pure 16-bit Real Mode S3 Resume Trampoline machine code in low memory (<1MB) */
   UINT32 tramp_bytes = GuAcpiBuildTrampolineCode(
       low_base,
       4096,
       trampoline_phys,
       NvsPhys,
-      shadow_facs_phys
+      shadow_facs_phys,
+      root_port_link_reg,
+      gpu_pmcsr_reg
   );
 
   if (tramp_bytes == 0) {

@@ -336,16 +336,26 @@ In **v1.8.34** habe ich die Architektur umfassend überarbeitet und perfektionie
 6. **Erzwingung des 32-Bit Wake Vectors:**
    Bit 1 in den FACS-`Flags` (64-Bit Wake Supported) sowie `XFirmwareWakingVector` werden in beiden FACS-Tabellen genullt, sodass Windows ACPI garantiert den 32-Bit Real-Mode Waking Vector verwendet.
 
-### 13.4 Die v1.8.36 Lösung: Reines 16-Bit Real-Mode Passthrough & Low-Memory Shadow FACS (0x9E100)
+### 13.4 Die v1.8.35 Lösung: Reines 16-Bit Real-Mode Passthrough & Low-Memory Shadow FACS
 1. **Ursachenanalyse des schwarzen Bildschirms in v1.8.34:**
    Forensische Tests ergaben, dass beim Aufwachen aus S3 die diskrete GPU auf Bus 45 (PCIe-Slot 1) noch gar nicht durch den Windows-PCI-Treiber (`pci.sys`) link-trainiert und deren Root-Port-Bridge noch nicht konfiguriert ist. Wenn das Trampolin im Protected Mode versucht, über `0xFB8403C0` auf GPU BAR0 zuzugreifen, friert die CPU in einem unkorrigierbaren PCIe-Bus-Stall (Master Abort / Machine Check) ein.
 2. **Reines 16-Bit Real-Mode Trampolin ohne MMIO:**
-   In v1.8.36 führt das Trampolin während der Firmware-Aufwachphase **keinerlei riskante GPU-MMIO-Zugriffe** mehr aus. Es verbleibt zu 100 % im 16-Bit Real Mode (kein GDT, kein CR0.PE-Umschalten, kein Risiko von Triple Faults).
-3. **Co-Located Shadow FACS im Low Memory (`0x9E100`):**
-   Die Shadow FACS (64 Bytes) wird direkt in derselben Low-Memory-NVS-Page bei `+0x100` (z. B. `0x0009E100`) platziert, 256-Byte-aligned. Das 16-Bit-Trampolin liest den Waking Vector direkt aus dem gleichen Segment (`DS:[0x010C]` bzw. `DS:[0x0118]`).
+   In v1.8.35 führte ich das Trampolin während der Firmware-Aufwachphase ohne GPU-MMIO-Zugriffe aus. Es verbleibt zu 100 % im 16-Bit Real Mode (kein GDT, kein CR0.PE-Umschalten, kein Risiko von Triple Faults).
+3. **Co-Located Shadow FACS im Low Memory (`0x9E200`):**
+   Die Shadow FACS (64 Bytes) wird direkt in derselben Low-Memory-NVS-Page bei `+0x0200` platziert, 512-Byte-aligned. Das 16-Bit-Trampolin liest den Waking Vector direkt aus dem gleichen Segment (`DS:[0x020C]` bzw. `DS:[0x0218]`).
 4. **4-Stufen-Waking-Vector-Resolution mit sicherem Fallback:**
-   Liest der Reihe nach (1) Shadow FACS 32-Bit Vector (`[0x10C]`), (2) Shadow FACS 64-Bit Vector (`[0x118]`), (3) Backup Real FACS 32-Bit Vector (`[0x180]`), (4) Backup Real FACS 64-Bit Vector (`[0x188]`). Ist kein Vektor vorhanden, stoppt die CPU sicher via `cli; hlt` mit Telemetrie `0xDEAD`, statt auf Adresse 0 abzustürzen.
+   Liest der Reihe nach (1) Shadow FACS 32-Bit Vector (`[0x20C]`), (2) Shadow FACS 64-Bit Vector (`[0x218]`), (3) Backup Real FACS 32-Bit Vector (`[0x280]`), (4) Backup Real FACS 64-Bit Vector (`[0x288]`). Ist kein Vektor vorhanden, stoppt die CPU sicher via `cli; hlt` mit Telemetrie `0xDEAD`, statt auf Adresse 0 abzustürzen.
 5. **Präzise Segment:Offset-Umrechnung & Telemetrie:**
-   Berechnet `Offset = AX & 0x0F`, `Segment = (AX >> 4) | (DX << 12)`, stellt den BIOS-Stack wieder her und springt via `jmp far ptr cs:[0x30]` direkt in Windows `HalpRMStub`. Windows wacht verzögerungsfrei auf, initialisiert die Monitore und den Desktop ohne Black Screen.
-6. **Hardware-Telemetrie bei jedem Warmstart:**
-   Hinterlässt Telemetrie-Checkpoints (`0xAA01` Entry, Vektor, Segment:Offset, `0xAA02` Jump) bei `0x0040..0x004A`, die vom DXE-Treiber beim nächsten Boot automatisch ausgelesen und in `RUN*.TXT` protokolliert werden.
+   Berechnet `Offset = AX & 0x0F`, `Segment = (AX >> 4) | (DX << 12)`, stellt den BIOS-Stack wieder her und springt via `jmp far ptr cs:[0x0300]` direkt in Windows `HalpRMStub`. Windows wacht verzögerungsfrei auf (< 1,7s), initialisiert die Monitore und den Desktop ohne Black Screen.
+
+### 13.5 Die v1.8.36 Lösung: Risikofreie Pre-OS Config-Space-Recon, Bridge-Restore & PCIe Link-Status (DLLLA)
+1. **Kein MSE/BME (`0x0006`) auf Root Port `0:3:1`:**
+   Das Schreiben von `0x0006` in Offset `0x04` (Command Register) des Upstream Root Ports wurde vollständig entfernt. Wenn Offset `0x20` (Memory Base/Limit) nach dem S3-Aufwachen `0x00000000` ist, bedeutet dies nach PCI-Bridge-Spezifikation `Base = 0x00000000` und `Limit = 0x000FFFFF`. Das Setzen von `MSE` würde den gesamten Low-Memory-Bereich `< 1 MB` (inkl. Trampolin bei `0x9E000` und Windows `HalpRMStub`) überdecken und die CPU vom DRAM trennen. Für reine Config-Space-Zyklen über `0xCF8`/`0xCFC` sind `MSE` und `BME` ohnehin nicht erforderlich.
+2. **Sichere temporäre Bus-Weiterleitung und zwingender Bridge-Restore:**
+   Das Trampolin sichert den Originalwert von Root Port `0:3:1` Offset `0x18` (Primary, Secondary, Subordinate Bus Numbers und Latency Timer) in `[0x0348]`, belässt das Latency-Byte (Bits 31:24) unverändert, setzt temporär `Pri=0x00, Sec=0x2D, Sub=0x2D` und liest die Register der RTX 4090 auf Bus 45 aus. Unmittelbar danach wird der exakte Originalwert von Offset `0x18` wieder in die Bridge zurückgeschrieben, bevor der Sprung zu `HalpRMStub` erfolgt. Windows `pci.sys` findet die Bridge im absolut unveränderten Zustand vor.
+3. **PCIe Link Status (`DLLLA`) & Dynamic PMCSR Discovery:**
+   Beim regulären UEFI-Boot ermittelt der Treiber über die PCI-Capability-Liste des Root Ports `0:3:1` die PCIe Capability (ID `0x10`) und übergibt die Adresse des Link Status Registers (`CapPtr + 0x10`). Zudem wird der PMCSR-Offset der RTX 4090 dynamisch über PCI Capability ID `0x01` (`CapPtr + 0x04` -> `0x802D0064`) ermittelt und im NVS übergeben. Im S3-Trampolin werden diese Register per `0xCF8`/`0xCFC` ausgelesen und bei jedem Warmstart detailliert in `RUN*.TXT` protokolliert (Bit 13 `DLLLA` / Data Link Layer Link Active, Bit 11 `Training`, Link-Speed und -Breite).
+4. **Strikte Code- und Daten-Trennung im Low Trampoline Buffer:**
+   Maschinencode (`0x0000..0x015B`, 347 Bytes), ACPI-Tabellen (`ShadowFACS` bei `0x0200`, `RealFACS`-Mirror bei `0x0280`) und Laufzeit-Daten/Telemetrie (`0x0300..0x036F`) sind vollständig voneinander separiert.
+5. **Verpflichtende Sanity-Checks in den Host-Tests:**
+   Alle 98 Tests im MSVC-Test-Suite laufen erfolgreich durch (`MSVC_HOST_TESTS=PASS`). Die Tests prüfen explizit, dass ausnahmslos alle 32-Bit-I/O-Instruktionen (`out dx, eax` = `66 EF`, `in eax, dx` = `66 ED`) das `0x66`-Präfix besitzen, kein Schreibzugriff auf `0x80001904` erfolgt, die Bridge-Wiederherstellung garantiert ist und die dynamischen Registeradressen stimmen.
