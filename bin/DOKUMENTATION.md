@@ -1,7 +1,7 @@
 # Technische Dokumentation: Universal GPU Unlock (Multi-Gen)
 
 > **Tool:** Universal GPU Unlock  
-> **Version:** v1.8.47  
+> **Version:** v1.8.48  
 > **Architekturen:** NVIDIA Ada Lovelace (RTX 40), Ampere (RTX 30), Turing (RTX 20 / CMP)  
 > **Unterstützte Betriebssysteme:** Windows 10, Windows 11, WSL2 / Ubuntu CUDA Container  
 
@@ -837,6 +837,44 @@ In **v1.8.34** habe ich die Architektur umfassend überarbeitet und perfektionie
    - Trampolin-Größe: 791 Bytes (Envelope: 1024 Bytes, 233 Bytes Sicherheitsabstand vor GDT).
    - Alle 8.811 Checks in 10 Test-Suites grün (`MSVC_HOST_TESTS=PASS`).
    - Strikte Sicherheitsgrenzen: 0 CMOS/RTC-Mutation, 0 SEC2-Mutation, `OspmFlags = 0`.
+
+---
+
+### 13.20 Die v1.8.48 Architektur: 32-Bit Port-I/O Opcode-Korrektur und lückenloser PCIe-Bridge-Teardown
+
+1. **Ausgangslage und Live-Forensik aus dem v1.8.47 S3-Wake-Test:**
+   - Die dedizierte Non-NVS-Telemetrie (`0xd8261000`) bewies beim echten S3-Wake (1572 ms, Kernel-Power Event 107/130/131) die vollständige Ausführung des 16->32->16-Bit-Trampolins (`324B4F21`, Checkpoints `0xAA01` und `0xAA02`, `WakingVector = 0x00001000`, `SS = 0x0030`, `SP = 0x91B8`).
+   - Auch der neue Unlock-Block wurde erreicht (`Magic = 0x554E4C4B` / `'UNLK'`), und `BAR0` wurde auf `0xFB000000` gezielt.
+   - Die Telemetrie zeigte jedoch `Status = 3` (Fault) und `ChipID = 0xFFFFFFFF` (PCIe Master Abort) sowie unerwartete Bytewerte (`0xED` / `0xEF`) in `+0xB0`.
+
+2. **Root Cause 1: 32-Bit Port I/O Immediate Phase Shift:**
+   - Im 32-Bit Flat Protected Mode (`D=1`) verlangt Opcode `BA` (`mov edx, imm32`) eine 4-Byte-Immediate.
+   - Der Assembler-Generator in `s3_facs.c` emittierte bisher 2-Byte-Immediates (`BA F8 0C` bzw. `BA FC 0C`).
+   - Die CPU interpretierte die nachfolgenden 2 Befehlsbytes als Teil der Portadresse in EDX (z. B. `0x00000CF8`), wodurch der nachfolgende Befehlsstrom um 2 Bytes verschoben wurde. Die Instruktionen `in al, dx` und `in eax, dx` wurden als Datenbytes verschluckt, was zur Fehlinterpretation führte.
+   - **Korrektur:** Alle Port-Ladebefehle im 32-Bit-Modus wurden strikt auf native 5-Byte-Opcodes umgestellt:
+     - `BA F8 0C 00 00` (`mov edx, 0x00000CF8`)
+     - `BA FC 0C 00 00` (`mov edx, 0x00000CFC`)
+     - Immediate Comparison: `81 FA DF BA 00 00` (`cmp edx, 0x0000BADF`).
+
+3. **Root Cause 2: PCIe Bridge Memory Window Aktivierung:**
+   - Bei deaktivierter PCI-to-PCI Bridge (`0x80001920`) steht das Memory Window typischerweise im inaktiven Zustand (`Limit < Base`).
+   - Die bisherige Abfrage prüfte `test eax, eax; jnz`, wodurch das Setzen von `0xFC00FB00` fälschlicherweise übersprungen wurde, wenn das Register ungleich 0 war, aber kein Fenster weiterleitete.
+   - **Korrektur:** Das Bridge Memory Window wird nach Sicherung des Originalwerts in `+0xB4` bedingungslos auf `0xFC00FB00` gesetzt, um MMIO-Weiterleitung zur GPU auf Bus `0x2D` sicherzustellen.
+
+4. **Vollständiger 4-Stufen-PCIe-Teardown vor Betriebssystem-Übergabe:**
+   - Im Teardown (Schritt 7) vor der Rückkehr in den 16-Bit Real Mode werden alle vier PCIe-Register in umgekehrter Reihenfolge restauriert:
+     1. GPU Command Register (`0x802D0004`): Wiederherstellung auf Ausgangswert (`0x00000000`).
+     2. GPU BAR0 Register (`0x802D0010`): Wiederherstellung auf Ausgangswert (`0x00000000`).
+     3. Root Port Memory Base/Limit (`0x80001920`): Wiederherstellung des Originalzustands aus `[dest+0xB4]`.
+     4. Root Port Command Register (`0x80001904`): Wiederherstellung des Originalzustands aus `[dest+0xB0]`.
+   - Windows `pci.sys` findet beim Resume exakt den unveränderten Ausgangszustand vor – garantiert frei von Ressourcen- oder Adressraumkonflikten.
+
+5. **Verifikation & Testabdeckung:**
+   - Maschinencode-Größe: 839 Bytes (Envelope: 1024 Bytes, 185 Bytes Sicherheitsabstand vor GDT bei `+0x0400`).
+   - Alle 8.815 Checks in 10 Test-Suites erfolgreich bestanden (`MSVC_HOST_TESTS=PASS`).
+   - Disassembler-Validierung stellt sicher, dass alle 32-Bit-Port-Instruktionen 5 Bytes lang sind und der Teardown alle 4 PCIe-Register restauriert.
+   - Strikte Sicherheitsgrenzen: 0 CMOS/RTC-Mutation, 0 SEC2-Mutation, `OspmFlags = 0`.
+
 
 
 

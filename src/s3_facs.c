@@ -737,44 +737,40 @@ UINT32 GuAcpiBuildTrampolineCode(
   *(UINT32 *)e = bar0_target; e += 4;
 
   /* 1. Read Root Port 0:3:1 Command register (0x80001904) and enable MSE (bit 1) */
-  *e++ = 0xBA; *e++ = 0xF8; *e++ = 0x0C;             /* mov dx, 0x0CF8 */
+  *e++ = 0xBA; *e++ = 0xF8; *e++ = 0x0C; *e++ = 0x00; *e++ = 0x00; /* mov edx, 0x0CF8 */
   *e++ = 0xB8; *e++ = 0x04; *e++ = 0x19; *e++ = 0x00; *e++ = 0x80; /* mov eax, 0x80001904 */
   *e++ = 0xEF;                                       /* out dx, eax */
-  *e++ = 0xBA; *e++ = 0xFC; *e++ = 0x0C;             /* mov dx, 0x0CFC */
+  *e++ = 0xBA; *e++ = 0xFC; *e++ = 0x0C; *e++ = 0x00; *e++ = 0x00; /* mov edx, 0x0CFC */
   *e++ = 0xED;                                       /* in eax, dx */
   *e++ = 0xA3; *(UINT32 *)e = (UINT32)(high_telem_dest + 0xB0); e += 4; /* mov [dest+0xB0], eax (save rp_cmd) */
   *e++ = 0x0C; *e++ = 0x02;                         /* or al, 0x02 (MSE) */
   *e++ = 0xEF;                                       /* out dx, eax */
 
-  /* 2. Read Root Port 0:3:1 Memory Base/Limit (0x80001920) and ensure memory window */
-  *e++ = 0xBA; *e++ = 0xF8; *e++ = 0x0C;             /* mov dx, 0x0CF8 */
+  /* 2. Read Root Port 0:3:1 Memory Base/Limit (0x80001920) and assign temporary window 0xFC00FB00 */
+  *e++ = 0xBA; *e++ = 0xF8; *e++ = 0x0C; *e++ = 0x00; *e++ = 0x00; /* mov edx, 0x0CF8 */
   *e++ = 0xB8; *e++ = 0x20; *e++ = 0x19; *e++ = 0x00; *e++ = 0x80; /* mov eax, 0x80001920 */
   *e++ = 0xEF;                                       /* out dx, eax */
-  *e++ = 0xBA; *e++ = 0xFC; *e++ = 0x0C;             /* mov dx, 0x0CFC */
+  *e++ = 0xBA; *e++ = 0xFC; *e++ = 0x0C; *e++ = 0x00; *e++ = 0x00; /* mov edx, 0x0CFC */
   *e++ = 0xED;                                       /* in eax, dx */
   *e++ = 0xA3; *(UINT32 *)e = (UINT32)(high_telem_dest + 0xB4); e += 4; /* mov [dest+0xB4], eax (save rp_mem) */
-  *e++ = 0x85; *e++ = 0xC0;                         /* test eax, eax */
-  UINT8 *have_mem_jmp = e;
-  *e++ = 0x75; *e++ = 0x00;                         /* jnz .have_mem */
   *e++ = 0xB8; *e++ = 0x00; *e++ = 0xFB; *e++ = 0x00; *e++ = 0xFC; /* mov eax, 0xFC00FB00 */
-  *e++ = 0xEF;                                       /* out dx, eax */
-  have_mem_jmp[1] = (UINT8)(e - (have_mem_jmp + 2)); /* patch jnz */
+  *e++ = 0xEF;                                       /* out dx, eax (unconditionally set window 0xFB00..0xFC00) */
 
   /* 3. Assign GPU BAR0 = bar0_target (0x802D0010) */
-  *e++ = 0xBA; *e++ = 0xF8; *e++ = 0x0C;             /* mov dx, 0x0CF8 */
+  *e++ = 0xBA; *e++ = 0xF8; *e++ = 0x0C; *e++ = 0x00; *e++ = 0x00; /* mov edx, 0x0CF8 */
   *e++ = 0xB8; *e++ = 0x10; *e++ = 0x00; *e++ = 0x2D; *e++ = 0x80; /* mov eax, 0x802D0010 */
   *e++ = 0xEF;                                       /* out dx, eax */
-  *e++ = 0xBA; *e++ = 0xFC; *e++ = 0x0C;             /* mov dx, 0x0CFC */
+  *e++ = 0xBA; *e++ = 0xFC; *e++ = 0x0C; *e++ = 0x00; *e++ = 0x00; /* mov edx, 0x0CFC */
   *e++ = 0xED;                                       /* in eax, dx */
   *e++ = 0xA3; *(UINT32 *)e = (UINT32)(high_telem_dest + 0xBC); e += 4; /* mov [dest+0xBC], eax (save gpu_bar0) */
   *e++ = 0xB8; *(UINT32 *)e = bar0_target; e += 4;   /* mov eax, bar0_target */
   *e++ = 0xEF;                                       /* out dx, eax */
 
   /* 4. Enable GPU Command Memory Space Enable (0x802D0004) */
-  *e++ = 0xBA; *e++ = 0xF8; *e++ = 0x0C;             /* mov dx, 0x0CF8 */
+  *e++ = 0xBA; *e++ = 0xF8; *e++ = 0x0C; *e++ = 0x00; *e++ = 0x00; /* mov edx, 0x0CF8 */
   *e++ = 0xB8; *e++ = 0x04; *e++ = 0x00; *e++ = 0x2D; *e++ = 0x80; /* mov eax, 0x802D0004 */
   *e++ = 0xEF;                                       /* out dx, eax */
-  *e++ = 0xBA; *e++ = 0xFC; *e++ = 0x0C;             /* mov dx, 0x0CFC */
+  *e++ = 0xBA; *e++ = 0xFC; *e++ = 0x0C; *e++ = 0x00; *e++ = 0x00; /* mov edx, 0x0CFC */
   *e++ = 0xED;                                       /* in eax, dx */
   *e++ = 0xA3; *(UINT32 *)e = (UINT32)(high_telem_dest + 0xB8); e += 4; /* mov [dest+0xB8], eax (save gpu_cmd) */
   *e++ = 0x0C; *e++ = 0x02;                         /* or al, 0x02 (MSE) */
@@ -794,7 +790,7 @@ UINT32 GuAcpiBuildTrampolineCode(
 
   *e++ = 0x89; *e++ = 0xC2;                         /* mov edx, eax */
   *e++ = 0xC1; *e++ = 0xEA; *e++ = 0x10;             /* shr edx, 16 */
-  *e++ = 0x81; *e++ = 0xFA; *e++ = 0xDF; *e++ = 0xBA; /* cmp dx, 0xBADF */
+  *e++ = 0x81; *e++ = 0xFA; *e++ = 0xDF; *e++ = 0xBA; *e++ = 0x00; *e++ = 0x00; /* cmp edx, 0x0000BADF */
   UINT8 *fault_jmp2 = e;
   *e++ = 0x0F; *e++ = 0x84; *e++ = 0x00; *e++ = 0x00; *e++ = 0x00; *e++ = 0x00; /* jz near .fault */
 
@@ -872,26 +868,34 @@ UINT32 GuAcpiBuildTrampolineCode(
   skip_fault_jmp[1] = (UINT8)(e - (skip_fault_jmp + 2));
 
   /* 6. Restore GPU Command register */
-  *e++ = 0xBA; *e++ = 0xF8; *e++ = 0x0C;             /* mov dx, 0x0CF8 */
+  *e++ = 0xBA; *e++ = 0xF8; *e++ = 0x0C; *e++ = 0x00; *e++ = 0x00; /* mov edx, 0x0CF8 */
   *e++ = 0xB8; *e++ = 0x04; *e++ = 0x00; *e++ = 0x2D; *e++ = 0x80; /* mov eax, 0x802D0004 */
   *e++ = 0xEF;                                       /* out dx, eax */
-  *e++ = 0xBA; *e++ = 0xFC; *e++ = 0x0C;             /* mov dx, 0x0CFC */
+  *e++ = 0xBA; *e++ = 0xFC; *e++ = 0x0C; *e++ = 0x00; *e++ = 0x00; /* mov edx, 0x0CFC */
   *e++ = 0xA1; *(UINT32 *)e = (UINT32)(high_telem_dest + 0xB8); e += 4; /* mov eax, [dest+0xB8] */
   *e++ = 0xEF;                                       /* out dx, eax */
 
   /* 7. Restore GPU BAR0 */
-  *e++ = 0xBA; *e++ = 0xF8; *e++ = 0x0C;             /* mov dx, 0x0CF8 */
+  *e++ = 0xBA; *e++ = 0xF8; *e++ = 0x0C; *e++ = 0x00; *e++ = 0x00; /* mov edx, 0x0CF8 */
   *e++ = 0xB8; *e++ = 0x10; *e++ = 0x00; *e++ = 0x2D; *e++ = 0x80; /* mov eax, 0x802D0010 */
   *e++ = 0xEF;                                       /* out dx, eax */
-  *e++ = 0xBA; *e++ = 0xFC; *e++ = 0x0C;             /* mov dx, 0x0CFC */
+  *e++ = 0xBA; *e++ = 0xFC; *e++ = 0x0C; *e++ = 0x00; *e++ = 0x00; /* mov edx, 0x0CFC */
   *e++ = 0xA1; *(UINT32 *)e = (UINT32)(high_telem_dest + 0xBC); e += 4; /* mov eax, [dest+0xBC] */
   *e++ = 0xEF;                                       /* out dx, eax */
 
-  /* 8. Restore Root Port Command register */
-  *e++ = 0xBA; *e++ = 0xF8; *e++ = 0x0C;             /* mov dx, 0x0CF8 */
+  /* 8. Restore Root Port Memory Base/Limit register */
+  *e++ = 0xBA; *e++ = 0xF8; *e++ = 0x0C; *e++ = 0x00; *e++ = 0x00; /* mov edx, 0x0CF8 */
+  *e++ = 0xB8; *e++ = 0x20; *e++ = 0x19; *e++ = 0x00; *e++ = 0x80; /* mov eax, 0x80001920 */
+  *e++ = 0xEF;                                       /* out dx, eax */
+  *e++ = 0xBA; *e++ = 0xFC; *e++ = 0x0C; *e++ = 0x00; *e++ = 0x00; /* mov edx, 0x0CFC */
+  *e++ = 0xA1; *(UINT32 *)e = (UINT32)(high_telem_dest + 0xB4); e += 4; /* mov eax, [dest+0xB4] */
+  *e++ = 0xEF;                                       /* out dx, eax */
+
+  /* 9. Restore Root Port Command register */
+  *e++ = 0xBA; *e++ = 0xF8; *e++ = 0x0C; *e++ = 0x00; *e++ = 0x00; /* mov edx, 0x0CF8 */
   *e++ = 0xB8; *e++ = 0x04; *e++ = 0x19; *e++ = 0x00; *e++ = 0x80; /* mov eax, 0x80001904 */
   *e++ = 0xEF;                                       /* out dx, eax */
-  *e++ = 0xBA; *e++ = 0xFC; *e++ = 0x0C;             /* mov dx, 0x0CFC */
+  *e++ = 0xBA; *e++ = 0xFC; *e++ = 0x0C; *e++ = 0x00; *e++ = 0x00; /* mov edx, 0x0CFC */
   *e++ = 0xA1; *(UINT32 *)e = (UINT32)(high_telem_dest + 0xB0); e += 4; /* mov eax, [dest+0xB0] */
   *e++ = 0xEF;                                       /* out dx, eax */
 

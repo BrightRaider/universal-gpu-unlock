@@ -6,6 +6,30 @@ For packaged binaries and downloads, visit [GitHub Releases](https://github.com/
 
 ---
 
+## [v1.8.48] - 2026-11-23
+### Added & Fixed
+- **32-Bit Port I/O Opcode-Korrektur & Lückenloser PCIe-Bridge-Teardown über S3 Wake (addresses #19):**
+  - **Behebung des 32-Bit Port I/O Immediate Phase Shifts:**
+    - Live-Analysen des ersten S3-Wake-Unlocks in v1.8.47 zeigten `Status = 3` (`0xFFFFFFFF` Master Abort) und unplausible Bytefolgen (`0xED` / `0xEF`) in Telemetrie-Offset `+0xB0`.
+    - Ursache: Im 32-Bit Flat Protected Mode (`D=1`) erfordert Opcode `BA` (`mov edx, imm32`) eine 4-Byte-Immediate. Die bisherigen 2-Byte-Immediates (`BA F8 0C` bzw. `BA FC 0C`) führten zu einem 2-Byte-Versatz des gesamten Befehlsstroms.
+    - Korrektur: Alle Port-Ladebefehle im 32-Bit-Code wurden auf native 5-Byte-Opcodes umgestellt (`BA F8 0C 00 00` für Port `0x0CF8` und `BA FC 0C 00 00` für Port `0x0CFC`), sowie 6-Byte-Vergleich `81 FA DF BA 00 00` für `cmp edx, 0x0000BADF`.
+  - **Deterministische PCIe-Bridge Memory Window Aktivierung:**
+    - Bei deaktivierter Root-Port-Bridge (`0x80001920`) ist `Limit < Base`. Das Überspringen der Konfiguration bei `test eax, eax; jnz` verhinderte das Weiterleiten von MMIO-Zyklen zur GPU auf Bus `0x2D`.
+    - Das Memory Window wird nun bedingungslos auf `0xFC00FB00` konfiguriert, nachdem der Ausgangswert in `+0xB4` gesichert wurde.
+  - **Vollständiger 4-Stufen-PCIe-Teardown vor Betriebssystem-Übergabe:**
+    - Alle modifizierten PCIe-Register werden vor dem Rücksprung in den 16-Bit Real Mode sauber wiederhergestellt:
+      1. GPU Command Register (`0x802D0004`): Wiederherstellung auf Ausgangswert (`0x00000000`).
+      2. GPU BAR0 Register (`0x802D0010`): Wiederherstellung auf Ausgangswert (`0x00000000`).
+      3. Root Port Memory Base/Limit (`0x80001920`): Wiederherstellung des Originalzustands aus `+0xB4`.
+      4. Root Port Command Register (`0x80001904`): Wiederherstellung des Originalzustands aus `+0xB0`.
+    - Windows `pci.sys` findet beim Resume exakt den unveränderten Ausgangszustand vor.
+  - **Host-Tests & Verifikation:**
+    - Maschinencode-Größe: 839 Bytes (Envelope: 1024 Bytes, 185 Bytes Puffer vor GDT bei `+0x0400`).
+    - 8.815 Checks in 10 Test-Suites grün (`MSVC_HOST_TESTS=PASS`).
+    - Strikte Sicherheitsgrenzen: 0 CMOS/RTC-Mutation, 0 SEC2-Mutation, `OspmFlags = 0`.
+
+---
+
 ## [v1.8.47] - 2026-11-23
 ### Added & Fixed
 - **32-Bit Flat-Mode Temporärer BAR0 MMIO Hardware-Unlock über S3 Wake (addresses #19):**

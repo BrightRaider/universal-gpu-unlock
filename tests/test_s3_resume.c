@@ -776,6 +776,8 @@ static void TestGuAcpiBuildTrampolineCode(void) {
     else if (buffer[i] == 0xBF && buffer[i+1] == 0x40 && buffer[i+2] == 0x05) { instr_len = 3; desc = "mov di, 0x0540                   ; Raw probe results destination"; }
     else if (buffer[i] == 0xB9 && buffer[i+1] == 0x08 && buffer[i+2] == 0x00) { instr_len = 3; desc = "mov cx, 8                         ; Probe count = 8 dwords"; }
     else if (buffer[i] == 0x66 && buffer[i+1] == 0x8B && buffer[i+2] == 0x04) { instr_len = 3; desc = ".probe_loop: mov eax, [si]       ; Read target 0xCF8 address"; }
+    else if (buffer[i] == 0xBA && buffer[i+1] == 0xF8 && buffer[i+2] == 0x0C && buffer[i+3] == 0x00 && buffer[i+4] == 0x00) { instr_len = 5; desc = "mov edx, 0x0CF8"; }
+    else if (buffer[i] == 0xBA && buffer[i+1] == 0xFC && buffer[i+2] == 0x0C && buffer[i+3] == 0x00 && buffer[i+4] == 0x00) { instr_len = 5; desc = "mov edx, 0x0CFC"; }
     else if (buffer[i] == 0xBA && buffer[i+1] == 0xF8 && buffer[i+2] == 0x0C) { instr_len = 3; desc = "mov dx, 0x0CF8"; }
     else if (buffer[i] == 0x66 && buffer[i+1] == 0xEF) { instr_len = 2; desc = "out dx, eax                    ; [66 EF] Write PCI config address"; }
     else if (buffer[i] == 0xBA && buffer[i+1] == 0xFC && buffer[i+2] == 0x0C) { instr_len = 3; desc = "mov dx, 0x0CFC"; }
@@ -844,7 +846,7 @@ static void TestGuAcpiBuildTrampolineCode(void) {
     else if (buffer[i] == 0x3D && buffer[i+1] == 0xFF && buffer[i+2] == 0xFF && buffer[i+3] == 0xFF && buffer[i+4] == 0xFF) { instr_len = 5; desc = "cmp eax, 0xFFFFFFFF           ; Check MMIO master abort"; }
     else if (buffer[i] == 0x89 && buffer[i+1] == 0xC2) { instr_len = 2; desc = "mov edx, eax"; }
     else if (buffer[i] == 0xC1 && buffer[i+1] == 0xEA && buffer[i+2] == 0x10) { instr_len = 3; desc = "shr edx, 16"; }
-    else if (buffer[i] == 0x81 && buffer[i+1] == 0xFA && buffer[i+2] == 0xDF && buffer[i+3] == 0xBA) { instr_len = 4; desc = "cmp dx, 0xBADF                 ; Check 0xBADF fault"; }
+    else if (buffer[i] == 0x81 && buffer[i+1] == 0xFA && buffer[i+2] == 0xDF && buffer[i+3] == 0xBA && buffer[i+4] == 0x00 && buffer[i+5] == 0x00) { instr_len = 6; desc = "cmp edx, 0x0000BADF           ; Check 0xBADF fault"; }
     else if (buffer[i] == 0x0F && buffer[i+1] == 0x84) { instr_len = 6; desc = "jz near .fault                 ; Jump on MMIO error"; }
     else if (buffer[i] == 0x81 && buffer[i+1] == 0xF9 && buffer[i+2] == 0x88 && buffer[i+3] == 0x88 && buffer[i+4] == 0x88 && buffer[i+5] == 0x88) { instr_len = 6; desc = "cmp ecx, 0x88888888           ; Verify SS0 == 0x88888888"; }
     else if (buffer[i] == 0x83 && buffer[i+1] == 0xE2 && buffer[i+2] == 0x0F) { instr_len = 3; desc = "and edx, 0x0F"; }
@@ -863,8 +865,6 @@ static void TestGuAcpiBuildTrampolineCode(void) {
     else if (buffer[i] == 0xB8) { instr_len = 5; desc = "mov eax, imm32"; }
     else if (buffer[i] == 0xA3) { instr_len = 5; desc = "mov [disp32], eax"; }
     else if (buffer[i] == 0xA1) { instr_len = 5; desc = "mov eax, [disp32]"; }
-    else if (buffer[i] == 0xBA && buffer[i+1] == 0xF8 && buffer[i+2] == 0x0C) { instr_len = 3; desc = "mov dx, 0x0CF8"; }
-    else if (buffer[i] == 0xBA && buffer[i+1] == 0xFC && buffer[i+2] == 0x0C) { instr_len = 3; desc = "mov dx, 0x0CFC"; }
     else if (buffer[i] == 0xEF) { instr_len = 1; desc = "out dx, eax (32-bit PM)"; }
     else if (buffer[i] == 0xED) { instr_len = 1; desc = "in eax, dx (32-bit PM)"; }
     else if (buffer[i] == 0xC7 && buffer[i+1] == 0x05) { instr_len = 10; desc = "mov dword [disp32], imm32"; }
@@ -997,15 +997,38 @@ static void TestGuAcpiBuildTrampolineCode(void) {
   }
   CHECK(found_unlk_magic, "Trampoline must write 'UNLK' (0x554E4C4B) to TelemetryPage + 0x80");
 
-  /* Verify PCI teardown restoration (GPU Command, GPU BAR0, Root Port Command restored from saved values) */
+  /* Verify PCI teardown restoration (GPU Command, GPU BAR0, Root Port MemWindow, Root Port Command) */
   BOOLEAN found_gpu_bar0_restore = FALSE;
+  BOOLEAN found_rp_mem_restore = FALSE;
+  BOOLEAN found_rp_cmd_restore = FALSE;
   for (UINT32 i = pm32_offset; i < pm16_offset - 8; i++) {
     if (buffer[i] == 0xB8 && *(UINT32 *)(buffer + i + 1) == 0x802D0010U) {
       found_gpu_bar0_restore = TRUE;
-      break;
+    }
+    if (buffer[i] == 0xB8 && *(UINT32 *)(buffer + i + 1) == 0x80001920U) {
+      found_rp_mem_restore = TRUE;
+    }
+    if (buffer[i] == 0xB8 && *(UINT32 *)(buffer + i + 1) == 0x80001904U) {
+      found_rp_cmd_restore = TRUE;
     }
   }
   CHECK(found_gpu_bar0_restore, "Trampoline teardown must restore GPU BAR0 (0x802D0010)");
+  CHECK(found_rp_mem_restore, "Trampoline teardown must restore Root Port 0:3:1 Memory Base/Limit (0x80001920)");
+  CHECK(found_rp_cmd_restore, "Trampoline teardown must restore Root Port 0:3:1 Command Register (0x80001904)");
+
+  /* Verify 5-byte port address loads in 32-bit flat mode (no 2-byte phase shift) */
+  BOOLEAN found_5byte_port_cf8 = FALSE;
+  BOOLEAN found_5byte_port_cfc = FALSE;
+  for (UINT32 i = pm32_offset; i < pm16_offset - 5; i++) {
+    if (buffer[i] == 0xBA && buffer[i+1] == 0xF8 && buffer[i+2] == 0x0C && buffer[i+3] == 0x00 && buffer[i+4] == 0x00) {
+      found_5byte_port_cf8 = TRUE;
+    }
+    if (buffer[i] == 0xBA && buffer[i+1] == 0xFC && buffer[i+2] == 0x0C && buffer[i+3] == 0x00 && buffer[i+4] == 0x00) {
+      found_5byte_port_cfc = TRUE;
+    }
+  }
+  CHECK(found_5byte_port_cf8, "32-bit PM must use 5-byte mov edx, 0x00000CF8 (BA F8 0C 00 00)");
+  CHECK(found_5byte_port_cfc, "32-bit PM must use 5-byte mov edx, 0x00000CFC (BA FC 0C 00 00)");
 
   /* Verify Return to Real Mode (CR0.PE clear and far jump) */
   BOOLEAN found_cr0_clear = FALSE;
