@@ -663,6 +663,11 @@ UINT32 GuAcpiBuildTrampolineCode(
   *e++ = 0x8E; *e++ = 0xE8;                         /* mov gs, ax */
   *e++ = 0x8E; *e++ = 0xD0;                         /* mov ss, ax */
 
+  /* Diagnostic Marker 0x324B4F21 ('!OK2') directly to HighAcpiPage + 0x500 (v1.8.46b) */
+  *e++ = 0xC7; *e++ = 0x05;                         /* mov dword [disp32], imm32 */
+  *(UINT32 *)e = high_telem_dest; e += 4;
+  *e++ = 0x21; *e++ = 0x4F; *e++ = 0x4B; *e++ = 0x32; /* 0x324B4F21 ('!OK2') */
+
   /* Load Real-Mode IDTR (Limit=0x3FF, Base=0) while in 32-bit mode */
   *e++ = 0x0F; *e++ = 0x01; *e++ = 0x1D;             /* lidt [disp32] */
   *(UINT32 *)e = (UINT32)(TrampolinePhys + 0x0200); e += 4;
@@ -702,12 +707,12 @@ UINT32 GuAcpiBuildTrampolineCode(
   *(UINT32 *)e = (UINT32)(TrampolinePhys + 0x0312); e += 4;
   *e++ = 0x02; *e++ = 0xAA;
 
-  /* Task (b): Copy 128-byte telemetry block (0x9E300..0x9E37F, 32 DWORDs) to HighAcpiPage + 0x500 */
+  /* Task (b): Copy 31 DWORDs (+0x0304..+0x037F) to HighAcpiPage + 0x504, preserving Marker at +0x500 */
   *e++ = 0xBE;                                       /* mov esi, imm32 */
-  *(UINT32 *)e = (UINT32)(TrampolinePhys + 0x0300); e += 4;
+  *(UINT32 *)e = (UINT32)(TrampolinePhys + 0x0304); e += 4;
   *e++ = 0xBF;                                       /* mov edi, imm32 */
-  *(UINT32 *)e = high_telem_dest; e += 4;
-  *e++ = 0xB9; *e++ = 0x20; *e++ = 0x00; *e++ = 0x00; *e++ = 0x00; /* mov ecx, 32 */
+  *(UINT32 *)e = (UINT32)(high_telem_dest + 0x04); e += 4;
+  *e++ = 0xB9; *e++ = 0x1F; *e++ = 0x00; *e++ = 0x00; *e++ = 0x00; /* mov ecx, 31 (124 bytes) */
   *e++ = 0xFC;                                       /* cld */
   *e++ = 0xF3; *e++ = 0xA5;                         /* rep movsd */
 

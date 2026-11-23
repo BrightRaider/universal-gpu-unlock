@@ -6,6 +6,24 @@ For packaged binaries and downloads, visit [GitHub Releases](https://github.com/
 
 ---
 
+## [v1.8.46b] - 2026-11-23
+### Added & Fixed
+- **Diagnose-Marker 0x324B4F21 ('!OK2') & ausgerichtete 31-DWORD Telemetrie-Spiegelung (addresses #19):**
+  - **Diagnose-Marker im 32-Bit Flat Protected Mode:**
+    - Unmittelbar nach Eintritt in den 32-Bit Flat Mode und Laden der Datensegment-Selektoren (`DS/ES/FS/GS/SS = 0x0010`) schreibt das Low-Memory-Trampolin (`0x0009E000`) den Marker `0x324B4F21` (`!OK2` in ASCII / Little-Endian `21 4F 4B 32`) direkt nach `HighAcpiPage + 0x500` (`[high_telem_dest]`).
+    - Dies liefert einen manipulationssicheren, unmissverständlichen Beweis für das Erreichen des 32-Bit Protected Mode, selbst wenn der Quell-Telemetrieblock bei `0x0009E300` noch leer oder genullt wäre.
+    - In Windows sofort aus dem Live-Kernel-Debugger per `dd poi(nt!HalpAcpiFacsMapping)+100 L20` lesbar.
+  - **Ausgerichtete 31-DWORD-Spiegelung (`rep movsd`):**
+    - Die Telemetrie-Kopierschleife (`rep movsd`) wurde um 4 Bytes nach hinten versetzt: Quelladresse `TrampolinePhys + 0x0304`, Zieladresse `high_telem_dest + 0x04` (`HighAcpiPage + 0x504`), Zähler `mov ecx, 31` (124 Bytes).
+    - Dadurch bleibt der Marker `0x324B4F21` an Offset `+0x500` intakt und wird bei der Spiegelung nicht überschrieben.
+  - **Envelope & Host-Test Verifikation:**
+    - Die Gesamtgröße des Trampolins beträgt 420 Bytes (innerhalb der 512-Byte-Grenze bis `0x01FF`, 92 Bytes Puffer vor `RM_IDTR`/GDT bei `0x0200`).
+    - Alle 8.432 Host-Checks in 10 Test-Suites erfolgreich bestanden (`MSVC_HOST_TESTS=PASS`).
+  - **Strikte Sicherheitsgrenzen:**
+    - Weiterhin KEINE BAR0-MMIO-Schreibzugriffe, KEIN SEC2-Unlock, KEINE CMOS/RTC-Mutation, KEIN 64-Bit-Wake (`OspmFlags = 0`).
+
+---
+
 ## [v1.8.46] - 2026-11-23
 ### Added & Fixed
 - **16->32->16-Bit Flat Mode Bridge in Trampoline, High-Memory Waking Vector & Telemetry Mirroring (addresses #19):**

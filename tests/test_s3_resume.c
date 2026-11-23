@@ -600,7 +600,7 @@ static void TestGuAcpiBuildTrampolineCode(void) {
   UINT8 buffer[4096];
   EFI_PHYSICAL_ADDRESS tramp_phys = 0x0009E000ULL;
   EFI_PHYSICAL_ADDRESS ctx_phys = 0xdc5d8000ULL;
-  EFI_PHYSICAL_ADDRESS shadow_facs_phys = 0x0009E200ULL;
+  EFI_PHYSICAL_ADDRESS shadow_facs_phys = 0xdc617400ULL;
 
   UINT32 bytes = GuAcpiBuildTrampolineCode(buffer, sizeof(buffer), tramp_phys, ctx_phys, shadow_facs_phys, 0x80001960U, 0x802D0064U);
   CHECK(bytes > 0, "Trampoline builder must generate non-zero bytes");
@@ -780,6 +780,7 @@ static void TestGuAcpiBuildTrampolineCode(void) {
     else if (buffer[i] == 0x8E && buffer[i+1] == 0xE0) { instr_len = 2; desc = "mov fs, ax"; }
     else if (buffer[i] == 0x8E && buffer[i+1] == 0xE8) { instr_len = 2; desc = "mov gs, ax"; }
     else if (buffer[i] == 0x8E && buffer[i+1] == 0xD0) { instr_len = 2; desc = "mov ss, ax"; }
+    else if (buffer[i] == 0xC7 && buffer[i+1] == 0x05 && buffer[i+6] == 0x21 && buffer[i+7] == 0x4F && buffer[i+8] == 0x4B && buffer[i+9] == 0x32) { instr_len = 10; desc = "mov dword [HighAcpiPage+0x500], 0x324B4F21 ; Write Diagnostic Marker '!OK2'"; }
     else if (buffer[i] == 0x0F && buffer[i+1] == 0x01 && buffer[i+2] == 0x1D) { instr_len = 7; desc = "lidt [0x0009E200]               ; Load Real-Mode IDTR (Limit=0x3FF, Base=0)"; }
     else if (buffer[i] == 0x8B && buffer[i+1] == 0x35) { instr_len = 6; desc = "mov esi, [ShadowFACS+0x0C]     ; Read Windows Waking Vector from High Page"; }
     else if (buffer[i] == 0x85 && buffer[i+1] == 0xF6) { instr_len = 2; desc = "test esi, esi"; }
@@ -792,9 +793,9 @@ static void TestGuAcpiBuildTrampolineCode(void) {
     else if (buffer[i] == 0x66 && buffer[i+1] == 0xA3) { instr_len = 5; desc = "mov [disp32], ax                ; Store target/telemetry offset"; }
     else if (buffer[i] == 0x66 && buffer[i+1] == 0x89 && buffer[i+2] == 0x35) { instr_len = 6; desc = "mov [disp32], si                ; Store target/telemetry segment"; }
     else if (buffer[i] == 0x66 && buffer[i+1] == 0xC7 && buffer[i+2] == 0x05) { instr_len = 9; desc = "mov word [0x0009E312], 0xAA02   ; Exit Checkpoint 0xAA02"; }
-    else if (buffer[i] == 0xBE) { instr_len = 5; desc = "mov esi, 0x0009E300             ; Telemetry Source"; }
-    else if (buffer[i] == 0xBF) { instr_len = 5; desc = "mov edi, HighAcpiPage+0x500     ; Telemetry Destination (High Page)"; }
-    else if (buffer[i] == 0xB9 && buffer[i+1] == 0x20 && buffer[i+2] == 0x00 && buffer[i+3] == 0x00 && buffer[i+4] == 0x00) { instr_len = 5; desc = "mov ecx, 32                    ; 32 DWORDs = 128 bytes"; }
+    else if (buffer[i] == 0xBE) { instr_len = 5; desc = "mov esi, 0x0009E304             ; Telemetry Source (+0x0304)"; }
+    else if (buffer[i] == 0xBF) { instr_len = 5; desc = "mov edi, HighAcpiPage+0x504     ; Telemetry Destination (+0x504)"; }
+    else if (buffer[i] == 0xB9 && buffer[i+1] == 0x1F && buffer[i+2] == 0x00 && buffer[i+3] == 0x00 && buffer[i+4] == 0x00) { instr_len = 5; desc = "mov ecx, 31                    ; 31 DWORDs = 124 bytes"; }
     else if (buffer[i] == 0xF3 && buffer[i+1] == 0xA5) { instr_len = 2; desc = "rep movsd                       ; MIRROR TELEMETRY TO HIGH MEMORY!"; }
     else if (buffer[i] == 0xEA && buffer[i+5] == 0x18 && buffer[i+6] == 0x00) { instr_len = 7; desc = "jmp far 0x0018:pm16             ; Drop to 16-bit Protected Mode"; }
     else if (buffer[i] == 0xB8 && buffer[i+1] == 0x20 && buffer[i+2] == 0x00) { instr_len = 3; desc = "pm16: mov ax, 0x0020            ; 16-bit PM Data Selector"; }
@@ -845,6 +846,16 @@ static void TestGuAcpiBuildTrampolineCode(void) {
     }
   }
   CHECK(found_fallback, "Trampoline must fall back to mov esi, 0x00001000 when waking vector is 0");
+
+  /* Verify Diagnostic Marker 0x324B4F21 ('!OK2') write */
+  BOOLEAN found_marker = FALSE;
+  for (UINT32 i = 0; i < bytes - 9; i++) {
+    if (buffer[i] == 0xC7 && buffer[i+1] == 0x05 && buffer[i+6] == 0x21 && buffer[i+7] == 0x4F && buffer[i+8] == 0x4B && buffer[i+9] == 0x32) {
+      found_marker = TRUE;
+      break;
+    }
+  }
+  CHECK(found_marker, "Trampoline must write diagnostic marker 0x324B4F21 (!OK2) to HighAcpiPage+0x500");
 
   /* Verify Telemetry Mirroring (rep movsd: F3 A5) */
   BOOLEAN found_rep_movsd = FALSE;

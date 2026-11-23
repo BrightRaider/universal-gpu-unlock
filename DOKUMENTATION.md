@@ -1,7 +1,7 @@
 # Technische Dokumentation: Universal GPU Unlock (Multi-Gen)
 
 > **Tool:** Universal GPU Unlock  
-> **Version:** v1.8.46  
+> **Version:** v1.8.46b  
 > **Architekturen:** NVIDIA Ada Lovelace (RTX 40), Ampere (RTX 30), Turing (RTX 20 / CMP)  
 > **Unterstützte Betriebssysteme:** Windows 10, Windows 11, WSL2 / Ubuntu CUDA Container  
 
@@ -698,6 +698,35 @@ In **v1.8.34** habe ich die Architektur umfassend überarbeitet und perfektionie
 
 5. **Host-Test Suite:**
    - Alle 8.431 Host-Checks in 10 Test-Suites erfolgreich bestanden (`MSVC_HOST_TESTS=PASS`).
+
+---
+
+### 13.17 Die v1.8.46b Architektur: Diagnose-Marker 0x324B4F21 ('!OK2') und ausgerichtete 31-DWORD Telemetrie-Spiegelung
+
+1. **Problemstellung:**
+   - In Windows 64-Bit Local Kernel Debugging (`-kl`) sind direkte Lesezugriffe auf physischen Speicher unterhalb von 1 MB (`!dd 9e300 L20`) aus Sicherheitsgründen blockiert (`failed`), selbst wenn der Speicher physisch existiert.
+   - Da `HighAcpiPage` (`0xDC617000`) im High-Memory liegt und Windows `ShadowFACS` an `nt!HalpAcpiFacsMapping` mappt, ist der Bereich ab `+0x0500` über `dd poi(nt!HalpAcpiFacsMapping)+100 L20` direkt im Kernel-Debugger lesbar.
+   - Um zweifelsfrei zu differenzieren, ob das Low-Trampolin bereits in den 32-Bit-Flat-Mode gewechselt ist oder die Quelle leer war, benötigt der Kernel-Debugger einen unmissverständlichen Sofort-Marker.
+
+2. **Diagnose-Marker im 32-Bit Flat Mode:**
+   - Direkt nach Eintritt in den 32-Bit Flat Protected Mode (`pm32`) und Laden der Datensegmente (`DS/ES/FS/GS/SS = 0x0010`) schreibt das Trampolin:
+     ```assembly
+     mov dword ptr [HighAcpiPage + 0x0500], 0x324B4F21 ; Marker '!OK2'
+     ```
+   - Dies geschieht VOR dem Auslesen des Windows-Waking-Vektors und VOR der Telemetrie-Spiegelung.
+   - Selbst wenn kein einziger Telemetrie-Wert kopiert würde, steht an `nt!HalpAcpiFacsMapping + 0x100` sofort `324b4f21`.
+
+3. **Ausrichtung der Telemetrie-Spiegelung:**
+   - Die nachfolgende `rep movsd`-Schleife kopiert 31 DWORDs (124 Bytes):
+     - Quelladresse: `TrampolinePhys + 0x0304` (`mov esi, 0x0009E304`)
+     - Zieladresse: `HighAcpiPage + 0x0504` (`mov edi, HighAcpiPage + 0x0504`)
+     - Zähler: `mov ecx, 31` (`1F 00 00 00`)
+   - Dadurch bleibt `0x324B4F21` an `+0x0500` dauerhaft erhalten und wird von den gespiegelten PCIe-Recon- und Vektor-Telemetriedaten ab `+0x0504` ergänzt.
+
+4. **Code- und Test-Verifikation:**
+   - Gesamtlänge des Maschinencodes im Trampolin: 420 Bytes (512-Byte-Limit strikt eingehalten).
+   - Alle 8.432 Checks in `Run-MsvcHostTests.ps1` grün (`MSVC_HOST_TESTS=PASS`).
+
 
 
 
