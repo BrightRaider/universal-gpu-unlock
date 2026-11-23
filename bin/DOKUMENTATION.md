@@ -1,7 +1,7 @@
 # Technische Dokumentation: Universal GPU Unlock (Multi-Gen)
 
 > **Tool:** Universal GPU Unlock  
-> **Version:** v1.8.49  
+> **Version:** v1.8.50  
 > **Architekturen:** NVIDIA Ada Lovelace (RTX 40), Ampere (RTX 30), Turing (RTX 20 / CMP)  
 > **Unterstützte Betriebssysteme:** Windows 10, Windows 11, WSL2 / Ubuntu CUDA Container  
 
@@ -904,6 +904,41 @@ In **v1.8.34** habe ich die Architektur umfassend überarbeitet und perfektionie
    - Maschinencode-Größe: 849 Bytes (Envelope: 1024 Bytes, 175 Bytes Sicherheitsabstand vor GDT bei `+0x0400`).
    - Alle 8.816 Checks in 10 Test-Suites erfolgreich bestanden (`MSVC_HOST_TESTS=PASS`).
    - Strikte Sicherheitsgrenzen: 0 CMOS/RTC-Mutation, `OspmFlags = 0`.
+
+---
+
+### 13.22 Die v1.8.50 Architektur: SEC2 Falcon Booter Handshake & PCIe Bus Master DMA im 32-Bit Flat Mode bei S3-Wake
+
+1. **Ausgangslage und forensischer Beweis aus dem v1.8.49 S3-Wake-Test:**
+   - Das 16->32->16-Bit-Trampolin durchlief den S3-Wake bei `0xd8261000` vollständig und fehlerfrei (`324B4F21`, Checkpoints `0xAA01` und `0xAA02`, `WakingVector = 0x00001000`, S3-Resume 1573 ms).
+   - Die echte Chip-ID `0x192000a1` (AD102) wurde über `0xFB000000` im 32-Bit Flat Mode ausgelesen.
+   - Der Versuch, `0x00823804` (PLM) direkt über Host-MMIO mit `0xFFFFFFFF` zu entsperren, wurde von der AD102-Hardware ignoriert: `PLM_After` verblieb bei `0xFFFFFF8F` und `Status = 2` (Mismatch).
+   - Ergebnis: Die AD102 Privilege Level Mask ist gegen direkte Host-MMIO-Writes hardwaregesperrt und kann nur intern durch Ausführung des SEC2 Falcon Booters freigeschaltet werden.
+
+2. **Integration der SEC2 Falcon Handshake-Sequenz im 32-Bit Flat Mode:**
+   - Vor dem Schreiben der Rate-Limiter-Register `SS0` (`0x82381C = 0x88888888`) und `SS1` (`0x823820 = 0x00000008`) führt das Trampolin den vollen Hardware-Handshake mit dem SEC2-Coprozessor aus:
+     1. Reset SEC2: `bar[0x008403C0] = 0`.
+     2. FBIF Interface Enable: `bar[0x00840624] |= 0x80`.
+     3. Falcon IRQ / Status Clear: `bar[0x0084010C] = 0`.
+     4. FBIF Trans Mode Setup: `(bar[0x00840600] & ~7) | 5`.
+     5. Booter DMA Base: `bar[0x00840110] = booter_dma >> 8` (mittels physischer 32-Bit-Adresse aus dem ACPI NVS Puffer).
+     6. Booter DMA High: `bar[0x00840114] = 0`.
+     7. Booter Size Register: `bar[0x00840118] = (booter_size & ~0xFF) | 0x10`.
+     8. Start Falcon CPU: `bar[0x00840100] = 2` (`CPUCTL = 2`).
+     9. Polling auf Falcon Halt-Bit (`test al, 0x10`) mit festem Timeout von maximal 50.000 Iterationen (sauberer Abbruch bei Verzögerungen, schließt Hänger beim Wake aus).
+     10. Telemetrie-Sicherung: Falcon CPUCTL Halt-Zustand wird nach `+0xC0` gesichert (`GU_TELEM_SEC2_CPUCTL_OFF`).
+     11. SEC2 Marker Auslesung: `bar[0x00840040]` wird nach Telemetrie `+0xC4` gesichert (`GU_TELEM_SEC2_MARKER_OFF`).
+     12. Clear SEC2 Reset: `bar[0x008403C0] = 0` zur sauberen Übergabe der Falcon-Hardware.
+
+3. **PCIe Bus Master Enable (BME = 0x04) & Memory Space Enable (MSE = 0x02):**
+   - Um Upstream-DMA-Transaktionen des SEC2-Coprozessors zur Host-DRAM-Lesung über die PCIe-Bridge zu ermöglichen, werden während des temporären Unlocks im Root Port Command Register (`0x80001904`) und GPU Command Register (`0x802D0004`) via `or al, 0x06` beide Bits aktiviert.
+
+4. **Lückenloser 4-Stufen-PCIe-Teardown & Verifikation:**
+   - Vollständige Wiederherstellung aller vier PCIe-Register (GPU Cmd, GPU BAR0, Root Port Window, Root Port Cmd) vor Rückkehr in den 16-Bit Real Mode.
+   - Maschinencode-Größe: 973 Bytes (Envelope: 1024 Bytes, 51 Bytes Puffer vor GDT bei `+0x0400`).
+   - Alle 8.695 Checks in 10 Test-Suites erfolgreich bestanden (`MSVC_HOST_TESTS=PASS`).
+   - Strikte Sicherheitsgrenzen: 0 CMOS/RTC-Mutation, `OspmFlags = 0`.
+
 
 
 

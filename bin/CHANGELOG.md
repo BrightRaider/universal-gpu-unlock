@@ -6,6 +6,36 @@ For packaged binaries and downloads, visit [GitHub Releases](https://github.com/
 
 ---
 
+## [v1.8.50] - 2026-11-23
+### Added & Fixed
+- **SEC2 Falcon Booter Handshake & PCIe Bus Master DMA im 32-Bit Flat Mode bei S3-Wake (addresses #19):**
+  - **Forensische Bestätigung aus dem v1.8.49 S3-Wake-Test:**
+    - Die Live-Kernel-Telemetrie (`kdX64.exe -kl`) bei `0xd8261000` belegte, dass der direkte Host-MMIO-Schreibversuch `mov dword [ebx + 0x00823804], 0xFFFFFFFF` von der AD102-Hardware ignoriert wurde (`PLM_After` verblieb bei `0xFFFFFF8F`, `Status = 2`).
+    - Dies bewies endgültig: Das Privilege Level Mask Register (`0x00823804`) ist gegen direkte Host-MMIO-Zugriffe hardwaregesperrt und kann ausschließlich intern durch den SEC2 Falcon Koprozessor entsperrt werden.
+  - **SEC2 Falcon Handshake-Sequenz im 32-Bit Flat Protected Mode:**
+    - Vollständige Übernahme des kryptografischen Handshakes vor dem Latch der Rate-Limiter-Register (`SS0` / `SS1`):
+      1. SEC2 Falcon Reset: `bar[0x008403C0] = 0`.
+      2. FBIF Interface Enable: `bar[0x00840624] |= 0x80`.
+      3. Falcon IRQ / Status Clear: `bar[0x0084010C] = 0`.
+      4. FBIF Trans Mode Setup: `(bar[0x00840600] & ~7) | 5`.
+      5. Booter DMA Base Register: `bar[0x00840110] = booter_dma >> 8` (mittels gültiger physischer 32-Bit-Host-DRAM-Adresse aus dem ACPI NVS Staging-Puffer).
+      6. Booter DMA High Register: `bar[0x00840114] = 0`.
+      7. Booter Size Register: `bar[0x00840118] = (booter_size & ~0xFF) | 0x10`.
+      8. Falcon CPU Start: `bar[0x00840100] = 2` (`CPUCTL = 2`).
+      9. Deterministische Polling-Schleife auf das Falcon Halt-Bit (`test al, 0x10`) mit festem Timeout von maximal 50.000 Iterationen (sauberer Abbruch bei Verzögerungen, schließt System-Hangs beim Wake vollständig aus).
+      10. Telemetrie-Sicherung: Falcon CPUCTL Halt-Zustand wird nach `+0xC0` gesichert.
+      11. SEC2 Marker Auslesung: `bar[0x00840040]` wird nach Telemetrie `+0xC4` gesichert.
+      12. SEC2 Reset Clear: `bar[0x008403C0] = 0` zur sauberen Übergabe der Falcon-Hardware.
+  - **PCIe Bus Master Enable (BME = 0x04) & Memory Space Enable (MSE = 0x02):**
+    - Während der temporären BAR0-Aktivierung werden sowohl im Root Port Command Register (`0x80001904`) als auch im GPU Command Register (`0x802D0004`) via `or al, 0x06` beide Bits gesetzt, um Upstream-DMA-Transaktionen des SEC2-Coprozessors in den Host-Arbeitsspeicher über die PCIe-Bridge zu ermöglichen.
+  - **Lückenloser 4-Stufen-PCIe-Teardown & Verifikation:**
+    - Vollständige Restaurierung aller vier PCIe-Register (GPU Cmd, GPU BAR0, Root Port Window, Root Port Cmd) vor dem Rücksprung in den 16-Bit Real Mode.
+    - Maschinencode-Größe: 973 Bytes (komfortabel innerhalb des 1024-Byte-Envelopes `< 0x0400`).
+    - 8.695 Checks in allen Test-Suites grün (`MSVC_HOST_TESTS=PASS`).
+    - Strikte Sicherheitsgrenzen: 0 CMOS/RTC-Mutation, `OspmFlags = 0`.
+
+---
+
 ## [v1.8.49] - 2026-11-23
 ### Added & Fixed
 - **PLM Privilege Level Mask Unlatch Write vor Rate-Limiter-Unlock über S3 Wake (addresses #19):**

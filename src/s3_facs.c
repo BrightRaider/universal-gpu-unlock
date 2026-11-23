@@ -457,43 +457,15 @@ UINT32 GuAcpiBuildTrampolineCode(
     IN UINT32 GpuPmcsrReg
 ) {
   if (!Buffer || BufferSize < 1024) return 0;
-  (VOID)ContextPhys;
-
-  /*
-   * Layout within Low Trampoline buffer (<1MB, 4096 bytes):
-   * +0x000: 16-bit Pure Real Mode S3 Resume Trampoline Machine Code (<1024 bytes)
-   * +0x400: Real-Mode IDTR (6 bytes: Limit=0x03FF, Base=0x00000000) (v1.8.47)
-   * +0x408: Protected-Mode GDTR (6 bytes: Limit=0x0027, Base=TrampolinePhys+0x0410)
-   * +0x410: GDT (5 Descriptors = 40 bytes):
-   *         0x00: Null Descriptor
-   *         0x08: 32-bit Flat Code (Base=0, Limit=4GB, G=1, D=1, Type=0x9A)
-   *         0x10: 32-bit Flat Data (Base=0, Limit=4GB, G=1, D=1, Type=0x92)
-   *         0x18: 16-bit PM Code   (Base=TrampolinePhys&0xFFFF0000, Limit=64KB, G=0, D=0, Type=0x9A)
-   *         0x20: 16-bit PM Data   (Base=TrampolinePhys&0xFFFF0000, Limit=64KB, G=0, D=0, Type=0x92)
-   * +0x500: Far Jump Target: [0x500] = Offset (16-bit), [0x502] = Segment (16-bit)
-   * +0x504: Saved RealRSDP Lower 32 Bits (from EBS Sandwich)
-   * +0x508: RestoredCount (16-bit) / EbsSuccessCount (16-bit)
-   * +0x50C: EbsLastStatus (32-bit)
-   * +0x510: Telemetry Entry Status (0xAA01)
-   * +0x512: Telemetry Exit Status (0xAA02)
-   * +0x514: Telemetry Captured Vector (32-bit dword)
-   * +0x518: Telemetry Target Offset (16-bit)
-   * +0x51A: Telemetry Target Segment (16-bit)
-   * +0x51C: Telemetry Magic (0x53335F54 "S3_T")
-   * +0x520: PCI Probe Addresses Table (8 dwords = 32 bytes)
-   * +0x540: PCI Probe Raw Results (8 dwords = 32 bytes)
-   * +0x560: PCI Probe Post-Arm Results (4 dwords = 16 bytes)
-   * +0x570: Saved BIOS SP (16-bit)
-   * +0x572: Saved BIOS SS (16-bit)
-   * +0x580: Real FACS Vector Mirror (32-bit at 0x580, 64-bit at 0x588)
-   */
-
   /* Derive High ACPI base and target addresses */
   EFI_PHYSICAL_ADDRESS high_acpi_phys = (ShadowFacsPhys >= GU_HIGH_SHADOW_FACS_OFF) ?
       (ShadowFacsPhys - GU_HIGH_SHADOW_FACS_OFF) : ShadowFacsPhys;
   UINT32 shadow_wake_phys = (UINT32)(ShadowFacsPhys + 0x0C);
   UINT32 high_telem_dest = TelemetryPhys ? (UINT32)TelemetryPhys : (UINT32)(high_acpi_phys + 0x0500);
   UINT32 bar0_target = GpuBar0Phys ? (UINT32)GpuBar0Phys : 0xFB000000U;
+  UINT32 booter_dma = ContextPhys ? (UINT32)(ContextPhys + 0x01000U) : 0x00021000U;
+  UINT32 booter_size = (GuAssets[0].firmware.size > 0) ? (UINT32)GuAssets[0].firmware.size : 57672U;
+  UINT32 booter_sz_param = (booter_size & ~0xFFU) | 0x10U;
 
   /* Pre-populate PCI probe addresses at +0x0520 (8 dwords = 32 bytes) */
   UINT32 *probe_addrs = (UINT32 *)(Buffer + 0x0520);
@@ -736,14 +708,14 @@ UINT32 GuAcpiBuildTrampolineCode(
   *(UINT32 *)e = (UINT32)(high_telem_dest + 0x8C); e += 4;
   *(UINT32 *)e = bar0_target; e += 4;
 
-  /* 1. Read Root Port 0:3:1 Command register (0x80001904) and enable MSE (bit 1) */
+  /* 1. Read Root Port 0:3:1 Command register (0x80001904) and enable MSE (bit 1) + BME (bit 2) */
   *e++ = 0xBA; *e++ = 0xF8; *e++ = 0x0C; *e++ = 0x00; *e++ = 0x00; /* mov edx, 0x0CF8 */
   *e++ = 0xB8; *e++ = 0x04; *e++ = 0x19; *e++ = 0x00; *e++ = 0x80; /* mov eax, 0x80001904 */
   *e++ = 0xEF;                                       /* out dx, eax */
   *e++ = 0xBA; *e++ = 0xFC; *e++ = 0x0C; *e++ = 0x00; *e++ = 0x00; /* mov edx, 0x0CFC */
   *e++ = 0xED;                                       /* in eax, dx */
   *e++ = 0xA3; *(UINT32 *)e = (UINT32)(high_telem_dest + 0xB0); e += 4; /* mov [dest+0xB0], eax (save rp_cmd) */
-  *e++ = 0x0C; *e++ = 0x02;                         /* or al, 0x02 (MSE) */
+  *e++ = 0x0C; *e++ = 0x06;                         /* or al, 0x06 (MSE | BME) */
   *e++ = 0xEF;                                       /* out dx, eax */
 
   /* 2. Read Root Port 0:3:1 Memory Base/Limit (0x80001920) and assign temporary window 0xFC00FB00 */
@@ -766,14 +738,14 @@ UINT32 GuAcpiBuildTrampolineCode(
   *e++ = 0xB8; *(UINT32 *)e = bar0_target; e += 4;   /* mov eax, bar0_target */
   *e++ = 0xEF;                                       /* out dx, eax */
 
-  /* 4. Enable GPU Command Memory Space Enable (0x802D0004) */
+  /* 4. Enable GPU Command Memory Space Enable (bit 1) + Bus Master Enable (bit 2) (0x802D0004) */
   *e++ = 0xBA; *e++ = 0xF8; *e++ = 0x0C; *e++ = 0x00; *e++ = 0x00; /* mov edx, 0x0CF8 */
   *e++ = 0xB8; *e++ = 0x04; *e++ = 0x00; *e++ = 0x2D; *e++ = 0x80; /* mov eax, 0x802D0004 */
   *e++ = 0xEF;                                       /* out dx, eax */
   *e++ = 0xBA; *e++ = 0xFC; *e++ = 0x0C; *e++ = 0x00; *e++ = 0x00; /* mov edx, 0x0CFC */
   *e++ = 0xED;                                       /* in eax, dx */
   *e++ = 0xA3; *(UINT32 *)e = (UINT32)(high_telem_dest + 0xB8); e += 4; /* mov [dest+0xB8], eax (save gpu_cmd) */
-  *e++ = 0x0C; *e++ = 0x02;                         /* or al, 0x02 (MSE) */
+  *e++ = 0x0C; *e++ = 0x06;                         /* or al, 0x06 (MSE | BME) */
   *e++ = 0xEF;                                       /* out dx, eax */
 
   /* 5. MMIO Operations via Base in EBX */
@@ -794,6 +766,65 @@ UINT32 GuAcpiBuildTrampolineCode(
   UINT8 *fault_jmp2 = e;
   *e++ = 0x0F; *e++ = 0x84; *e++ = 0x00; *e++ = 0x00; *e++ = 0x00; *e++ = 0x00; /* jz near .fault */
 
+  /* ==================== SEC2 FALCON BOOTER HANDSHAKE (v1.8.50) ==================== */
+  /* Reset SEC2: mov dword [ebx + 0x008403C0], 0 */
+  *e++ = 0xC7; *e++ = 0x83; *(UINT32 *)e = 0x008403C0U; e += 4;
+  *e++ = 0x00; *e++ = 0x00; *e++ = 0x00; *e++ = 0x00;
+
+  /* Enable FBIF interface: bar[0x00840624] |= (1 << 7) */
+  *e++ = 0x8B; *e++ = 0x83; *(UINT32 *)e = 0x00840624U; e += 4; /* mov eax, [ebx + 0x00840624] */
+  *e++ = 0x0C; *e++ = 0x80;                                     /* or al, 0x80 */
+  *e++ = 0x89; *e++ = 0x83; *(UINT32 *)e = 0x00840624U; e += 4; /* mov [ebx + 0x00840624], eax */
+
+  /* Clear Falcon IRQ / status: mov dword [ebx + 0x0084010C], 0 */
+  *e++ = 0xC7; *e++ = 0x83; *(UINT32 *)e = 0x0084010CU; e += 4;
+  *e++ = 0x00; *e++ = 0x00; *e++ = 0x00; *e++ = 0x00;
+
+  /* Setup trans mode: bar[0x00840600] = (bar[0x00840600] & ~7) | 5 */
+  *e++ = 0x8B; *e++ = 0x83; *(UINT32 *)e = 0x00840600U; e += 4; /* mov eax, [ebx + 0x00840600] */
+  *e++ = 0x24; *e++ = 0xF8;                                     /* and al, 0xF8 */
+  *e++ = 0x0C; *e++ = 0x05;                                     /* or al, 0x05 */
+  *e++ = 0x89; *e++ = 0x83; *(UINT32 *)e = 0x00840600U; e += 4; /* mov [ebx + 0x00840600], eax */
+
+  /* Program Booter DMA address: mov dword [ebx + 0x00840110], booter_dma >> 8 */
+  *e++ = 0xC7; *e++ = 0x83; *(UINT32 *)e = 0x00840110U; e += 4;
+  *(UINT32 *)e = (booter_dma >> 8); e += 4;
+
+  /* Program Booter DMA high address: mov dword [ebx + 0x00840114], 0 */
+  *e++ = 0xC7; *e++ = 0x83; *(UINT32 *)e = 0x00840114U; e += 4;
+  *e++ = 0x00; *e++ = 0x00; *e++ = 0x00; *e++ = 0x00;
+
+  /* Program Booter Size: mov dword [ebx + 0x00840118], (booter_size & ~0xFF) | 0x10 */
+  *e++ = 0xC7; *e++ = 0x83; *(UINT32 *)e = 0x00840118U; e += 4;
+  *(UINT32 *)e = booter_sz_param; e += 4;
+
+  /* Start Falcon CPU: mov dword [ebx + 0x00840100], 2 */
+  *e++ = 0xC7; *e++ = 0x83; *(UINT32 *)e = 0x00840100U; e += 4;
+  *e++ = 0x02; *e++ = 0x00; *e++ = 0x00; *e++ = 0x00;
+
+  /* Poll Falcon Halt (0x00840100 & 0x10) with 50,000 iteration timeout */
+  *e++ = 0xB9; *e++ = 0x50; *e++ = 0xC3; *e++ = 0x00; *e++ = 0x00; /* mov ecx, 50000 */
+  UINT8 *poll_start = e;
+  *e++ = 0x8B; *e++ = 0x83; *(UINT32 *)e = 0x00840100U; e += 4; /* mov eax, [ebx + 0x00840100] */
+  *e++ = 0xA8; *e++ = 0x10;                                     /* test al, 0x10 */
+  *e++ = 0x75;                                                 /* jnz .poll_done */
+  UINT8 *poll_break = e++;
+  *e++ = 0x49;                                                 /* dec ecx */
+  *e++ = 0x75;                                                 /* jnz poll_start */
+  *e++ = (UINT8)(poll_start - (e + 1));
+  *poll_break = (UINT8)(e - (poll_break + 1));
+
+  /* .poll_done: Save Falcon CPUCTL halt state to telemetry +0xC0 */
+  *e++ = 0xA3; *(UINT32 *)e = (UINT32)(high_telem_dest + 0xC0); e += 4; /* mov [dest+0xC0], eax */
+
+  /* Read SEC2 Marker from BAR0 + 0x00840040 and save to telemetry +0xC4 */
+  *e++ = 0x8B; *e++ = 0x83; *(UINT32 *)e = 0x00840040U; e += 4; /* mov eax, [ebx + 0x00840040] */
+  *e++ = 0xA3; *(UINT32 *)e = (UINT32)(high_telem_dest + 0xC4); e += 4; /* mov [dest+0xC4], eax */
+
+  /* Clear SEC2 reset to leave hardware clean: mov dword [ebx + 0x008403C0], 0 */
+  *e++ = 0xC7; *e++ = 0x83; *(UINT32 *)e = 0x008403C0U; e += 4;
+  *e++ = 0x00; *e++ = 0x00; *e++ = 0x00; *e++ = 0x00;
+
   /* Read pre-unlock registers: SS0 (0x82381C), SS1 (0x823820), PLM (0x823804), Readout1 (0x823818) */
   *e++ = 0x8B; *e++ = 0x83; *(UINT32 *)e = 0x0082381CU; e += 4; /* mov eax, [ebx + 0x0082381C] */
   *e++ = 0xA3; *(UINT32 *)e = (UINT32)(high_telem_dest + 0x90); e += 4; /* mov [dest+0x90], eax */
@@ -806,11 +837,6 @@ UINT32 GuAcpiBuildTrampolineCode(
 
   *e++ = 0x8B; *e++ = 0x83; *(UINT32 *)e = 0x00823818U; e += 4; /* mov eax, [ebx + 0x00823818] */
   *e++ = 0xA3; *(UINT32 *)e = (UINT32)(high_telem_dest + 0x9C); e += 4; /* mov [dest+0x9C], eax */
-
-  /* Attempt to unlatch PLM (0x00823804) by writing 0xFFFFFFFF */
-  /* mov dword [ebx + 0x00823804], 0xFFFFFFFF */
-  *e++ = 0xC7; *e++ = 0x83; *(UINT32 *)e = 0x00823804U; e += 4;
-  *e++ = 0xFF; *e++ = 0xFF; *e++ = 0xFF; *e++ = 0xFF;
 
   /* Perform Rate-Limiter Unlock Writes */
   /* mov dword [ebx + 0x0082381C], 0x88888888 */
