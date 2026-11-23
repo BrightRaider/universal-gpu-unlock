@@ -1,7 +1,7 @@
 # Technische Dokumentation: Universal GPU Unlock (Multi-Gen)
 
 > **Tool:** Universal GPU Unlock  
-> **Version:** v1.8.41  
+> **Version:** v1.8.42  
 > **Architekturen:** NVIDIA Ada Lovelace (RTX 40), Ampere (RTX 30), Turing (RTX 20 / CMP)  
 > **Unterstützte Betriebssysteme:** Windows 10, Windows 11, WSL2 / Ubuntu CUDA Container  
 
@@ -485,4 +485,62 @@ In **v1.8.34** habe ich die Architektur umfassend überarbeitet und perfektionie
 
 5. **Host-Test Suite:**
    - Alle 164 Tests in 10 Test-Suites erfolgreich bestanden (`MSVC_HOST_TESTS=PASS`).
+
+---
+
+### 13.12 Die v1.8.42 Architektur: 64-Bit Long Mode S3 Resume Trampoline via FACS XFirmwareWakingVector (+0x18)
+
+1. **Firmware-Bedingung für den 64-Bit Einstieg (EDK2 `S3Resume2Pei` & AMI Aptio V):**
+   - In EDK2 `S3Resume.c` prüft die Firmware beim S3-Aufwachen exakt diese Bedingung:
+     `Facs->XFirmwareWakingVector != 0 && Facs->Version >= 2 && (Facs->Flags & 0x02) != 0 && (Facs->OspmFlags & 0x01) != 0`.
+   - Sind alle vier Kriterien erfüllt, ruft `S3Resume2Pei` die Routine `AsmTransferControl64` auf und springt im **64-Bit Long Mode** (`CS.L=1`, 4-Level-Paging aktiv) zur Adresse `XFirmwareWakingVector`.
+   - In `src/s3_facs.c` (`GuAcpiInstallShadowFacs`) setze ich daher in `ShadowFACS` und `RealFACS` konsistent:
+     - `Version >= 2` (`EFI_ACPI_4_0_FIRMWARE_ACPI_CONTROL_STRUCTURE_VERSION = 2`)
+     - `Flags |= 0x02` (`EFI_ACPI_4_0_64BIT_WAKE_SUPPORTED_F`)
+     - `OspmFlags |= 0x01` (`EFI_ACPI_4_0_OSPM_64BIT_WAKE__F`)
+     - `XFirmwareWakingVector = LowTrampoline` (`0x9E000`)
+   - Dadurch übernimmt mein Trampolin die Kontrolle garantiert auch dann, wenn AMI Aptio V `ShadowFACS` im SMM-LockBox gesichert hat.
+
+2. **64-Bit Long Mode Trampolin (`0x9E000`):**
+   - **Stack-frei & register-rein (`BITS 64`):**
+     - `cli; cld`, sofortige Diagnose-Checkpoints: `EntryStatus = 0xAA01` bei `[0x9E310]` und Magic `'S3_T'` (`0x53335F54`) bei `[0x9E31C]`.
+     - Vollständig RIP-relative Adressierung (`[rip + disp32]`), 100 % positionsunabhängig.
+   - **8-Dword PCIe Recon:**
+     - Root Port 0:3:1 Konfiguration und temporäres Bus-Routing über native CF8/CFC I/O-Ports.
+     - 4 GPU Dwords (DevID, Status/Cmd, Subsystem, LinkStatus) in einer 4-Schritt-Schleife ausgelesen und ab `[0x9E340]` abgelegt.
+     - Vollständige Wiederherstellung (Restore) der Root Port Secondary/Subordinate Busse auf die Originalwerte.
+   - **Windows-Wake-Vektor & Far Jump Patching:**
+     - Liest den Windows-Wake-Vektor aus `[ShadowFACS + 0x0C]` (Fallback `[RealFACS + 0x0C]`), sichert ihn in `[0x9E314]`.
+     - Zerlegt den Vektor in `CS = vec >> 4` und `IP = vec & 0x0F` und patcht direkt die 4 Zielbytes des `jmp far imm16:imm16` (`EA ip_lo ip_hi cs_lo cs_hi`) im 16-Bit Real-Mode Tail.
+
+3. **Exakter 4-Stufen Modus-Wechsel: 64-Bit Long Mode -> 32-Bit Compat Mode -> 16-Bit Protected Mode -> 16-Bit Real Mode:**
+   - **Eingebettete 5-Einträge GDT (`LowTrampoline + 0x0180`):**
+     - Deskriptor 0 (`0x0000`): Null-Deskriptor
+     - Deskriptor 1 (`0x0008`): 32-Bit Compat Code (`Base = 0, Limit = 0xFFFFF, Access = 0x9A, Flags = 0xCF`, `L=0, D=1, G=1`)
+     - Deskriptor 2 (`0x0010`): 32-Bit Flat Data (`Base = 0, Limit = 0xFFFFF, Access = 0x92, Flags = 0xCF`)
+     - Deskriptor 3 (`0x0018`): 16-Bit Code (`Base = LowTrampoline`, Limit `0xFFFF`, Access `0x9A`, Flags `0x00`)
+     - Deskriptor 4 (`0x0020`): 16-Bit Data (`Base = LowTrampoline`, Limit `0xFFFF`, Access `0x92`, Flags `0x00`)
+   - **10-Byte GDTR64 (`+0x01A8`), 6-Byte RM_IDTR (`+0x01B4`) & 6-Byte FARPTR32 (`+0x01C0`):**
+     - Im 64-Bit Long Mode benötigt `LGDT` zwingend einen **10-Byte gepackten Operanden** (`UINT16 Limit = 0x0027`, `UINT64 Base = LowTrampoline + 0x0180`).
+   - **Stufe 1 (64-Bit LM -> 32-Bit CM):**
+     - `lgdt [rip + gdtr64_disp]`
+     - Direkter Far Jump `0xEA` ist im 64-Bit Long Mode ungültig (`#UD`).
+     - Ich nutze den indirekten Far Jump `jmp far [rip + farptr32_disp]` mit Opcode `FF 2D <disp32>` (`jmp fword ptr`), der CS auf Selector `0x0008` umschaltet (`CS.L=0`, `CS.D=1`).
+   - **Stufe 2 (32-Bit CM -> 32-Bit Flat PM):**
+     - In 32-Bit Compatibility Mode: Paging deaktivieren (`CR0.PG = 0`), EFER LME/NXE löschen (`wrmsr 0xC0000080`), `CR3` leeren, PAE deaktivieren (`CR4.PAE = 0`), Datensegmente (`DS, ES, SS`) mit `0x0010` laden.
+   - **Stufe 3 (32-Bit PM -> 16-Bit PM):**
+     - Direkter 32-Bit Far Jump `jmp 0x0018:pm16_rel_off` (`EA <off16> 00 00 18 00`) in das 16-Bit-Segment mit Basis `LowTrampoline`.
+     - Segmentregister mit `0x0020` laden.
+     - `lidt [0x01B4]` (Real-Mode IDTR mit Basis 0 und Limit `0x03FF`).
+   - **Stufe 4 (16-Bit PM -> 16-Bit Real Mode):**
+     - `CR0.PE` löschen (`and al, 0xFE; mov cr0, eax`).
+     - Far Jump in den Real Mode: `jmp (LowTrampoline >> 4):rm16_rel_off`.
+     - Checkpoint 2 `0xAA02` bei `[0x0312]` schreiben.
+     - Register und Segmente nullen (`xor ax, ax; mov ds, ax; mov es, ax; ...`).
+     - Direkter Sprung über das zuvor gepatchte `EA <ip> <cs>` nach Windows `HalpRMStub` (`0100:0000`).
+
+4. **Host-Test Suite & Instruktions-Level Opcode-Stepper:**
+   - Alle 169 Tests in 10 Test-Suites erfolgreich bestanden (`MSVC_HOST_TESTS=PASS`).
+   - Der integrierte Opcode-Stepper prüft das kompilierte Trampolin Byte für Byte auf 100 % stack-freie Ausführung, gültige RIP-relative Displacements, korrekte GDT-Deskriptoren und saubere Modus-Übergänge.
+
 

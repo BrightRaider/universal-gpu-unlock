@@ -6,6 +6,47 @@ For packaged binaries and downloads, visit [GitHub Releases](https://github.com/
 
 ---
 
+## [v1.8.42] - 2026-11-23
+### Added & Fixed
+- **64-Bit Long Mode S3 Resume Trampoline via `FACS->XFirmwareWakingVector` (+0x18) (addresses #19):**
+  - **Empirical Hardware Discovery & AMI Aptio V / EDK2 Long Mode Wake Analysis:**
+    - Live in-kernel WinDbg forensics (`kdX64.exe -kl`) in `RUN0051.TXT` revealed that when `OspmFlags` (+0x24) is `0`, EDK2 `S3Resume2Pei` ignores `XFirmwareWakingVector` (+0x18) and unconditionally falls back to 16-bit real mode wake via `FirmwareWakingVector` (+0x0C).
+    - In EDK2 `S3Resume.c`, the firmware explicitly checks `Facs->XFirmwareWakingVector != 0 && Facs->Version >= 2 && (Facs->Flags & 0x02) != 0 && (Facs->OspmFlags & 0x01) != 0`. Only when ALL 4 conditions hold does `S3Resume2Pei` call `AsmTransferControl64` to enter the waking vector in **64-bit Long Mode**!
+    - By setting `Version >= 2`, `Flags |= 0x02` (`EFI_ACPI_4_0_64BIT_WAKE_SUPPORTED_F`), `OspmFlags |= 0x01` (`EFI_ACPI_4_0_OSPM_64BIT_WAKE__F`), and `XFirmwareWakingVector = LowTrampoline` in both `ShadowFACS` and `RealFACS`, AMI Aptio V unconditionally enters our trampoline at `LowTrampoline` (`0x9E000`) in 64-bit Long Mode upon S3 resume.
+  - **64-Bit Long Mode S3 Resume Trampoline Architecture (`LowTrampoline`):**
+    - **Section 1: 64-Bit Long Mode (`BITS 64`):**
+      - Preamble: `cli; cld` with immediate RIP-relative entry checkpoint `0xAA01` at `[LowTrampoline + 0x0310]` and telemetry magic `'S3_T'` (`0x53335F54`) at `[LowTrampoline + 0x031C]`.
+      - Stack-free native 32-bit PCI CF8/CFC recon probe loop querying 8 dwords (Root Port 0:3:1 and GPU 45:0:0).
+      - AMD Root Port temporary bus number routing with 4-dword post-arm GPU probe, followed by mandatory bridge restore.
+      - Windows waking vector capture from `ShadowFACS + 0x0C` (with fallback to low-memory mirror at `+0x0280`), CS:IP extraction, and atomic position-independent patching of the 4 far-jump target bytes at the tail of Section 4.
+      - Loads 10-byte packed GDTR64 (`0x0F 0x01 0x15`) at `LowTrampoline + 0x01A8` (`limit = 0x0027`, `base = LowTrampoline + 0x0180`).
+      - Executes indirect far jump `jmp fword ptr [rip + disp32]` (`0xFF 0x2D`) to transition from 64-bit Long Mode into 32-bit Compatibility Mode via selector `0x0008` (avoiding `#UD` from `0xEA` in 64-bit mode and avoiding `#GP(0)` near jump from `0xFF 0x25`).
+    - **Section 2: 32-Bit Compatibility Mode (`BITS 32`):**
+      - Reloads segment registers `DS, ES, FS, GS, SS` with 32-bit Flat Data selector `0x0010`.
+      - Disables paging: `mov eax, cr0; and eax, 0x7FFFFFFF; mov cr0, eax`.
+      - Disables Long Mode in `IA32_EFER` MSR (`0xC0000080`): `rdmsr; and eax, 0xFFFFF6FF; wrmsr`.
+      - Clears `CR3`: `xor eax, eax; mov cr3, eax`.
+      - Disables PAE in `CR4`: `mov eax, cr4; and eax, 0xFFFFFFDF; mov cr4, eax`.
+      - Direct far jump `jmp far 0x0018:pm16_rel_off` (`EA <offset32> 18 00`) into 16-bit Protected Mode.
+    - **Section 3: 16-Bit Protected Mode (`BITS 16`):**
+      - Reloads data segment registers `DS, ES, FS, GS, SS` with 16-bit data selector `0x0020` (dynamic `Base = LowTrampoline`).
+      - Loads Real-Mode IDTR: `lidt [0x01B4]` (`limit = 0x03FF`, `base = 0`).
+      - Clears PE bit in `CR0`: `mov eax, cr0; and al, 0xFE; mov cr0, eax`.
+      - Far jump `jmp far (LowTrampoline >> 4):rm16_rel_off` (`EA <offset16> <cs16>`) to serialize pipeline into 16-bit Real Mode.
+    - **Section 4: 16-Bit Real Mode (`BITS 16`):**
+      - Sets `DS = CS`, writes Checkpoint 2 (`0xAA02`) to `[0x0312]` to prove successful real-mode entry.
+      - Zeroes all general-purpose registers (`EAX, EBX, ECX, EDX, ESI, EDI, EBP`) and data segment registers (`DS, ES, FS, GS, SS`).
+      - Executes pre-patched far jump `jmp far cs:ip` (`EA 00 00 00 01`) directly into Windows `HalpRMStub` (`0100:0000`).
+    - **Section 5: GDT, GDTR64, RM_IDTR, and FARPTR32:**
+      - Embedded 5-entry GDT at `LowTrampoline + 0x0180` (Null, 32-bit Compat Code `0x0008`, 32-bit Flat Data `0x0010`, 16-bit Code `0x0018` with dynamic base, 16-bit Data `0x0020` with dynamic base).
+      - Packed 10-byte GDTR64 at `+0x01A8` (`limit = 0x0027`, `base = LowTrampoline + 0x0180`).
+      - Packed 6-byte RM_IDTR at `+0x01B4` (`limit = 0x03FF`, `base = 0`).
+      - Packed 6-byte FARPTR32 at `+0x01C0` (`{ UINT32 pm32_addr, UINT16 0x0008 }`).
+  - **Host Verification Suite Passing:** All 169 checks passing across 10 test suites (`MSVC_HOST_TESTS=PASS`).
+  - **Safety Boundaries Preserved:** Zero BAR0 MMIO writes, zero SEC2 unlock, zero CMOS/RTC mutation.
+
+---
+
 ## [v1.8.41] - 2026-11-23
 ### Added & Fixed
 - **32-Bit Flat Protected Mode Trampoline via `FACS->XFirmwareWakingVector` (+0x18) (addresses #19):**
