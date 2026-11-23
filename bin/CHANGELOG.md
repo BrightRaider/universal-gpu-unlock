@@ -6,8 +6,31 @@ For packaged binaries and downloads, visit [GitHub Releases](https://github.com/
 
 ---
 
-## [v1.8.44] - 2026-11-23
+## [v1.8.45] - 2026-11-23
 ### Added & Fixed
+- **Sub-1MB Signature Cleanliness, Relocated ShadowFACS, Late ConfigurationTable Apply & S3Save Forensics (addresses #19):**
+  - **Relocation of `ShadowFACS` to High EfiACPIMemoryNVS Page (`+0x0400`):**
+    - In v1.8.44, although `ShadowRSDP` was in high memory, `ShadowFACS` was still located at `0x9E200` in the sub-1MB region.
+    - `ShadowFACS` is now moved to `HighAcpiPage + GU_HIGH_SHADOW_FACS_OFF` (`+0x0400`, 64-byte aligned, > 1 MB, < 4 GB, alongside `ShadowFADT`).
+    - `ShadowFADT->FirmwareCtrl` updated to `(UINT32)(HighAcpiPage + 0x0400)` and `ShadowFADT->Header.Checksum` recalculated.
+    - Memory range `0x9E200..0x9E2FF` on the low page (`0x9E000`) is strictly zero-initialized.
+    - **Guaranteed:** ZERO bytes of `"RSD PTR "` and ZERO bytes of `"FACS"` exist anywhere below 1 MB!
+  - **Collision-Free Trampoline Stack Preservation & Clean 0x1000 Fallback:**
+    - Shifted BIOS stack save offsets from `+0x0304`/`+0x0306` to `+0x0370`/`+0x0372` (`mov [0x0370], sp` and `mov [0x0372], ss`), protecting EBS diagnostic counters (`RestoredRSDP` at `+0x0304`) from being overwritten when the resume trampoline fires.
+    - Updated waking vector resolution: when `[0x020C] == 0`, the trampoline cleanly falls back to `mov ax, 0x1000; xor dx, dx`, resolving to `0100:0000` (Windows `HalpRMStub`), with zero `HLT` instructions remaining in the trampoline envelope.
+  - **Deferred In-Place ConfigurationTable Patching:**
+    - Removed early `GuAcpiApplyShadowConfigTable()` call from `GuAcpiInstallShadowFacs()`.
+    - `GuAcpiApplyShadowConfigTable()` is executed at the very last moment in `GuBootWindows()` immediately before `StartImage(Windows)` — AFTER display reconnection, AFTER closing the USB log, and AFTER installing the EBS sandwich hook.
+    - If `StartImage` returns an error or exits, `GuAcpiRestoreConfigTable()` rolls back `ConfigurationTable` cleanly to `RealRSDP`.
+  - **Read-Only Forensics Logging in `RUN*.TXT`:**
+    - Logged `RealFADT->FirmwareCtrl` (+0x24) and `RealFADT->X_FirmwareCtrl` (+0x84).
+    - Logged all entries in `SystemTable->ConfigurationTable` (index, GUID, and vendor table pointer).
+    - Captured 256-byte code hex dump of `AcpiS3Save->S3Save` function preamble when `EFI_ACPI_S3_SAVE_PROTOCOL` is detected.
+  - **Re-entrancy Protection for `EFI_ACPI_S3_SAVE_PROTOCOL`:**
+    - Added hook detection check (`acpi_s3_save->S3Save != GuHookedS3Save`) to prevent self-wrapping recursion during warm boots and unit testing.
+  - **Validation:**
+    - All 8,474 MSVC host test checks pass cleanly (`MSVC_HOST_TESTS=PASS`).
+    - Authenticode-signed `BOOTX64.EFI` and `AdaUnlockDxe.efi` built and synchronized to USB drive (`F:\`).
 - **Permanent Closure of 3 ACPI Leak Vectors & Return to Stable 16-Bit Real-Mode S3 Resume Path (addresses #19):**
   - **Empirical Hardware Discovery & 64-Bit Wake Deadlock Root Cause:**
     - Testing the 22-byte 0xCF9 diagnostic reset probe (`v1.8.43c-probe`) confirmed that when `OspmFlags |= 0x01` is active, AMI Aptio V hangs inside BIOS PEI code before ever reaching `0x9E000` (no reboot occurred, screen remained black, subsequent boot was Windows Hybrid-Sleep/Hibernate Recovery via `bootmgfw.efi -> winresume.efi` with `Kernel-Boot Event 27, BootType = 0x2`).

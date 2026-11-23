@@ -426,16 +426,22 @@ static void TestGuAcpiFacsDiscoveryAndPatching(void) {
 
   EFI_PHYSICAL_ADDRESS expected_high_acpi_phys = (EFI_PHYSICAL_ADDRESS)(uintptr_t)g_mock_high_acpi;
   CHECK(info.high_acpi_phys == expected_high_acpi_phys, "High ACPI physical address must match allocated page");
-  CHECK(info.shadow_facs_phys == mock_low_tramp_phys + 0x00200, "Shadow FACS physical address must be low_tramp + 0x200");
+  CHECK(info.shadow_facs_phys == expected_high_acpi_phys + GU_HIGH_SHADOW_FACS_OFF, "Shadow FACS physical address must be high page + 0x400");
   CHECK(info.shadow_fadt_phys == expected_high_acpi_phys + GU_HIGH_SHADOW_FADT_OFF, "Shadow FADT physical address must be high page + 0x200");
   CHECK(info.shadow_rsdp_phys == expected_high_acpi_phys + GU_HIGH_SHADOW_RSDP_OFF, "Shadow RSDP physical address must be high page + 0x000");
   CHECK(info.shadow_xsdt_phys == expected_high_acpi_phys + GU_HIGH_SHADOW_XSDT_OFF, "Shadow XSDT physical address must be high page + 0x080");
   CHECK(info.trampoline_phys == mock_low_tramp_phys, "Trampoline physical address must be mock_low_tramp_phys (<1MB)");
   CHECK(info.s3_save_hook_installed == TRUE, "S3 Save hook must be installed");
 
-  /* Verify LEAK 1: Low memory (<1MB) contains ZERO bytes of 'RSD PTR ' */
+  /* Verify LEAK 1: Low memory (<1MB) contains ZERO bytes of 'RSD PTR ' and ZERO bytes of 'FACS' */
   for (UINT32 i = 0; i <= sizeof(mock_low_tramp) - 8; i++) {
     CHECK(memcmp(mock_low_tramp + i, "RSD PTR ", 8) != 0, "Low trampoline memory must contain ZERO bytes of 'RSD PTR '");
+  }
+  for (UINT32 i = 0; i <= sizeof(mock_low_tramp) - 4; i++) {
+    CHECK(memcmp(mock_low_tramp + i, "FACS", 4) != 0, "Low trampoline memory must contain ZERO bytes of 'FACS'");
+  }
+  for (UINT32 i = 0x200; i < 0x280; i++) {
+    CHECK(mock_low_tramp[i] == 0, "Low trampoline memory +0x200..+0x27F must be zero-initialized");
   }
 
   /* 1. Verify Plan C: Real ACPI tables remain 100% UNTOUCHED byte-for-byte */
@@ -452,9 +458,9 @@ static void TestGuAcpiFacsDiscoveryAndPatching(void) {
   CHECK(mock_facs.XFirmwareWakingVector == 0, "Real FACS XFirmwareWakingVector must be cleared");
   CHECK((mock_facs.Flags & 2U) == 0, "Real FACS 64-bit wake flag must be cleared");
 
-  /* 2. Verify Plan C: Shadow FACS */
+  /* 2. Verify Plan C: Shadow FACS on high page + 0x400 */
   EFI_ACPI_2_0_FIRMWARE_ACPI_CONTROL_STRUCTURE *shadow_facs =
-      (EFI_ACPI_2_0_FIRMWARE_ACPI_CONTROL_STRUCTURE *)(mock_low_tramp + 0x00200);
+      (EFI_ACPI_2_0_FIRMWARE_ACPI_CONTROL_STRUCTURE *)(g_mock_high_acpi + GU_HIGH_SHADOW_FACS_OFF);
   CHECK(shadow_facs->Signature == GU_ACPI_FACS_SIGNATURE, "Shadow FACS signature must be 'FACS'");
   CHECK(shadow_facs->HardwareSignature == 0x12345678U, "Shadow FACS hardware signature must match original");
   CHECK(shadow_facs->FirmwareWakingVector == 0, "Shadow FACS FirmwareWakingVector initialized to 0");
@@ -464,7 +470,7 @@ static void TestGuAcpiFacsDiscoveryAndPatching(void) {
   EFI_ACPI_2_0_FIXED_ACPI_DESCRIPTION_TABLE *shadow_fadt =
       (EFI_ACPI_2_0_FIXED_ACPI_DESCRIPTION_TABLE *)(g_mock_high_acpi + GU_HIGH_SHADOW_FADT_OFF);
   CHECK(shadow_fadt->Header.Signature == GU_ACPI_FADT_SIGNATURE, "Shadow FADT signature must be 'FACP'");
-  CHECK(shadow_fadt->FirmwareCtrl == (UINT32)(mock_low_tramp_phys + 0x00200), "Shadow FADT FirmwareCtrl must point to Shadow FACS (0x9E200) for Windows");
+  CHECK(shadow_fadt->FirmwareCtrl == (UINT32)(expected_high_acpi_phys + GU_HIGH_SHADOW_FACS_OFF), "Shadow FADT FirmwareCtrl must point to Shadow FACS on high page for Windows");
   CHECK(shadow_fadt->XFirmwareCtrl == 0, "Shadow FADT XFirmwareCtrl must be 0");
 
   sum = 0;
@@ -500,9 +506,20 @@ static void TestGuAcpiFacsDiscoveryAndPatching(void) {
   for (UINT32 i = 0; i < shadow_rsdp->Length; i++) sum = (UINT8)(sum + p[i]);
   CHECK(sum == 0, "Shadow RSDP 36-byte extended checksum must be 0 mod 256");
 
-  /* 6. Verify ConfigurationTable In-Place Patching */
+  /* Verify Forensics Logging */
+  CHECK(strstr(g_log_history, "RealFADT Forensic: FirmwareCtrl=") != NULL, "RealFADT forensic must be logged");
+  CHECK(strstr(g_log_history, "UEFI ConfigurationTable Forensic") != NULL, "ConfigurationTable forensic must be logged");
+  CHECK(strstr(g_log_history, "AcpiS3Save->S3Save Code Hex Dump") != NULL, "S3Save code hex dump must be logged");
+
+  /* 6. Verify Deferred ConfigurationTable Patching */
+  CHECK(mock_st.ConfigurationTable[0].VendorTable == &mock_rsdp,
+        "SystemTable ConfigurationTable must initially remain Real RSDP after install (deferred apply)");
+
+  /* Test late apply via GuAcpiApplyShadowConfigTable() */
+  UINT32 applied = GuAcpiApplyShadowConfigTable();
+  CHECK(applied > 0, "GuAcpiApplyShadowConfigTable must patch table entries");
   CHECK(mock_st.ConfigurationTable[0].VendorTable == (VOID *)(UINTN)(expected_high_acpi_phys + GU_HIGH_SHADOW_RSDP_OFF),
-        "SystemTable ConfigurationTable must point to Shadow RSDP on high page");
+        "SystemTable ConfigurationTable must point to Shadow RSDP on high page after late apply");
 
   /* Test S3Save Sandwich Hook */
   g_mock_s3_save_observed_vendor_table = NULL;
@@ -592,8 +609,8 @@ static void TestGuAcpiBuildTrampolineCode(void) {
   /* 2. Check Segment Setup & Stack Save */
   CHECK(buffer[2] == 0x8C && buffer[3] == 0xC8, "mov ax, cs");
   CHECK(buffer[4] == 0x8E && buffer[5] == 0xD8, "mov ds, ax");
-  CHECK(buffer[6] == 0x89 && buffer[7] == 0x26 && buffer[8] == 0x04 && buffer[9] == 0x03, "mov [0x0304], sp");
-  CHECK(buffer[10] == 0x8C && buffer[11] == 0x16 && buffer[12] == 0x06 && buffer[13] == 0x03, "mov [0x0306], ss");
+  CHECK(buffer[6] == 0x89 && buffer[7] == 0x26 && buffer[8] == 0x70 && buffer[9] == 0x03, "mov [0x0370], sp");
+  CHECK(buffer[10] == 0x8C && buffer[11] == 0x16 && buffer[12] == 0x72 && buffer[13] == 0x03, "mov [0x0372], ss");
 
   /* 3. Check Telemetry Magic: mov dword [0x031C], 0x53335F54 */
   CHECK(buffer[14] == 0x66 && buffer[15] == 0xC7 && buffer[16] == 0x06 && buffer[17] == 0x1C && buffer[18] == 0x03, "telemetry magic mov");
@@ -711,8 +728,8 @@ static void TestGuAcpiBuildTrampolineCode(void) {
     else if (buffer[i] == 0xFC) { instr_len = 1; desc = "cld"; }
     else if (buffer[i] == 0x8C && buffer[i+1] == 0xC8) { instr_len = 2; desc = "mov ax, cs"; }
     else if (buffer[i] == 0x8E && buffer[i+1] == 0xD8) { instr_len = 2; desc = "mov ds, ax"; }
-    else if (buffer[i] == 0x89 && buffer[i+1] == 0x26 && buffer[i+2] == 0x04 && buffer[i+3] == 0x03) { instr_len = 4; desc = "mov [0x0304], sp               ; Save BIOS SP"; }
-    else if (buffer[i] == 0x8C && buffer[i+1] == 0x16 && buffer[i+2] == 0x06 && buffer[i+3] == 0x03) { instr_len = 4; desc = "mov [0x0306], ss               ; Save BIOS SS"; }
+    else if (buffer[i] == 0x89 && buffer[i+1] == 0x26 && buffer[i+2] == 0x70 && buffer[i+3] == 0x03) { instr_len = 4; desc = "mov [0x0370], sp               ; Save BIOS SP"; }
+    else if (buffer[i] == 0x8C && buffer[i+1] == 0x16 && buffer[i+2] == 0x72 && buffer[i+3] == 0x03) { instr_len = 4; desc = "mov [0x0372], ss               ; Save BIOS SS"; }
     else if (buffer[i] == 0x66 && buffer[i+1] == 0xC7 && buffer[i+2] == 0x06 && buffer[i+3] == 0x1C && buffer[i+4] == 0x03) { instr_len = 9; desc = "mov dword [0x031C], 0x53335F54  ; Telemetry Magic 'S3_T'"; }
     else if (buffer[i] == 0xC7 && buffer[i+1] == 0x06 && buffer[i+2] == 0x10 && buffer[i+3] == 0x03 && buffer[i+4] == 0x01) { instr_len = 6; desc = "mov word [0x0310], 0xAA01        ; Checkpoint 1: Entry"; }
     else if (buffer[i] == 0xC7 && buffer[i+1] == 0x06 && buffer[i+2] == 0x10 && buffer[i+3] == 0x03 && buffer[i+4] == 0xAD) { instr_len = 6; desc = "mov word [0x0310], 0xDEAD        ; Fault: No Waking Vector"; }
@@ -759,8 +776,8 @@ static void TestGuAcpiBuildTrampolineCode(void) {
     else if (buffer[i] == 0x8B && buffer[i+1] == 0x16 && buffer[i+2] == 0x82 && buffer[i+3] == 0x02) { instr_len = 4; desc = "mov dx, [0x0282]                 ; Mirror Real FACS 32-bit vector hi"; }
     else if (buffer[i] == 0xA1 && buffer[i+1] == 0x88 && buffer[i+2] == 0x02) { instr_len = 3; desc = "mov ax, [0x0288]                 ; Mirror Real FACS 64-bit vector lo"; }
     else if (buffer[i] == 0x8B && buffer[i+1] == 0x16 && buffer[i+2] == 0x8A && buffer[i+3] == 0x02) { instr_len = 4; desc = "mov dx, [0x028A]                 ; Mirror Real FACS 64-bit vector hi"; }
-    else if (buffer[i] == 0xC7 && buffer[i+1] == 0x06 && buffer[i+2] == 0x10 && buffer[i+3] == 0x03 && buffer[i+4] == 0xAD) { instr_len = 6; desc = "mov word [0x0310], 0xDEAD        ; Error fault: no waking vector"; }
-    else if (buffer[i] == 0xF4) { instr_len = 1; desc = "hlt                             ; Halt CPU safely"; }
+    else if (buffer[i] == 0xB8 && buffer[i+1] == 0x00 && buffer[i+2] == 0x10) { instr_len = 3; desc = "mov ax, 0x1000                 ; Fallback to HalpRMStub (0x00001000)"; }
+    else if (buffer[i] == 0x31 && buffer[i+1] == 0xD2) { instr_len = 2; desc = "xor dx, dx"; }
     else if (buffer[i] == 0xA3 && buffer[i+1] == 0x14 && buffer[i+2] == 0x03) { instr_len = 3; desc = ".have_vec: mov [0x0314], ax      ; Save captured vector lo"; }
     else if (buffer[i] == 0x89 && buffer[i+1] == 0x16 && buffer[i+2] == 0x16 && buffer[i+3] == 0x03) { instr_len = 4; desc = "mov [0x0316], dx                 ; Save captured vector hi"; }
     else if (buffer[i] == 0x89 && buffer[i+1] == 0xC3) { instr_len = 2; desc = "mov bx, ax"; }
@@ -773,8 +790,8 @@ static void TestGuAcpiBuildTrampolineCode(void) {
     else if (buffer[i] == 0x89 && buffer[i+1] == 0x1E && buffer[i+2] == 0x18 && buffer[i+3] == 0x03) { instr_len = 4; desc = "mov [0x0318], bx                 ; Telemetry Target Offset"; }
     else if (buffer[i] == 0xA3 && buffer[i+1] == 0x1A && buffer[i+2] == 0x03) { instr_len = 3; desc = "mov [0x031A], ax                 ; Telemetry Target Segment"; }
     else if (buffer[i] == 0xC7 && buffer[i+1] == 0x06 && buffer[i+2] == 0x12 && buffer[i+3] == 0x03) { instr_len = 6; desc = "mov word [0x0312], 0xAA02        ; Checkpoint 2: Ready to Jump"; }
-    else if (buffer[i] == 0x8E && buffer[i+1] == 0x16 && buffer[i+2] == 0x06 && buffer[i+3] == 0x03) { instr_len = 4; desc = "mov ss, [0x0306]                 ; Restore BIOS SS"; }
-    else if (buffer[i] == 0x8B && buffer[i+1] == 0x26 && buffer[i+2] == 0x04 && buffer[i+3] == 0x03) { instr_len = 4; desc = "mov sp, [0x0304]                 ; Restore BIOS SP"; }
+    else if (buffer[i] == 0x8E && buffer[i+1] == 0x16 && buffer[i+2] == 0x72 && buffer[i+3] == 0x03) { instr_len = 4; desc = "mov ss, [0x0372]                 ; Restore BIOS SS"; }
+    else if (buffer[i] == 0x8B && buffer[i+1] == 0x26 && buffer[i+2] == 0x70 && buffer[i+3] == 0x03) { instr_len = 4; desc = "mov sp, [0x0370]                 ; Restore BIOS SP"; }
     else if (buffer[i] == 0x66 && buffer[i+1] == 0x31 && buffer[i+2] == 0xC0) { instr_len = 3; desc = "xor eax, eax                     ; Clean register state for OS"; }
     else if (buffer[i] == 0x66 && buffer[i+1] == 0x31 && buffer[i+2] == 0xDB) { instr_len = 3; desc = "xor ebx, ebx"; }
     else if (buffer[i] == 0x66 && buffer[i+1] == 0x31 && buffer[i+2] == 0xC9) { instr_len = 3; desc = "xor ecx, ecx"; }
@@ -795,6 +812,21 @@ static void TestGuAcpiBuildTrampolineCode(void) {
     i += instr_len;
   }
   printf("============================================================================================\n\n");
+
+  BOOLEAN found_fallback = FALSE;
+  for (UINT32 i = 0; i < bytes - 4; i++) {
+    if (buffer[i] == 0xB8 && buffer[i+1] == 0x00 && buffer[i+2] == 0x10 && buffer[i+3] == 0x31 && buffer[i+4] == 0xD2) {
+      found_fallback = TRUE;
+      break;
+    }
+  }
+  CHECK(found_fallback, "Trampoline must fall back to mov ax, 0x1000; xor dx, dx when no vector found");
+
+  BOOLEAN found_hlt = FALSE;
+  for (UINT32 i = 0; i < bytes; i++) {
+    if (buffer[i] == 0xF4) found_hlt = TRUE;
+  }
+  CHECK(!found_hlt, "Trampoline must contain ZERO HLT instructions");
 
   printf("[7] Trampoline Generation (including 0x66 Prefix, Bridge Restore & Disassembly): OK!\n");
 }

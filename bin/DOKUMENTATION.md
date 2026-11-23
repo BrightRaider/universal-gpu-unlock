@@ -1,7 +1,7 @@
 # Technische Dokumentation: Universal GPU Unlock (Multi-Gen)
 
 > **Tool:** Universal GPU Unlock  
-> **Version:** v1.8.44  
+> **Version:** v1.8.45  
 > **Architekturen:** NVIDIA Ada Lovelace (RTX 40), Ampere (RTX 30), Turing (RTX 20 / CMP)  
 > **Unterstützte Betriebssysteme:** Windows 10, Windows 11, WSL2 / Ubuntu CUDA Container  
 
@@ -627,6 +627,36 @@ In **v1.8.34** habe ich die Architektur umfassend überarbeitet und perfektionie
 
 6. **Host-Test Suite:**
    - Alle MSVC Host-Tests erfolgreich bestanden (`MSVC_HOST_TESTS=PASS`).
+
+---
+
+### 13.15 Die v1.8.45 Architektur: Sub-1MB-Signaturbereinigung, ausgelagerte ShadowFACS, spätes ConfigurationTable-Apply & S3Save-Forensik
+
+1. **Vollständige Verbannung von `ShadowFACS` aus dem Sub-1MB-Speicher (`+0x0400`):**
+   - In v1.8.44 residierte `ShadowFACS` noch bei `0x9E200` unterhalb von 1 MB. Obwohl `ShadowRSDP` im High-Memory lag, war die Signatur `"FACS"` im Low-Memory vorhanden.
+   - In v1.8.45 habe ich `ShadowFACS` auf `HighAcpiPage + GU_HIGH_SHADOW_FACS_OFF` (`+0x0400`, 64-Byte-aligned, > 1 MB, < 4 GB, direkt neben `ShadowFADT`) verlagert.
+   - `ShadowFADT->FirmwareCtrl` zeigt nun auf `(UINT32)(HighAcpiPage + 0x0400)` mit neu berechneter FADT-Prüfsumme.
+   - Der Bereich `0x9E200..0x9E2FF` auf der Low-Memory-Seite (`0x9E000`) wird vollständig mit Nullen initialisiert.
+   - **Garantie:** Unterhalb von 1 MB existieren **weder `"RSD PTR "` noch `"FACS"`**!
+
+2. **Kollisionsfreie Stack-Rettung im Trampolin & sauberer 0x1000-Fallback:**
+   - Das Sichern von BIOS `SS:SP` wurde von `+0x0304`/`+0x0306` nach `+0x0370`/`+0x0372` verschoben (`mov [0x0370], sp`, `mov [0x0372], ss`). Dadurch werden die EBS-Sandwich-Diagnosedaten (`RestoredRSDP` bei `+0x0304`) beim Einspringen des Trampolins nicht mehr überschrieben.
+   - Waking-Vector-Resolution: Falls `[0x020C] == 0` ist, fällt das 16-Bit-Trampolin sauber auf `mov ax, 0x1000; xor dx, dx` zurück, was exakt zu `0100:0000` (Windows `HalpRMStub`) konvertiert wird. Es verbleiben null `HLT`-Instruktionen im Trampolin.
+
+3. **Verzögertes In-Place ConfigurationTable Patching:**
+   - Der frühe Aufruf von `GuAcpiApplyShadowConfigTable()` in `GuAcpiInstallShadowFacs()` wurde entfernt.
+   - `GuAcpiApplyShadowConfigTable()` wird erst unmittelbar vor `gBS->StartImage(Windows)` in `GuBootWindows()` ausgeführt – NACH dem Reconnect des Displays, NACH dem Schließen des USB-Logs (`GuBootClose()`) und NACH der Installation des EBS-Sandwich-Hooks.
+   - Schlägt `StartImage` fehl, rollt `GuAcpiRestoreConfigTable()` die `ConfigurationTable` sauber auf `RealRSDP` zurück.
+
+4. **Read-Only-Forensik-Logging in `RUN*.TXT`:**
+   - `RealFADT->FirmwareCtrl` (+0x24) und `RealFADT->X_FirmwareCtrl` (+0x84) werden forensisch erfasst.
+   - Alle Einträge aus `gST->ConfigurationTable` (Index, VendorGuid, VendorTable) werden protokolliert.
+   - Wird `EFI_ACPI_S3_SAVE_PROTOCOL` gefunden, wird ein 256-Byte-Hex-Dump des Maschinen-Codes von `AcpiS3Save->S3Save` ausgegeben.
+   - Re-Entrancy-Schutz: Erkennung bestehender Hooks verhindert Rekursion bei Warm-Resets und Unit-Tests.
+
+5. **Host-Test Suite:**
+   - Alle 8.474 Host-Checks in 10 Test-Suites erfolgreich bestanden (`MSVC_HOST_TESTS=PASS`).
+
 
 
 

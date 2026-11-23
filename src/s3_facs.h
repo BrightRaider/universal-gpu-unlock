@@ -27,10 +27,11 @@
 
 /* Telemetry and Table Offsets within Low Trampoline Memory (<1MB) */
 #define GU_TRAMP_FAR_JUMP_OFF          0x0300U
-#define GU_TRAMP_BIOS_SP_OFF           0x0304U
-#define GU_TRAMP_BIOS_SS_OFF           0x0306U
-#define GU_TRAMP_EBS_CALL_COUNT_OFF    0x0304U
-#define GU_TRAMP_EBS_SUCCESS_COUNT_OFF 0x0308U
+#define GU_TRAMP_RESTORED_COUNT_OFF    0x0300U
+#define GU_TRAMP_S3_SAVE_COUNT_OFF     0x0302U
+#define GU_TRAMP_RESTORED_RSDP_OFF     0x0304U
+#define GU_TRAMP_EBS_CALL_COUNT_OFF    0x0308U
+#define GU_TRAMP_EBS_SUCCESS_COUNT_OFF 0x030AU
 #define GU_TRAMP_EBS_LAST_STATUS_OFF   0x030CU
 #define GU_TRAMP_ENTRY_STATUS_OFF      0x0310U
 #define GU_TRAMP_EXIT_STATUS_OFF       0x0312U
@@ -40,13 +41,15 @@
 #define GU_TRAMP_PCI_PROBE_ADDRS_OFF   0x0320U
 #define GU_TRAMP_PCI_PROBE_RAW_OFF     0x0340U
 #define GU_TRAMP_PCI_PROBE_POST_OFF    0x0360U
-#define GU_TRAMP_SHADOW_FACS_OFF       0x0200U
+#define GU_TRAMP_BIOS_SP_OFF           0x0370U
+#define GU_TRAMP_BIOS_SS_OFF           0x0372U
 #define GU_TRAMP_REAL_FACS_MIRROR_OFF  0x0280U
 
 /* Dedicated High (>1MB, <4GB) ACPI NVS Page Offsets for Shadow Tables */
 #define GU_HIGH_SHADOW_RSDP_OFF        0x0000U
 #define GU_HIGH_SHADOW_XSDT_OFF        0x0080U
 #define GU_HIGH_SHADOW_FADT_OFF        0x0200U
+#define GU_HIGH_SHADOW_FACS_OFF        0x0400U
 
 #pragma pack(push, 1)
 typedef struct {

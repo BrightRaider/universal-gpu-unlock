@@ -842,10 +842,14 @@ EFI_STATUS GuBootWindows(VOID) {
   /* Plan C: Install ExitBootServices Sandwich Hook right before starting Windows */
   (VOID)GuAcpiInstallEbsHook(Table);
 
+  /* Apply Shadow ACPI tables immediately before StartImage(Windows) */
+  (VOID)GuAcpiApplyShadowConfigTable();
+
   EFI_STATUS s = Table->BootServices->StartImage(Windows, NULL, NULL);
 
   /* If StartImage returns (error or exit), cleanly uninstall hook and restore config table */
   (VOID)GuAcpiUninstallEbsHook(Table);
+  (VOID)GuAcpiRestoreConfigTable();
 
   return s;
 }

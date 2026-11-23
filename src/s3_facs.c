@@ -16,6 +16,7 @@ static inline BOOLEAN GuCompareGuid(const EFI_GUID *g1, const EFI_GUID *g2) {
 
 typedef struct {
   BOOLEAN installed;
+  BOOLEAN applied;
   VOID *orig_rsdp;
   VOID *shadow_rsdp;
   VOID *high_acpi_page;
@@ -31,7 +32,7 @@ typedef struct {
 } GU_ACPI_SHADOW_CHAIN_STATE;
 
 static GU_ACPI_SHADOW_CHAIN_STATE mShadowState = {
-  FALSE, NULL, NULL, NULL, 0, NULL, NULL, NULL, FALSE, NULL, NULL, FALSE, 0
+  FALSE, FALSE, NULL, NULL, NULL, 0, NULL, NULL, NULL, FALSE, NULL, NULL, FALSE, 0
 };
 
 UINT32 GuAcpiApplyShadowConfigTable(VOID) {
@@ -44,6 +45,9 @@ UINT32 GuAcpiApplyShadowConfigTable(VOID) {
       st->ConfigurationTable[i].VendorTable = mShadowState.shadow_rsdp;
       count++;
     }
+  }
+  if (count > 0) {
+    mShadowState.applied = TRUE;
   }
   return count;
 }
@@ -59,6 +63,7 @@ UINT32 GuAcpiRestoreConfigTable(VOID) {
       count++;
     }
   }
+  mShadowState.applied = FALSE;
   return count;
 }
 
@@ -78,6 +83,7 @@ EFI_STATUS EFIAPI GuHookedS3Save(
    * Revert SystemTable ConfigurationTable to RealRSDP so that AcpiS3SaveDxe
    * and SMM LockBox observe clean, genuine BIOS ACPI tables!
    */
+  BOOLEAN was_applied = mShadowState.applied;
   GuAcpiRestoreConfigTable();
 
   EFI_STATUS Status = EFI_SUCCESS;
@@ -87,9 +93,11 @@ EFI_STATUS EFIAPI GuHookedS3Save(
 
   /*
    * PHASE 2 (Sandwich Post-Call):
-   * Re-apply ShadowRSDP so that Windows OS loader continues to see ShadowRSDP!
+   * Only re-apply ShadowRSDP if it was previously applied!
    */
-  GuAcpiApplyShadowConfigTable();
+  if (was_applied) {
+    GuAcpiApplyShadowConfigTable();
+  }
 
   return Status;
 }
@@ -475,8 +483,8 @@ UINT32 GuAcpiBuildTrampolineCode(
   *e++ = 0xFC; /* cld */
   *e++ = 0x8C; *e++ = 0xC8; /* mov ax, cs */
   *e++ = 0x8E; *e++ = 0xD8; /* mov ds, ax */
-  *e++ = 0x89; *e++ = 0x26; *e++ = 0x04; *e++ = 0x03; /* mov [0x0304], sp */
-  *e++ = 0x8C; *e++ = 0x16; *e++ = 0x06; *e++ = 0x03; /* mov [0x0306], ss */
+  *e++ = 0x89; *e++ = 0x26; *e++ = 0x70; *e++ = 0x03; /* mov [0x0370], sp */
+  *e++ = 0x8C; *e++ = 0x16; *e++ = 0x72; *e++ = 0x03; /* mov [0x0372], ss */
 
   /* Set Telemetry Magic: mov dword [0x031C], 0x53335F54 ('S3_T') */
   *e++ = 0x66; *e++ = 0xC7; *e++ = 0x06; *e++ = 0x1C; *e++ = 0x03;
@@ -597,9 +605,9 @@ UINT32 GuAcpiBuildTrampolineCode(
   *e++ = 0x85; *e++ = 0xD2;                         /* test dx, dx */
   *e++ = 0x75; UINT8 *f_dx3 = e++;                   /* jnz .have_vec */
 
-  /* No vector found in any FACS table! Flag error 0xDEAD and halt safely */
-  *e++ = 0xC7; *e++ = 0x06; *e++ = 0x10; *e++ = 0x03; *e++ = 0xAD; *e++ = 0xDE;
-  *e++ = 0xF4; /* hlt */
+  /* Clean fallback to default Windows HalpRMStub (0x00001000 = 0100:0000) if no vector was found */
+  *e++ = 0xB8; *e++ = 0x00; *e++ = 0x10;             /* mov ax, 0x1000 */
+  *e++ = 0x31; *e++ = 0xD2;                         /* xor dx, dx */
 
   /* .have_vec target */
   UINT8 have_vec_disp = (UINT8)(e - (f_ax0 + 1));
@@ -638,8 +646,8 @@ UINT32 GuAcpiBuildTrampolineCode(
   *e++ = 0xC7; *e++ = 0x06; *e++ = 0x12; *e++ = 0x03; *e++ = 0x02; *e++ = 0xAA;
 
   /* Restore BIOS stack */
-  *e++ = 0x8E; *e++ = 0x16; *e++ = 0x06; *e++ = 0x03; /* mov ss, [0x0306] */
-  *e++ = 0x8B; *e++ = 0x26; *e++ = 0x04; *e++ = 0x03; /* mov sp, [0x0304] */
+  *e++ = 0x8E; *e++ = 0x16; *e++ = 0x72; *e++ = 0x03; /* mov ss, [0x0372] */
+  *e++ = 0x8B; *e++ = 0x26; *e++ = 0x70; *e++ = 0x03; /* mov sp, [0x0370] */
 
   /* Zero general purpose registers for clean Windows handoff */
   *e++ = 0x66; *e++ = 0x31; *e++ = 0xC0;             /* xor eax, eax */
@@ -864,86 +872,10 @@ EFI_STATUS GuAcpiInstallShadowFacs(
   }
 
   /*
-   * Low (<1MB) ACPI NVS Allocation (4096 bytes):
-   * +0x00000: Pure 16-bit Real Mode S3 Resume Trampoline Machine Code (<380 bytes)
-   * +0x00200: Shadow FACS (64 bytes, 512-byte aligned per ACPI spec)
-   * +0x00280: Real FACS Vector Mirror (32-bit at 0x280, 64-bit at 0x288)
-   * +0x00300: Telemetry Checkpoints & Waking Vector capture
-   * +0x00320: PCI Probe Addresses Table (8 dwords)
-   * +0x00340: PCI Probe Raw Results (8 dwords)
-   * +0x00360: PCI Probe Post-Arm Results (4 dwords)
-   */
-  EFI_PHYSICAL_ADDRESS shadow_facs_phys = LowTrampPhys + 0x00200;
-  EFI_PHYSICAL_ADDRESS trampoline_phys  = LowTrampPhys;
-
-  EFI_ACPI_2_0_FIRMWARE_ACPI_CONTROL_STRUCTURE *shadow_facs =
-      (EFI_ACPI_2_0_FIRMWARE_ACPI_CONTROL_STRUCTURE *)(low_base + 0x00200);
-
-  /* Clear the low trampoline memory page */
-  memset(low_base, 0, 4096);
-
-  /* 2. Clone Real FACS into Shadow FACS */
-  memcpy(shadow_facs, Info->real_facs, sizeof(EFI_ACPI_2_0_FIRMWARE_ACPI_CONTROL_STRUCTURE));
-  shadow_facs->FirmwareWakingVector = 0;
-  shadow_facs->XFirmwareWakingVector = 0;
-  shadow_facs->Flags = 0;
-  UINT8 *sf_raw = (UINT8 *)shadow_facs;
-  *(UINT32 *)(sf_raw + 0x20) = 0; /* Version at +0x20 */
-  *(UINT32 *)(sf_raw + 0x24) = 0; /* OspmFlags at +0x24 */
-
-  /* Tag Shadow FACS with signature and real FACS address for warm reset recovery */
-  *(UINT32 *)(sf_raw + 0x28) = GU_SHADOW_FACS_SIGNATURE;
-  memcpy(sf_raw + 0x2C, &Info->real_facs_phys, sizeof(UINT64));
-
-  /* Clear all 64-bit wake flags in both tables for rock-solid 16-bit real mode wake */
-  Info->real_facs->Flags = 0;
-  Info->real_facs->XFirmwareWakingVector = 0;
-  if (Info->real_facs->Length >= 64) {
-    UINT8 *rf_raw = (UINT8 *)Info->real_facs;
-    *(UINT32 *)(rf_raw + 0x20) = 0; /* Version at +0x20 */
-    *(UINT32 *)(rf_raw + 0x24) = 0; /* OspmFlags at +0x24 */
-  }
-
-  /* Store Real FACS original vectors as backup mirror in low memory at +0x280 / +0x288 */
-  *(UINT32 *)(low_base + 0x0280) = Info->original_firmware_waking_vector;
-  *(UINT64 *)(low_base + 0x0288) = Info->original_xfirmware_waking_vector;
-
-  /* Dynamically discover Root Port Link Status and GPU PMCSR register addresses */
-  UINT8 target_gpu_bus = (Context && Context->bus) ? Context->bus : 45U;
-  UINT32 root_port_link_reg = GuFindRootPortLinkReg(SystemTable->BootServices, target_gpu_bus);
-  UINT32 gpu_pmcsr_reg = GuFindGpuPmcsrReg(SystemTable->BootServices, Gu.pci, target_gpu_bus);
-
-  if (Context) {
-    Context->root_port_link_reg = root_port_link_reg;
-    Context->gpu_pmcsr_reg = gpu_pmcsr_reg;
-  }
-  GuLog("S3 Hardware Recon Config: Root Port LinkReg=%#08x (Cap 0x10+0x10), GPU PMCSR=%#08x (Cap 0x01+0x04)\n",
-        (unsigned)root_port_link_reg, (unsigned)gpu_pmcsr_reg);
-
-  /* 3. Build Pure 16-bit Real Mode S3 Resume Trampoline machine code in low memory (<1MB) */
-  UINT32 tramp_bytes = GuAcpiBuildTrampolineCode(
-      low_base,
-      4096,
-      trampoline_phys,
-      NvsPhys,
-      shadow_facs_phys,
-      root_port_link_reg,
-      gpu_pmcsr_reg
-  );
-
-  if (tramp_bytes == 0) {
-    GuLog("GuAcpiInstallShadowFacs: Failed to build trampoline machine code\n");
-    return EFI_DEVICE_ERROR;
-  }
-
-  Info->shadow_facs_phys = shadow_facs_phys;
-  Info->trampoline_phys = trampoline_phys;
-
-  /*
-   * LEAK 1 FIX:
-   * Allocate dedicated high ACPI NVS page (>1MB, <4GB) for Shadow ACPI tables:
-   * ShadowRSDP, ShadowXSDT, ShadowFADT.
-   * This ensures ZERO bytes of "RSD PTR " reside below 1MB (EBDA 0x80000..0x9FFFF / ROM 0xE0000..0xFFFFF)!
+   * Dedicated High (>1MB, <4GB) ACPI NVS Allocation:
+   * Holds Shadow ACPI tables: ShadowRSDP (+0x000), ShadowXSDT (+0x080),
+   * ShadowFADT (+0x0200), and ShadowFACS (+0x0400).
+   * This guarantees ZERO bytes of "RSD PTR " or "FACS" reside below 1MB!
    */
   EFI_PHYSICAL_ADDRESS high_acpi_phys = 0xFFFFFFFFULL;
   UINT8 *high_acpi_base = NULL;
@@ -968,6 +900,87 @@ EFI_STATUS GuAcpiInstallShadowFacs(
   }
 
   Info->high_acpi_phys = high_acpi_phys;
+
+  /*
+   * 2. Setup Shadow FACS at HighAcpiPage + GU_HIGH_SHADOW_FACS_OFF (0x0400, 64-byte aligned):
+   */
+  EFI_PHYSICAL_ADDRESS shadow_facs_phys = high_acpi_phys + GU_HIGH_SHADOW_FACS_OFF;
+  EFI_ACPI_2_0_FIRMWARE_ACPI_CONTROL_STRUCTURE *shadow_facs =
+      (EFI_ACPI_2_0_FIRMWARE_ACPI_CONTROL_STRUCTURE *)(high_acpi_base + GU_HIGH_SHADOW_FACS_OFF);
+
+  /* Clone Real FACS into Shadow FACS */
+  memcpy(shadow_facs, Info->real_facs, sizeof(EFI_ACPI_2_0_FIRMWARE_ACPI_CONTROL_STRUCTURE));
+  shadow_facs->FirmwareWakingVector = 0;
+  shadow_facs->XFirmwareWakingVector = 0;
+  shadow_facs->Flags = 0;
+  UINT8 *sf_raw = (UINT8 *)shadow_facs;
+  *(UINT32 *)(sf_raw + 0x20) = 0; /* Version at +0x20 */
+  *(UINT32 *)(sf_raw + 0x24) = 0; /* OspmFlags at +0x24 */
+
+  /* Tag Shadow FACS with signature and real FACS address for warm reset recovery */
+  *(UINT32 *)(sf_raw + 0x28) = GU_SHADOW_FACS_SIGNATURE;
+  memcpy(sf_raw + 0x2C, &Info->real_facs_phys, sizeof(UINT64));
+
+  /* Clear all 64-bit wake flags in both tables for rock-solid 16-bit real mode wake */
+  Info->real_facs->Flags = 0;
+  Info->real_facs->XFirmwareWakingVector = 0;
+  if (Info->real_facs->Length >= 64) {
+    UINT8 *rf_raw = (UINT8 *)Info->real_facs;
+    *(UINT32 *)(rf_raw + 0x20) = 0; /* Version at +0x20 */
+    *(UINT32 *)(rf_raw + 0x24) = 0; /* OspmFlags at +0x24 */
+  }
+
+  /*
+   * 3. Low (<1MB) ACPI NVS Allocation (4096 bytes):
+   * +0x00000: Pure 16-bit Real Mode S3 Resume Trampoline Machine Code (<380 bytes)
+   * +0x00200..0x0027F: Zero-initialized (NO FACS signature below 1MB!)
+   * +0x00280: Real FACS Vector Mirror (32-bit at 0x280, 64-bit at 0x288)
+   * +0x00300: Telemetry Checkpoints & Waking Vector capture
+   * +0x00320: PCI Probe Addresses Table (8 dwords)
+   * +0x00340: PCI Probe Raw Results (8 dwords)
+   * +0x00360: PCI Probe Post-Arm Results (4 dwords)
+   * +0x00370: Saved BIOS SP / SS
+   */
+  EFI_PHYSICAL_ADDRESS trampoline_phys = LowTrampPhys;
+
+  /* Clear the entire low trampoline memory page */
+  memset(low_base, 0, 4096);
+
+  /* Store Real FACS original vectors as backup mirror in low memory at +0x280 / +0x288 */
+  *(UINT32 *)(low_base + 0x0280) = Info->original_firmware_waking_vector;
+  *(UINT64 *)(low_base + 0x0288) = Info->original_xfirmware_waking_vector;
+
+  /* Dynamically discover Root Port Link Status and GPU PMCSR register addresses */
+  UINT8 target_gpu_bus = (Context && Context->bus) ? Context->bus : 45U;
+  UINT32 root_port_link_reg = GuFindRootPortLinkReg(SystemTable->BootServices, target_gpu_bus);
+  UINT32 gpu_pmcsr_reg = GuFindGpuPmcsrReg(SystemTable->BootServices, Gu.pci, target_gpu_bus);
+
+  if (Context) {
+    Context->root_port_link_reg = root_port_link_reg;
+    Context->gpu_pmcsr_reg = gpu_pmcsr_reg;
+  }
+  GuLog("S3 Hardware Recon Config: Root Port LinkReg=%#08x (Cap 0x10+0x10), GPU PMCSR=%#08x (Cap 0x01+0x04)\n",
+        (unsigned)root_port_link_reg, (unsigned)gpu_pmcsr_reg);
+
+  /* 4. Build Pure 16-bit Real Mode S3 Resume Trampoline machine code in low memory (<1MB) */
+  UINT32 tramp_bytes = GuAcpiBuildTrampolineCode(
+      low_base,
+      4096,
+      trampoline_phys,
+      NvsPhys,
+      shadow_facs_phys,
+      root_port_link_reg,
+      gpu_pmcsr_reg
+  );
+
+  if (tramp_bytes == 0) {
+    GuLog("GuAcpiInstallShadowFacs: Failed to build trampoline machine code\n");
+    return EFI_DEVICE_ERROR;
+  }
+
+  Info->shadow_facs_phys = shadow_facs_phys;
+  Info->trampoline_phys = trampoline_phys;
+
   EFI_PHYSICAL_ADDRESS shadow_fadt_phys = high_acpi_phys + GU_HIGH_SHADOW_FADT_OFF;
   EFI_ACPI_2_0_FIXED_ACPI_DESCRIPTION_TABLE *shadow_fadt =
       (EFI_ACPI_2_0_FIXED_ACPI_DESCRIPTION_TABLE *)(high_acpi_base + GU_HIGH_SHADOW_FADT_OFF);
@@ -975,10 +988,10 @@ EFI_STATUS GuAcpiInstallShadowFacs(
   Info->shadow_fadt_phys = shadow_fadt_phys;
 
   /*
-   * Plan C: Complete Shadow Chain Architecture (v1.8.44)
+   * Plan C: Complete Shadow Chain Architecture (v1.8.45)
    * Real ACPI tables (RealRSDP, RealRSDT, RealXSDT, RealFADT) remain 100% UNTOUCHED byte-for-byte.
    * Complete shadow hierarchy is constructed in high EfiACPIMemoryNVS:
-   * ShadowRSDP -> ShadowXSDT -> ShadowFADT -> ShadowFACS (0x9E200)
+   * ShadowRSDP -> ShadowXSDT -> ShadowFADT -> ShadowFACS (high_acpi_phys + 0x400)
    */
   GuLog("S3 Plan C Pre-Build: RealRSDP=%#llx RealXSDT=%#llx (Chk=%#02x) RealFADT=%#llx (Len=%u Chk=%#02x)\n",
         (unsigned long long)(UINTN)Info->rsdp,
@@ -987,9 +1000,9 @@ EFI_STATUS GuAcpiInstallShadowFacs(
         (unsigned)Info->fadt_original_checksum);
 
   /*
-   * 1. Populate ShadowFADT at HighAcpiPage + 0x200:
+   * 5. Populate ShadowFADT at HighAcpiPage + 0x200:
    *    Copy full Header.Length bytes from original RealFADT.
-   *    Set FirmwareCtrl = ShadowFACS (0x9E200), XFirmwareCtrl = 0.
+   *    Set FirmwareCtrl = ShadowFACS (high_acpi_phys + 0x400), XFirmwareCtrl = 0.
    *    Recalculate ShadowFADT->Header.Checksum.
    */
   UINT32 fadt_len = Info->fadt->Header.Length;
@@ -1010,7 +1023,7 @@ EFI_STATUS GuAcpiInstallShadowFacs(
   shadow_fadt->Header.Checksum = (UINT8)(0 - sf_sum);
 
   /*
-   * 2. Populate ShadowXSDT at HighAcpiPage + 0x080:
+   * 6. Populate ShadowXSDT at HighAcpiPage + 0x080:
    *    Copy RealXSDT, update FACP/FADT entry to point to ShadowFADT, recalculate Checksum.
    */
   EFI_ACPI_DESCRIPTION_HEADER *shadow_xsdt = NULL;
@@ -1053,7 +1066,7 @@ EFI_STATUS GuAcpiInstallShadowFacs(
   }
 
   /*
-   * 3. Populate ShadowRSDP at HighAcpiPage + 0x000:
+   * 7. Populate ShadowRSDP at HighAcpiPage + 0x000:
    *    Copy RealRSDP (36 bytes for Revision >= 2).
    *    Set XsdtAddress = ShadowXSDT.
    *    Leave RsdtAddress = RealRSDP->RsdtAddress untouched.
@@ -1086,9 +1099,10 @@ EFI_STATUS GuAcpiInstallShadowFacs(
   shadow_rsdp->ExtendedChecksum = (UINT8)(0 - rsdp_sum36);
 
   /*
-   * 4. State registration and In-Place Patching of ConfigurationTable:
+   * 8. State registration:
    */
   mShadowState.installed = TRUE;
+  mShadowState.applied = FALSE;
   mShadowState.orig_rsdp = (VOID *)(UINTN)Info->rsdp;
   mShadowState.shadow_rsdp = (VOID *)(UINTN)shadow_rsdp_phys;
   mShadowState.high_acpi_page = (VOID *)high_acpi_base;
@@ -1097,15 +1111,20 @@ EFI_STATUS GuAcpiInstallShadowFacs(
   mShadowState.system_table = SystemTable;
   mShadowState.orig_exit_boot_services = NULL;
   mShadowState.hook_active = FALSE;
-  mShadowState.acpi_s3_save_protocol = NULL;
-  mShadowState.orig_s3_save = NULL;
-  mShadowState.s3_save_hook_active = FALSE;
-  mShadowState.s3_save_call_count = 0;
-
-  UINT32 applied_count = GuAcpiApplyShadowConfigTable();
+  if (!mShadowState.s3_save_hook_active) {
+    mShadowState.acpi_s3_save_protocol = NULL;
+    mShadowState.orig_s3_save = NULL;
+    mShadowState.s3_save_call_count = 0;
+  }
 
   /*
-   * 5. Hook Real FACS waking vector to point to Low Trampoline (<1MB)
+   * NOTE: GuAcpiApplyShadowConfigTable() is deliberately DEFERRED until
+   * GuBootWindows() immediately before StartImage(Windows)!
+   * ConfigurationTable stays 100% on RealRSDP throughout driver execution.
+   */
+
+  /*
+   * 9. Hook Real FACS waking vector to point to Low Trampoline (<1MB)
    *    RealFACS is what AMI Aptio V PEI wakes to!
    *    RealFADT and RealXSDT are 100% UNTOUCHED!
    */
@@ -1119,7 +1138,7 @@ EFI_STATUS GuAcpiInstallShadowFacs(
   }
 
   /*
-   * 6. LEAK 3: Detect and sandwich EFI_ACPI_S3_SAVE_PROTOCOL (EDK2 AcpiS3SaveDxe)
+   * 10. LEAK 3: Detect and sandwich EFI_ACPI_S3_SAVE_PROTOCOL (EDK2 AcpiS3SaveDxe)
    */
   static EFI_GUID s3_save_guid = EFI_ACPI_S3_SAVE_PROTOCOL_GUID;
   EFI_ACPI_S3_SAVE_PROTOCOL *acpi_s3_save = NULL;
@@ -1133,13 +1152,46 @@ EFI_STATUS GuAcpiInstallShadowFacs(
           (unsigned long long)(UINTN)acpi_s3_save,
           (unsigned long long)(UINTN)acpi_s3_save->S3Save);
     mShadowState.acpi_s3_save_protocol = acpi_s3_save;
-    mShadowState.orig_s3_save = acpi_s3_save->S3Save;
-    acpi_s3_save->S3Save = GuHookedS3Save;
+    if (acpi_s3_save->S3Save != GuHookedS3Save) {
+      mShadowState.orig_s3_save = acpi_s3_save->S3Save;
+      acpi_s3_save->S3Save = GuHookedS3Save;
+    }
     mShadowState.s3_save_hook_active = TRUE;
     Info->s3_save_hook_installed = TRUE;
   } else {
     GuLog("S3 Plan C: EFI_ACPI_S3_SAVE_PROTOCOL not found (%#llx)\n", (unsigned long long)s_s3save);
     Info->s3_save_hook_installed = FALSE;
+  }
+
+  /* Read-Only Forensics Logging */
+  GuLog("RealFADT Forensic: FirmwareCtrl=%#08x XFirmwareCtrl=%#llx (Len=%u)\n",
+        (unsigned)Info->fadt->FirmwareCtrl,
+        (Info->fadt->Header.Length >= 140) ? (unsigned long long)Info->fadt->XFirmwareCtrl : 0ULL,
+        (unsigned)Info->fadt->Header.Length);
+
+  GuLog("UEFI ConfigurationTable Forensic (%u entries):\n", (unsigned)SystemTable->NumberOfTableEntries);
+  for (UINTN i = 0; i < SystemTable->NumberOfTableEntries; i++) {
+    const EFI_GUID *g = &SystemTable->ConfigurationTable[i].VendorGuid;
+    GuLog("  [%02u] GUID={%08x-%04x-%04x-%02x%02x-%02x%02x%02x%02x%02x%02x} Table=%#llx\n",
+          (unsigned)i,
+          (unsigned)g->Data1, (unsigned)g->Data2, (unsigned)g->Data3,
+          (unsigned)g->Data4[0], (unsigned)g->Data4[1], (unsigned)g->Data4[2], (unsigned)g->Data4[3],
+          (unsigned)g->Data4[4], (unsigned)g->Data4[5], (unsigned)g->Data4[6], (unsigned)g->Data4[7],
+          (unsigned long long)(UINTN)SystemTable->ConfigurationTable[i].VendorTable);
+  }
+
+  if (mShadowState.orig_s3_save != NULL) {
+    const UINT8 *fn_bytes = (const UINT8 *)(UINTN)mShadowState.orig_s3_save;
+    GuLog("AcpiS3Save->S3Save Code Hex Dump (256 bytes at %#llx):\n", (unsigned long long)(UINTN)fn_bytes);
+    for (UINTN row = 0; row < 16; row++) {
+      UINTN off = row * 16;
+      GuLog("  +%03x: %02x %02x %02x %02x %02x %02x %02x %02x  %02x %02x %02x %02x %02x %02x %02x %02x\n",
+            (unsigned)off,
+            fn_bytes[off+0], fn_bytes[off+1], fn_bytes[off+2], fn_bytes[off+3],
+            fn_bytes[off+4], fn_bytes[off+5], fn_bytes[off+6], fn_bytes[off+7],
+            fn_bytes[off+8], fn_bytes[off+9], fn_bytes[off+10], fn_bytes[off+11],
+            fn_bytes[off+12], fn_bytes[off+13], fn_bytes[off+14], fn_bytes[off+15]);
+    }
   }
 
   /* Record pointers and checksums into Info for telemetry & tests */
@@ -1160,7 +1212,7 @@ EFI_STATUS GuAcpiInstallShadowFacs(
         "  ShadowRSDP=%#llx (Chk20=%#02x ExtChk36=%#02x) -> ShadowXSDT=%#llx (Chk=%#02x)\n"
         "  ShadowXSDT [idx=%d] -> ShadowFADT=%#llx (FirmwareCtrl=%#08x XFirmwareCtrl=0 Chk=%#02x)\n"
         "  ShadowFACS=%#llx LowTrampoline=%#llx HighAcpiPage=%#llx\n"
-        "  ConfigTable In-Place Patched: RealRSDP=%#llx -> ShadowRSDP=%#llx (AppliedCount=%u)\n",
+        "  ConfigTable In-Place Patching: DEFERRED to GuBootWindows()\n",
         (unsigned long long)(UINTN)Info->rsdp, (unsigned long long)Info->xsdt_phys,
         (unsigned long long)Info->fadt_phys, (unsigned long long)Info->real_facs_phys,
         (unsigned)Info->real_facs->FirmwareWakingVector,
@@ -1169,10 +1221,7 @@ EFI_STATUS GuAcpiInstallShadowFacs(
         (int)Info->xsdt_fadt_index, (unsigned long long)shadow_fadt_phys,
         (unsigned)shadow_fadt->FirmwareCtrl, (unsigned)shadow_fadt->Header.Checksum,
         (unsigned long long)shadow_facs_phys, (unsigned long long)trampoline_phys,
-        (unsigned long long)high_acpi_phys,
-        (unsigned long long)(UINTN)mShadowState.orig_rsdp,
-        (unsigned long long)shadow_rsdp_phys,
-        (unsigned)applied_count);
+        (unsigned long long)high_acpi_phys);
 
   return EFI_SUCCESS;
 }
