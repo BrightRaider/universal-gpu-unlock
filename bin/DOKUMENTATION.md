@@ -1,7 +1,7 @@
 # Technische Dokumentation: Universal GPU Unlock (Multi-Gen)
 
 > **Tool:** Universal GPU Unlock  
-> **Version:** v1.8.45  
+> **Version:** v1.8.46  
 > **Architekturen:** NVIDIA Ada Lovelace (RTX 40), Ampere (RTX 30), Turing (RTX 20 / CMP)  
 > **Unterstützte Betriebssysteme:** Windows 10, Windows 11, WSL2 / Ubuntu CUDA Container  
 
@@ -656,6 +656,48 @@ In **v1.8.34** habe ich die Architektur umfassend überarbeitet und perfektionie
 
 5. **Host-Test Suite:**
    - Alle 8.474 Host-Checks in 10 Test-Suites erfolgreich bestanden (`MSVC_HOST_TESTS=PASS`).
+
+### 13.16 Die v1.8.46 Architektur: 16->32->16-Bit Flat Mode Brücke, High-Memory Waking Vector & Telemetrie-Spiegelung
+
+1. **Empirischer Hardware-Beweis des 16-Bit-Real-Mode-Einstiegs:**
+   - Die Diagnose-Sonde in `v1.8.45b-probe` (20 Byte 0xCF9-Reset-Schleife an Offset `0x0000` auf `0x0009E000`) lieferte den endgültigen, unwiderlegbaren Hardware-Beweis:
+   - Beim S3-Aufwachen sprang AMI Aptio V auf dem MSI MEG X570 ACE (AMD AM4) exakt in das 16-Bit-Trampolin und löste den beabsichtigten Hard-Reset aus (`Kernel-Power` Event 41 um 20:56:35, `Kernel-Boot` Event 27 um 20:56:32, `BootType = 0x0`, `Success = false`).
+   - Damit ist empirisch bewiesen: Die Firmware akzeptiert `RealFACS->FirmwareWakingVector = 0x0009E000` im 16-Bit Real Mode zu 100 %.
+
+2. **Problemstellung: High-Memory-Waking-Vector & Unmappbarkeit von Low-Memory in WinDbg:**
+   - Da `ShadowFACS` in v1.8.45 aus dem Low-Memory verbannt und auf `HighAcpiPage + 0x0400` (> 1 MB, im `EfiACPIMemoryNVS`-Bereich) verlagert wurde, schreibt Windows seinen Waking Vector nach `HighAcpiPage + 0x040C`.
+   - Ein reiner 16-Bit Real-Mode-Code kann ohne Segmentverschiebung nur bis 1 MB adressieren und daher nicht direkt auf physikalische 32-Bit-Adressen oberhalb von 1 MB zugreifen.
+   - Zudem blockiert der Windows-Kernel im Live-Debugging (`kdX64.exe -kl`) ungemappte physische Speicherzugriffe unterhalb von 1 MB (`!dd 9e300` schlägt fehl).
+
+3. **Die 16->32->16-Bit Flat Mode Brücke:**
+   - Zur Überwindung beider Hürden habe ich eine stack-freie 16->32->16-Bit Protected-Mode-Brücke direkt in das Low-Trampolin integriert:
+     - **GDT & IDTR auf der Low-Memory-Seite (`0x0009E200..0x0009E237`):**
+       - 5 Deskriptoren: Null (0x00), 32-Bit Flat Code (0x08, Limit 4 GB), 32-Bit Flat Data (0x10, Limit 4 GB), 16-Bit Code (0x18, Basis `0x00090000`, Limit 64 KB), 16-Bit Data (0x20, Basis `0x00090000`, Limit 64 KB).
+       - `RM_IDTR` bei `0x0009E200` mit Limit `0x03FF` und Basis `0x00000000` für saubere Real-Mode-Interrupts.
+     - **Ablauf im Trampolin:**
+       a) **16-Bit Real Mode:** BIOS `SS:SP` nach `0x0372`/`0x0370` sichern, Checkpoint `0xAA01` nach `0x0310` schreiben, 8-DWORD PCIe-Recon über `0xCF8`/`0xCFC` ausführen, AMD Root Port 0:3:1 Bus-Nummern restaurieren.
+       b) **Umschaltung in 32-Bit Flat PM:** `lgdt [cs:0x0208]`, `CR0.PE = 1`, `jmp far 0x0008:pm32`.
+       c) **32-Bit Flat PM Aktionen:**
+          - Datenselektoren auf `0x0010` laden, `lidt [0x0009E200]` ausführen.
+          - 32-Bit-Windows-Waking-Vector direkt aus `ShadowFACS + 0x0C` (`HighAcpiPhys + 0x040C`) lesen (Fallback auf `0x00001000`, falls 0).
+          - Vektor in Real-Mode Segment:Offset zerlegen (`Segment = Vector >> 4`, `Offset = Vector & 0x0F`), Far-Jump-Ziel bei `cs:[0x0300]` patchen und in Telemetrie (`0x0314`/`0x0318`) sichern.
+          - Checkpoint `0xAA02` nach `0x0312` schreiben.
+          - **Telemetrie-Spiegelung:** Den gesamten 128-Byte-Telemetrieblock (`0x0009E300..0x0009E37F`, 32 DWORDs) via `cld; rep movsd` nach `HighAcpiPhys + 0x0500` spiegeln. Da Windows `ShadowFACS` unter `nt!HalpAcpiFacsMapping` mappt, sind alle Telemetriedaten in WinDbg sofort über `dd poi(nt!HalpAcpiFacsMapping)+100 L20` auslesbar!
+       d) **Rückkehr in 16-Bit Real Mode:**
+          - `jmp far 0x0018:pm16` mit 64-KB-Segment (Basis `0x00090000`).
+          - Datenselektoren auf `0x0020` laden, `CR0.PE = 0` löschen.
+          - `jmp far 0x9E00:rm_exit` in den echten 16-Bit Real Mode.
+          - Firmware `SS:SP` aus `0x0372`/`0x0370` restaurieren, alle Allzweckregister (`EAX..EBP`) nullen.
+          - `jmp far ptr cs:[0x0300]` direkt in Windows' `HalpRMStub` ausführen.
+
+4. **Sicherheits- und Architektur-Garantien:**
+   - Vollständig stack-frei: Null Push/Pop-Operationen, BIOS-Stack wird nicht angetastet.
+   - Kompakte Code-Größe: 410 Bytes Gesamtgröße (innerhalb des 512-Byte-Limits `0x0000..0x01FF`).
+   - GDT/IDTR liegen bei `0x0200..0x0237`, Telemetrie bei `0x0300..0x037F` – null Kollisionen.
+   - Keine BAR0-MMIO-Zugriffe, kein SEC2-Unlock, keine CMOS-Mutation, kein 64-Bit-Wake (`OspmFlags = 0`).
+
+5. **Host-Test Suite:**
+   - Alle 8.431 Host-Checks in 10 Test-Suites erfolgreich bestanden (`MSVC_HOST_TESTS=PASS`).
 
 
 

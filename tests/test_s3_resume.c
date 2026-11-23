@@ -440,8 +440,12 @@ static void TestGuAcpiFacsDiscoveryAndPatching(void) {
   for (UINT32 i = 0; i <= sizeof(mock_low_tramp) - 4; i++) {
     CHECK(memcmp(mock_low_tramp + i, "FACS", 4) != 0, "Low trampoline memory must contain ZERO bytes of 'FACS'");
   }
-  for (UINT32 i = 0x200; i < 0x280; i++) {
-    CHECK(mock_low_tramp[i] == 0, "Low trampoline memory +0x200..+0x27F must be zero-initialized");
+  /* Verify GDT + RM_IDTR at +0x200 (v1.8.46 16->32->16 bridge), with zero FACS/RSDP */
+  CHECK(*(UINT16 *)(mock_low_tramp + 0x200) == 0x03FF, "Low trampoline +0x200 must contain RM_IDTR limit");
+  CHECK(*(UINT32 *)(mock_low_tramp + 0x202) == 0, "Low trampoline +0x202 must contain RM_IDTR base 0");
+  CHECK(*(UINT16 *)(mock_low_tramp + 0x208) == 0x0027, "Low trampoline +0x208 must contain PM_GDTR limit 39");
+  for (UINT32 i = 0x238; i < 0x280; i++) {
+    CHECK(mock_low_tramp[i] == 0, "Low trampoline memory +0x238..+0x27F must be zero-initialized");
   }
 
   /* 1. Verify Plan C: Real ACPI tables remain 100% UNTOUCHED byte-for-byte */
@@ -765,32 +769,38 @@ static void TestGuAcpiBuildTrampolineCode(void) {
     else if (buffer[i] == 0x66 && buffer[i+1] == 0xA3 && buffer[i+2] == 0x68 && buffer[i+3] == 0x03) { instr_len = 4; desc = "mov [0x0368], eax                ; Store Post-Arm GPU BAR0"; }
     else if (buffer[i] == 0x66 && buffer[i+1] == 0xA1 && buffer[i+2] == 0x3C && buffer[i+3] == 0x03) { instr_len = 4; desc = "mov eax, [0x033C]                ; Load dynamic GPU PMCSR address"; }
     else if (buffer[i] == 0x66 && buffer[i+1] == 0xA3 && buffer[i+2] == 0x6C && buffer[i+3] == 0x03) { instr_len = 4; desc = "mov [0x036C], eax                ; Store Post-Arm GPU PMCSR"; }
-    else if (buffer[i] == 0xA1 && buffer[i+1] == 0x0C && buffer[i+2] == 0x02) { instr_len = 3; desc = ".skip_bridge: mov ax, [0x020C]   ; Shadow FACS 32-bit vector lo"; }
-    else if (buffer[i] == 0x8B && buffer[i+1] == 0x16 && buffer[i+2] == 0x0E && buffer[i+3] == 0x02) { instr_len = 4; desc = "mov dx, [0x020E]                 ; Shadow FACS 32-bit vector hi"; }
-    else if (buffer[i] == 0x85 && buffer[i+1] == 0xC0) { instr_len = 2; desc = "test ax, ax"; }
-    else if (buffer[i] == 0x85 && buffer[i+1] == 0xD2) { instr_len = 2; desc = "test dx, dx"; }
-    else if (buffer[i] == 0x75) { instr_len = 2; desc = "jnz .have_vec"; }
-    else if (buffer[i] == 0xA1 && buffer[i+1] == 0x18 && buffer[i+2] == 0x02) { instr_len = 3; desc = "mov ax, [0x0218]                 ; Shadow FACS 64-bit vector lo"; }
-    else if (buffer[i] == 0x8B && buffer[i+1] == 0x16 && buffer[i+2] == 0x1A && buffer[i+3] == 0x02) { instr_len = 4; desc = "mov dx, [0x021A]                 ; Shadow FACS 64-bit vector hi"; }
-    else if (buffer[i] == 0xA1 && buffer[i+1] == 0x80 && buffer[i+2] == 0x02) { instr_len = 3; desc = "mov ax, [0x0280]                 ; Mirror Real FACS 32-bit vector lo"; }
-    else if (buffer[i] == 0x8B && buffer[i+1] == 0x16 && buffer[i+2] == 0x82 && buffer[i+3] == 0x02) { instr_len = 4; desc = "mov dx, [0x0282]                 ; Mirror Real FACS 32-bit vector hi"; }
-    else if (buffer[i] == 0xA1 && buffer[i+1] == 0x88 && buffer[i+2] == 0x02) { instr_len = 3; desc = "mov ax, [0x0288]                 ; Mirror Real FACS 64-bit vector lo"; }
-    else if (buffer[i] == 0x8B && buffer[i+1] == 0x16 && buffer[i+2] == 0x8A && buffer[i+3] == 0x02) { instr_len = 4; desc = "mov dx, [0x028A]                 ; Mirror Real FACS 64-bit vector hi"; }
-    else if (buffer[i] == 0xB8 && buffer[i+1] == 0x00 && buffer[i+2] == 0x10) { instr_len = 3; desc = "mov ax, 0x1000                 ; Fallback to HalpRMStub (0x00001000)"; }
-    else if (buffer[i] == 0x31 && buffer[i+1] == 0xD2) { instr_len = 2; desc = "xor dx, dx"; }
-    else if (buffer[i] == 0xA3 && buffer[i+1] == 0x14 && buffer[i+2] == 0x03) { instr_len = 3; desc = ".have_vec: mov [0x0314], ax      ; Save captured vector lo"; }
-    else if (buffer[i] == 0x89 && buffer[i+1] == 0x16 && buffer[i+2] == 0x16 && buffer[i+3] == 0x03) { instr_len = 4; desc = "mov [0x0316], dx                 ; Save captured vector hi"; }
-    else if (buffer[i] == 0x89 && buffer[i+1] == 0xC3) { instr_len = 2; desc = "mov bx, ax"; }
-    else if (buffer[i] == 0x83 && buffer[i+1] == 0xE3 && buffer[i+2] == 0x0F) { instr_len = 3; desc = "and bx, 0x0F                     ; Offset = AX & 0x0F"; }
-    else if (buffer[i] == 0xC1 && buffer[i+1] == 0xE8 && buffer[i+2] == 0x04) { instr_len = 3; desc = "shr ax, 4"; }
-    else if (buffer[i] == 0xC1 && buffer[i+1] == 0xE2 && buffer[i+2] == 0x0C) { instr_len = 3; desc = "shl dx, 12"; }
-    else if (buffer[i] == 0x09 && buffer[i+1] == 0xD0) { instr_len = 2; desc = "or ax, dx                         ; Segment = (AX>>4)|(DX<<12)"; }
-    else if (buffer[i] == 0x89 && buffer[i+1] == 0x1E && buffer[i+2] == 0x00 && buffer[i+3] == 0x03) { instr_len = 4; desc = "mov [0x0300], bx                 ; Store Target Offset"; }
-    else if (buffer[i] == 0xA3 && buffer[i+1] == 0x02 && buffer[i+2] == 0x03) { instr_len = 3; desc = "mov [0x0302], ax                 ; Store Target Segment"; }
-    else if (buffer[i] == 0x89 && buffer[i+1] == 0x1E && buffer[i+2] == 0x18 && buffer[i+3] == 0x03) { instr_len = 4; desc = "mov [0x0318], bx                 ; Telemetry Target Offset"; }
-    else if (buffer[i] == 0xA3 && buffer[i+1] == 0x1A && buffer[i+2] == 0x03) { instr_len = 3; desc = "mov [0x031A], ax                 ; Telemetry Target Segment"; }
-    else if (buffer[i] == 0xC7 && buffer[i+1] == 0x06 && buffer[i+2] == 0x12 && buffer[i+3] == 0x03) { instr_len = 6; desc = "mov word [0x0312], 0xAA02        ; Checkpoint 2: Ready to Jump"; }
-    else if (buffer[i] == 0x8E && buffer[i+1] == 0x16 && buffer[i+2] == 0x72 && buffer[i+3] == 0x03) { instr_len = 4; desc = "mov ss, [0x0372]                 ; Restore BIOS SS"; }
+    else if (buffer[i] == 0x2E && buffer[i+1] == 0x0F && buffer[i+2] == 0x01 && buffer[i+3] == 0x16) { instr_len = 6; desc = ".skip_bridge: lgdt [cs:0x0208]   ; Load 32-bit PM GDTR"; }
+    else if (buffer[i] == 0x66 && buffer[i+1] == 0x0F && buffer[i+2] == 0x20 && buffer[i+3] == 0xC0) { instr_len = 4; desc = "mov eax, cr0"; }
+    else if (buffer[i] == 0x0C && buffer[i+1] == 0x01) { instr_len = 2; desc = "or al, 1                         ; Set CR0.PE = 1 (Enable PM)"; }
+    else if (buffer[i] == 0x66 && buffer[i+1] == 0x0F && buffer[i+2] == 0x22 && buffer[i+3] == 0xC0) { instr_len = 4; desc = "mov cr0, eax"; }
+    else if (buffer[i] == 0x66 && buffer[i+1] == 0xEA) { instr_len = 7; desc = "jmp far 0x0008:pm32             ; JUMP TO 32-BIT FLAT PM!"; }
+    else if (buffer[i] == 0x66 && buffer[i+1] == 0xB8 && buffer[i+2] == 0x10 && buffer[i+3] == 0x00) { instr_len = 4; desc = "pm32: mov ax, 0x0010            ; 32-bit Flat Data Selector"; }
+    else if (buffer[i] == 0x8E && buffer[i+1] == 0xD8) { instr_len = 2; desc = "mov ds, ax"; }
+    else if (buffer[i] == 0x8E && buffer[i+1] == 0xC0) { instr_len = 2; desc = "mov es, ax"; }
+    else if (buffer[i] == 0x8E && buffer[i+1] == 0xE0) { instr_len = 2; desc = "mov fs, ax"; }
+    else if (buffer[i] == 0x8E && buffer[i+1] == 0xE8) { instr_len = 2; desc = "mov gs, ax"; }
+    else if (buffer[i] == 0x8E && buffer[i+1] == 0xD0) { instr_len = 2; desc = "mov ss, ax"; }
+    else if (buffer[i] == 0x0F && buffer[i+1] == 0x01 && buffer[i+2] == 0x1D) { instr_len = 7; desc = "lidt [0x0009E200]               ; Load Real-Mode IDTR (Limit=0x3FF, Base=0)"; }
+    else if (buffer[i] == 0x8B && buffer[i+1] == 0x35) { instr_len = 6; desc = "mov esi, [ShadowFACS+0x0C]     ; Read Windows Waking Vector from High Page"; }
+    else if (buffer[i] == 0x85 && buffer[i+1] == 0xF6) { instr_len = 2; desc = "test esi, esi"; }
+    else if (buffer[i] == 0x75 && buffer[i+1] == 0x05) { instr_len = 2; desc = "jnz .have_vec32"; }
+    else if (buffer[i] == 0xBE && buffer[i+1] == 0x00 && buffer[i+2] == 0x10 && buffer[i+3] == 0x00 && buffer[i+4] == 0x00) { instr_len = 5; desc = "mov esi, 0x00001000             ; Fallback to HalpRMStub"; }
+    else if (buffer[i] == 0x89 && buffer[i+1] == 0x35) { instr_len = 6; desc = ".have_vec32: mov [0x0009E314], esi ; Save captured vector to telemetry"; }
+    else if (buffer[i] == 0x89 && buffer[i+1] == 0xF0) { instr_len = 2; desc = "mov eax, esi"; }
+    else if (buffer[i] == 0x83 && buffer[i+1] == 0xE0 && buffer[i+2] == 0x0F) { instr_len = 3; desc = "and eax, 0x0F                   ; Offset = AX & 0x0F"; }
+    else if (buffer[i] == 0xC1 && buffer[i+1] == 0xEE && buffer[i+2] == 0x04) { instr_len = 3; desc = "shr esi, 4                      ; Segment = ESI >> 4"; }
+    else if (buffer[i] == 0x66 && buffer[i+1] == 0xA3) { instr_len = 5; desc = "mov [disp32], ax                ; Store target/telemetry offset"; }
+    else if (buffer[i] == 0x66 && buffer[i+1] == 0x89 && buffer[i+2] == 0x35) { instr_len = 6; desc = "mov [disp32], si                ; Store target/telemetry segment"; }
+    else if (buffer[i] == 0x66 && buffer[i+1] == 0xC7 && buffer[i+2] == 0x05) { instr_len = 9; desc = "mov word [0x0009E312], 0xAA02   ; Exit Checkpoint 0xAA02"; }
+    else if (buffer[i] == 0xBE) { instr_len = 5; desc = "mov esi, 0x0009E300             ; Telemetry Source"; }
+    else if (buffer[i] == 0xBF) { instr_len = 5; desc = "mov edi, HighAcpiPage+0x500     ; Telemetry Destination (High Page)"; }
+    else if (buffer[i] == 0xB9 && buffer[i+1] == 0x20 && buffer[i+2] == 0x00 && buffer[i+3] == 0x00 && buffer[i+4] == 0x00) { instr_len = 5; desc = "mov ecx, 32                    ; 32 DWORDs = 128 bytes"; }
+    else if (buffer[i] == 0xF3 && buffer[i+1] == 0xA5) { instr_len = 2; desc = "rep movsd                       ; MIRROR TELEMETRY TO HIGH MEMORY!"; }
+    else if (buffer[i] == 0xEA && buffer[i+5] == 0x18 && buffer[i+6] == 0x00) { instr_len = 7; desc = "jmp far 0x0018:pm16             ; Drop to 16-bit Protected Mode"; }
+    else if (buffer[i] == 0xB8 && buffer[i+1] == 0x20 && buffer[i+2] == 0x00) { instr_len = 3; desc = "pm16: mov ax, 0x0020            ; 16-bit PM Data Selector"; }
+    else if (buffer[i] == 0x24 && buffer[i+1] == 0xFE) { instr_len = 2; desc = "and al, 0xFE                    ; Clear CR0.PE (Return to Real Mode)"; }
+    else if (buffer[i] == 0xEA) { instr_len = 5; desc = "jmp far 0x9E00:rm_exit          ; Jump to 16-bit Real Mode!"; }
+    else if (buffer[i] == 0x8E && buffer[i+1] == 0x16 && buffer[i+2] == 0x72 && buffer[i+3] == 0x03) { instr_len = 4; desc = "rm_exit: mov ss, [0x0372]        ; Restore BIOS SS"; }
     else if (buffer[i] == 0x8B && buffer[i+1] == 0x26 && buffer[i+2] == 0x70 && buffer[i+3] == 0x03) { instr_len = 4; desc = "mov sp, [0x0370]                 ; Restore BIOS SP"; }
     else if (buffer[i] == 0x66 && buffer[i+1] == 0x31 && buffer[i+2] == 0xC0) { instr_len = 3; desc = "xor eax, eax                     ; Clean register state for OS"; }
     else if (buffer[i] == 0x66 && buffer[i+1] == 0x31 && buffer[i+2] == 0xDB) { instr_len = 3; desc = "xor ebx, ebx"; }
@@ -813,14 +823,48 @@ static void TestGuAcpiBuildTrampolineCode(void) {
   }
   printf("============================================================================================\n\n");
 
+  /* Explicit Sanity Check 6: 16->32->16 Flat Mode Bridge checks */
+  /* Verify RM_IDTR and PM_GDTR at buffer + 0x0200 */
+  CHECK(buffer[0x0200] == 0xFF && buffer[0x0201] == 0x03, "RM_IDTR limit must be 0x03FF");
+  CHECK(*(UINT32 *)(buffer + 0x0202) == 0, "RM_IDTR base must be 0");
+  CHECK(*(UINT16 *)(buffer + 0x0208) == 0x0027, "PM_GDTR limit must be 39 (5 descriptors)");
+  CHECK(*(UINT32 *)(buffer + 0x020A) == 0x0009E210, "PM_GDTR base must be TrampolinePhys + 0x0210");
+
+  /* Verify GDT Descriptors */
+  CHECK(buffer[0x021D] == 0x9A && buffer[0x021E] == 0xCF, "GDT[1] 32-bit Code Descriptor (0x08)");
+  CHECK(buffer[0x0225] == 0x92 && buffer[0x0226] == 0xCF, "GDT[2] 32-bit Data Descriptor (0x10)");
+  CHECK(buffer[0x022D] == 0x9A && buffer[0x022E] == 0x00, "GDT[3] 16-bit Code Descriptor (0x18)");
+  CHECK(buffer[0x0235] == 0x92 && buffer[0x0236] == 0x00, "GDT[4] 16-bit Data Descriptor (0x20)");
+
+  /* Verify Fallback in 32-bit PM (mov esi, 0x00001000) */
   BOOLEAN found_fallback = FALSE;
   for (UINT32 i = 0; i < bytes - 4; i++) {
-    if (buffer[i] == 0xB8 && buffer[i+1] == 0x00 && buffer[i+2] == 0x10 && buffer[i+3] == 0x31 && buffer[i+4] == 0xD2) {
+    if (buffer[i] == 0xBE && buffer[i+1] == 0x00 && buffer[i+2] == 0x10 && buffer[i+3] == 0x00 && buffer[i+4] == 0x00) {
       found_fallback = TRUE;
       break;
     }
   }
-  CHECK(found_fallback, "Trampoline must fall back to mov ax, 0x1000; xor dx, dx when no vector found");
+  CHECK(found_fallback, "Trampoline must fall back to mov esi, 0x00001000 when waking vector is 0");
+
+  /* Verify Telemetry Mirroring (rep movsd: F3 A5) */
+  BOOLEAN found_rep_movsd = FALSE;
+  for (UINT32 i = 0; i < bytes - 1; i++) {
+    if (buffer[i] == 0xF3 && buffer[i+1] == 0xA5) {
+      found_rep_movsd = TRUE;
+      break;
+    }
+  }
+  CHECK(found_rep_movsd, "Trampoline must contain rep movsd (F3 A5) to mirror telemetry to HighAcpiPage");
+
+  /* Verify Return to Real Mode (CR0.PE clear and far jump) */
+  BOOLEAN found_cr0_clear = FALSE;
+  for (UINT32 i = 0; i < bytes - 1; i++) {
+    if (buffer[i] == 0x24 && buffer[i+1] == 0xFE) {
+      found_cr0_clear = TRUE;
+      break;
+    }
+  }
+  CHECK(found_cr0_clear, "Trampoline must clear CR0.PE (and al, 0xFE) to return to Real Mode");
 
   BOOLEAN found_hlt = FALSE;
   for (UINT32 i = 0; i < bytes; i++) {

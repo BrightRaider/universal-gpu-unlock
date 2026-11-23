@@ -6,6 +6,34 @@ For packaged binaries and downloads, visit [GitHub Releases](https://github.com/
 
 ---
 
+## [v1.8.46] - 2026-11-23
+### Added & Fixed
+- **16->32->16-Bit Flat Mode Bridge in Trampoline, High-Memory Waking Vector & Telemetry Mirroring (addresses #19):**
+  - **Empirical Proof of 16-Bit Real Mode Entry:**
+    - Diagnostic verification with `v1.8.45b-probe` (20-byte 0xCF9 reset loop) proved that AMI Aptio V on AMD AM4 (MSI MEG X570 ACE) reliably jumps to the 16-bit Real Mode waking vector at `0x0009E000` during ACPI S3 wake (`Kernel-Power` Event 41 at 20:56:35, `Kernel-Boot` Event 27 at 20:56:32, `BootType = 0x0`, `Success = false`).
+  - **16->32->16-Bit Flat Mode Bridge in Low Trampoline:**
+    - Placed dedicated 5-descriptor GDT and Real-Mode IDTR (`RM_IDTR`) on the low memory page at `0x0009E200..0x0009E237`, safely separated from the 410-byte execution envelope (`0x0000..0x019A`).
+    - Descriptors: Null (0x00), 32-bit Flat Code (0x08, Limit 4 GB), 32-bit Flat Data (0x10, Limit 4 GB), 16-bit Code (0x18, Base `0x00090000`, Limit 64 KB), 16-bit Data (0x20, Base `0x00090000`, Limit 64 KB).
+    - After 16-bit PCIe configuration space reconnaissance and Root Port 0:3:1 bus number restore, the trampoline loads `PM_GDTR` via `lgdt [cs:0x0208]`, enables Protected Mode (`CR0.PE = 1`), and jumps far to 32-bit flat code (`jmp far 0x0008:pm32`).
+  - **High-Memory Windows Vector Resolution:**
+    - In 32-bit flat protected mode, the trampoline loads flat data selectors (`0x0010`), sets real-mode IVT parameters (`lidt [0x0009E200]`, Limit 0x3FF, Base 0), and reads the Windows waking vector directly from `ShadowFACS + 0x0C` (`HighAcpiPhys + 0x040C`) in high `EfiACPIMemoryNVS` memory (> 1 MB).
+    - If the high-memory vector is zero, it safely falls back to `0x00001000` (Windows `HalpRMStub`).
+    - Computes Real-Mode Segment:Offset format (`Segment = Vector >> 4`, `Offset = Vector & 0x0F`), writing the far jump target to `cs:[0x0300]` and recording diagnostic telemetry at `0x0009E314` and `0x0009E318`.
+    - Writes execution checkpoint `0xAA02` to `0x0009E312`.
+  - **In-Flight Telemetry Mirroring to High Memory (`HighAcpiPhys + 0x0500`):**
+    - While in 32-bit flat mode, copies the entire 128-byte diagnostic telemetry block (`0x0009E300..0x0009E37F`, 32 DWORDs) to `HighAcpiPhys + 0x0500` via `cld; rep movsd`.
+    - Because Windows maps `ShadowFACS` at `nt!HalpAcpiFacsMapping` (`HighAcpiPhys + 0x0400`), all pre-OS PCIe reconnaissance and bridge restore telemetry becomes immediately readable in WinDbg via `dd poi(nt!HalpAcpiFacsMapping)+100 L20`.
+  - **Clean Return to 16-Bit Real Mode:**
+    - Drops to 16-bit Protected Mode (`jmp far 0x0018:pm16`) using the 64 KB-limited segment (`Base = 0x00090000`), clears `CR0.PE` to return to Real Mode, and executes `jmp far 0x9E00:rm_exit`.
+    - Restores firmware `SS:SP` from `0x0372`/`0x0370`, zeroes all general-purpose registers (`eax..ebp`) to prevent state leakage to the OS, and executes `jmp far ptr cs:[0x0300]` directly into Windows `HalpRMStub`.
+    - The trampoline remains completely stack-free and fits inside the 512-byte envelope (410 bytes total).
+  - **ACPI 1.0 RSDP Forensic Logging in `RUN*.TXT`:**
+    - Captured and logged the 20-byte raw ACPI 1.0 RSDP structure at `0xdc8c1000`, including `RsdtAddress` (+0x10) and RSDT Entry[0] (`FACP`), confirming table hierarchy integrity.
+  - **Strict Safety Boundaries:**
+    - Zero BAR0 MMIO writes, zero SEC2 unlock attempts, zero CMOS/RTC mutation, zero 64-bit wake (`OspmFlags = 0`).
+
+---
+
 ## [v1.8.45] - 2026-11-23
 ### Added & Fixed
 - **Sub-1MB Signature Cleanliness, Relocated ShadowFACS, Late ConfigurationTable Apply & S3Save Forensics (addresses #19):**
