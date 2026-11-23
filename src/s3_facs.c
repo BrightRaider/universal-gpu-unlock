@@ -466,9 +466,7 @@ UINT32 GuAcpiBuildTrampolineCode(
   UINT32 booter_dma = ContextPhys ? (UINT32)(ContextPhys + 0x01000U) : 0x00021000U;
   UINT32 booter_size = (GuAssets[0].firmware.size > 0) ? (UINT32)GuAssets[0].firmware.size : 57672U;
   UINT32 booter_sz_param = (booter_size & ~0xFFU) | 0x10U;
-  (VOID)booter_dma;
   (VOID)booter_size;
-  (VOID)booter_sz_param;
 
   /* Pre-populate PCI probe addresses at +0x0520 (8 dwords = 32 bytes) */
   UINT32 *probe_addrs = (UINT32 *)(Buffer + 0x0520);
@@ -481,32 +479,32 @@ UINT32 GuAcpiBuildTrampolineCode(
   probe_addrs[6] = 0x802D0010U; /* GPU 45:0:0 BAR0 */
   probe_addrs[7] = GpuPmcsrReg ? GpuPmcsrReg : 0x802D0064U; /* GPU 45:0:0 PMCSR (Cap 0x01) */
 
-  /* Pre-populate GDT & IDTR descriptors at Buffer + 0x0400 (v1.8.47) */
-  /* +0x0400: RM_IDTR (6 bytes) */
-  Buffer[0x0400] = 0xFF; Buffer[0x0401] = 0x03; /* Limit = 0x03FF */
-  Buffer[0x0402] = 0x00; Buffer[0x0403] = 0x00;
-  Buffer[0x0404] = 0x00; Buffer[0x0405] = 0x00; /* Base = 0x00000000 */
+  /* Pre-populate GDT & IDTR descriptors at Buffer + GU_TRAMP_RM_IDTR_OFF (0x0600) (v1.8.53) */
+  /* +0x0600: RM_IDTR (6 bytes) */
+  Buffer[GU_TRAMP_RM_IDTR_OFF + 0] = 0xFF; Buffer[GU_TRAMP_RM_IDTR_OFF + 1] = 0x03; /* Limit = 0x03FF */
+  Buffer[GU_TRAMP_RM_IDTR_OFF + 2] = 0x00; Buffer[GU_TRAMP_RM_IDTR_OFF + 3] = 0x00;
+  Buffer[GU_TRAMP_RM_IDTR_OFF + 4] = 0x00; Buffer[GU_TRAMP_RM_IDTR_OFF + 5] = 0x00; /* Base = 0x00000000 */
 
-  /* +0x0408: PM_GDTR (6 bytes) */
-  *(UINT16 *)(Buffer + 0x0408) = (UINT16)((5 * 8) - 1); /* Limit = 39 (0x0027) */
-  *(UINT32 *)(Buffer + 0x040A) = (UINT32)(TrampolinePhys + 0x0410); /* Base = TrampolinePhys + 0x0410 */
+  /* +0x0608: PM_GDTR (6 bytes) */
+  *(UINT16 *)(Buffer + GU_TRAMP_PM_GDTR_OFF) = (UINT16)((5 * 8) - 1); /* Limit = 39 (0x0027) */
+  *(UINT32 *)(Buffer + GU_TRAMP_PM_GDTR_OFF + 2) = (UINT32)(TrampolinePhys + GU_TRAMP_GDT_BASE_OFF); /* Base = TrampolinePhys + 0x0610 */
 
-  /* +0x0410: GDT (5 descriptors = 40 bytes) */
-  memset(Buffer + 0x0410, 0, 8); /* Entry 0: 0x00 Null */
+  /* +0x0610: GDT (5 descriptors = 40 bytes) */
+  memset(Buffer + GU_TRAMP_GDT_BASE_OFF, 0, 8); /* Entry 0: 0x00 Null */
 
   /* Entry 1: 0x08 32-bit Flat Code (Base=0, Limit=4GB, G=1, D=1, P=1, DPL=0, Type=0x9A) */
-  UINT8 *desc = Buffer + 0x0418;
+  UINT8 *desc = Buffer + GU_TRAMP_GDT_BASE_OFF + 0x08;
   desc[0] = 0xFF; desc[1] = 0xFF; desc[2] = 0x00; desc[3] = 0x00;
   desc[4] = 0x00; desc[5] = 0x9A; desc[6] = 0xCF; desc[7] = 0x00;
 
   /* Entry 2: 0x10 32-bit Flat Data (Base=0, Limit=4GB, G=1, D=1, P=1, DPL=0, Type=0x92) */
-  desc = Buffer + 0x0420;
+  desc = Buffer + GU_TRAMP_GDT_BASE_OFF + 0x10;
   desc[0] = 0xFF; desc[1] = 0xFF; desc[2] = 0x00; desc[3] = 0x00;
   desc[4] = 0x00; desc[5] = 0x92; desc[6] = 0xCF; desc[7] = 0x00;
 
   /* Entry 3: 0x18 16-bit Code (Base=TrampolinePhys&0xFFFF0000, Limit=64KB, G=0, D=0, Type=0x9A) */
   UINT32 tramp_base16 = (UINT32)(TrampolinePhys & 0xFFFF0000ULL);
-  desc = Buffer + 0x0428;
+  desc = Buffer + GU_TRAMP_GDT_BASE_OFF + 0x18;
   desc[0] = 0xFF; desc[1] = 0xFF;
   desc[2] = (UINT8)(tramp_base16 & 0xFF);
   desc[3] = (UINT8)((tramp_base16 >> 8) & 0xFF);
@@ -515,7 +513,7 @@ UINT32 GuAcpiBuildTrampolineCode(
   desc[7] = (UINT8)((tramp_base16 >> 24) & 0xFF);
 
   /* Entry 4: 0x20 16-bit Data (Base=TrampolinePhys&0xFFFF0000, Limit=64KB, G=0, D=0, Type=0x92) */
-  desc = Buffer + 0x0430;
+  desc = Buffer + GU_TRAMP_GDT_BASE_OFF + 0x20;
   desc[0] = 0xFF; desc[1] = 0xFF;
   desc[2] = (UINT8)(tramp_base16 & 0xFF);
   desc[3] = (UINT8)((tramp_base16 >> 8) & 0xFF);
@@ -625,8 +623,8 @@ UINT32 GuAcpiBuildTrampolineCode(
    * reading, 128-byte telemetry mirroring, and temporary BAR0 hardware rate-limiter unlock.
    */
 
-  /* In 16-bit Real Mode: Load GDTR from CS:0x0408 (TrampolinePhys + 0x0408) */
-  *e++ = 0x2E; *e++ = 0x0F; *e++ = 0x01; *e++ = 0x16; *e++ = 0x08; *e++ = 0x04; /* lgdt [cs:0x0408] */
+  /* In 16-bit Real Mode: Load GDTR from CS:0x0608 (TrampolinePhys + GU_TRAMP_PM_GDTR_OFF) (v1.8.53) */
+  *e++ = 0x2E; *e++ = 0x0F; *e++ = 0x01; *e++ = 0x16; *e++ = 0x08; *e++ = 0x06; /* lgdt [cs:0x0608] */
 
   /* Enter Protected Mode: CR0.PE = 1 */
   *e++ = 0x66; *e++ = 0x0F; *e++ = 0x20; *e++ = 0xC0; /* mov eax, cr0 */
@@ -657,9 +655,9 @@ UINT32 GuAcpiBuildTrampolineCode(
   *(UINT32 *)e = high_telem_dest; e += 4;
   *e++ = 0x21; *e++ = 0x4F; *e++ = 0x4B; *e++ = 0x32; /* 0x324B4F21 ('!OK2') */
 
-  /* Load Real-Mode IDTR (Limit=0x3FF, Base=0) while in 32-bit mode */
+  /* Load Real-Mode IDTR (Limit=0x3FF, Base=0) while in 32-bit mode (v1.8.53: TrampolinePhys + GU_TRAMP_RM_IDTR_OFF) */
   *e++ = 0x0F; *e++ = 0x01; *e++ = 0x1D;             /* lidt [disp32] */
-  *(UINT32 *)e = (UINT32)(TrampolinePhys + 0x0400); e += 4;
+  *(UINT32 *)e = (UINT32)(TrampolinePhys + GU_TRAMP_RM_IDTR_OFF); e += 4; /* TrampolinePhys + 0x0600 */
 
   /* Task (a): Read real Windows waking vector from ShadowFACS + 0x0C */
   *e++ = 0x8B; *e++ = 0x35;                         /* mov esi, [disp32] */
@@ -855,6 +853,53 @@ UINT32 GuAcpiBuildTrampolineCode(
   *e++ = 0x8B; *e++ = 0x83; *(UINT32 *)e = 0x00840100U; e += 4; /* mov eax, [ebx + 0x00840100] */
   *e++ = 0xA3; *(UINT32 *)e = (UINT32)(high_telem_dest + 0xD0); e += 4; /* mov [dest+0xD0], eax */
 
+  /* 4. FBIF & Booter DMA Setup, Falcon CPU Start and Halt Polling (v1.8.53) */
+  /* FBIF Trans Enable: [ebx + 0x00840624] |= 0x80 */
+  *e++ = 0x8B; *e++ = 0x83; *(UINT32 *)e = 0x00840624U; e += 4; /* mov eax, [ebx + 0x00840624] */
+  *e++ = 0x0C; *e++ = 0x80;                                     /* or al, 0x80 */
+  *e++ = 0x89; *e++ = 0x83; *(UINT32 *)e = 0x00840624U; e += 4; /* mov [ebx + 0x00840624], eax */
+
+  /* Clear Falcon IRQ Status: [ebx + 0x0084010C] = 0 */
+  *e++ = 0x31; *e++ = 0xC0;                                     /* xor eax, eax */
+  *e++ = 0x89; *e++ = 0x83; *(UINT32 *)e = 0x0084010CU; e += 4; /* mov [ebx + 0x0084010C], eax */
+
+  /* FBIF Trans Mode Setup: [ebx + 0x00840600] = ([ebx + 0x00840600] & ~7) | 5 */
+  *e++ = 0x8B; *e++ = 0x83; *(UINT32 *)e = 0x00840600U; e += 4; /* mov eax, [ebx + 0x00840600] */
+  *e++ = 0x24; *e++ = 0xF8;                                     /* and al, 0xF8 */
+  *e++ = 0x0C; *e++ = 0x05;                                     /* or al, 0x05 */
+  *e++ = 0x89; *e++ = 0x83; *(UINT32 *)e = 0x00840600U; e += 4; /* mov [ebx + 0x00840600], eax */
+
+  /* Booter DMA address low: [ebx + 0x00840110] = booter_dma >> 8 */
+  *e++ = 0xC7; *e++ = 0x83; *(UINT32 *)e = 0x00840110U; e += 4; /* mov dword [ebx + 0x00840110], imm32 */
+  *(UINT32 *)e = (UINT32)(booter_dma >> 8); e += 4;
+
+  /* Booter DMA address high: [ebx + 0x00840114] = 0 */
+  *e++ = 0x31; *e++ = 0xC0;                                     /* xor eax, eax */
+  *e++ = 0x89; *e++ = 0x83; *(UINT32 *)e = 0x00840114U; e += 4; /* mov [ebx + 0x00840114], eax */
+
+  /* Booter DMA size & kick: [ebx + 0x00840118] = booter_sz_param */
+  *e++ = 0xC7; *e++ = 0x83; *(UINT32 *)e = 0x00840118U; e += 4; /* mov dword [ebx + 0x00840118], imm32 */
+  *(UINT32 *)e = booter_sz_param; e += 4;
+
+  /* Start Falcon CPU: [ebx + 0x00840100] = 2 */
+  *e++ = 0xC7; *e++ = 0x83; *(UINT32 *)e = 0x00840100U; e += 4; /* mov dword [ebx + 0x00840100], 2 */
+  *(UINT32 *)e = 2; e += 4;
+
+  /* Poll Falcon Engine Halt (Bit 4 == 0x10 in CPUCTL) with bounded timeout (50,000 iterations) */
+  *e++ = 0xB9; *e++ = 0x50; *e++ = 0xC3; *e++ = 0x00; *e++ = 0x00; /* mov ecx, 50000 */
+  UINT8 *halt_poll_start = e;
+  *e++ = 0x8B; *e++ = 0x83; *(UINT32 *)e = 0x00840100U; e += 4;   /* mov eax, [ebx + 0x00840100] */
+  *e++ = 0xA8; *e++ = 0x10;                                       /* test al, 0x10 */
+  *e++ = 0x75;                                                   /* jnz .halt_done */
+  UINT8 *halt_break = e++;
+  *e++ = 0x49;                                                   /* dec ecx */
+  *e++ = 0x75;                                                   /* jnz halt_poll_start */
+  *e++ = (UINT8)(halt_poll_start - (e + 1));
+  *halt_break = (UINT8)(e - (halt_break + 1));
+
+  /* Save post-booter SEC2_CPUCTL to +0xD8 (v1.8.53) */
+  *e++ = 0xA3; *(UINT32 *)e = (UINT32)(high_telem_dest + GU_TELEM_BOOTER_CPUCTL_POST_OFF); e += 4; /* mov [dest+0xD8], eax */
+
   /* Read pre-unlock registers: SS0 (0x82381C), SS1 (0x823820), PLM (0x823804), Readout1 (0x823818) */
   *e++ = 0x8B; *e++ = 0x83; *(UINT32 *)e = 0x0082381CU; e += 4; /* mov eax, [ebx + 0x0082381C] */
   *e++ = 0xA3; *(UINT32 *)e = (UINT32)(high_telem_dest + 0x90); e += 4; /* mov [dest+0x90], eax */
@@ -1017,6 +1062,11 @@ UINT32 GuAcpiBuildTrampolineCode(
 
   /* Far indirect jump directly to Windows HalpRMStub */
   *e++ = 0x2E; *e++ = 0xFF; *e++ = 0x2E; *e++ = 0x00; *e++ = 0x05; /* jmp far ptr cs:[0x0500] */
+
+  if ((UINT32)(e - Buffer) > 0x0500U) {
+    /* Machine code exceeded 1280 bytes (would overwrite telemetry area at 0x0500) */
+    return 0;
+  }
 
   return (UINT32)(e - Buffer);
 }
@@ -1286,20 +1336,21 @@ EFI_STATUS GuAcpiInstallShadowFacs(
       UINT32 unlk_status = *(UINT32 *)(telemetry_page + GU_TELEM_UNLOCK_STATUS_OFF);
       UINT32 unlk_chip   = *(UINT32 *)(telemetry_page + GU_TELEM_CHIP_ID_OFF);
       UINT32 unlk_bar0   = *(UINT32 *)(telemetry_page + GU_TELEM_BAR0_ASSIGNED_OFF);
-      UINT32 bcr_post    = *(UINT32 *)(telemetry_page + GU_TELEM_FALCON2_BCR_POST_OFF);
-      UINT32 cpuctl_post = *(UINT32 *)(telemetry_page + GU_TELEM_SEC2_CPUCTL_POST_OFF);
-      UINT32 ss0_before  = *(UINT32 *)(telemetry_page + GU_TELEM_SS0_BEFORE_OFF);
-      UINT32 ss1_before  = *(UINT32 *)(telemetry_page + GU_TELEM_SS1_BEFORE_OFF);
-      UINT32 ss0_after   = *(UINT32 *)(telemetry_page + GU_TELEM_SS0_AFTER_OFF);
-      UINT32 ss1_after   = *(UINT32 *)(telemetry_page + GU_TELEM_SS1_AFTER_OFF);
-      UINT32 ro_after    = *(UINT32 *)(telemetry_page + GU_TELEM_READOUT_AFTER_OFF);
+      UINT32 bcr_post      = *(UINT32 *)(telemetry_page + GU_TELEM_FALCON2_BCR_POST_OFF);
+      UINT32 cpuctl_post   = *(UINT32 *)(telemetry_page + GU_TELEM_SEC2_CPUCTL_POST_OFF);
+      UINT32 booter_cpuctl = *(UINT32 *)(telemetry_page + GU_TELEM_BOOTER_CPUCTL_POST_OFF);
+      UINT32 ss0_before    = *(UINT32 *)(telemetry_page + GU_TELEM_SS0_BEFORE_OFF);
+      UINT32 ss1_before    = *(UINT32 *)(telemetry_page + GU_TELEM_SS1_BEFORE_OFF);
+      UINT32 ss0_after     = *(UINT32 *)(telemetry_page + GU_TELEM_SS0_AFTER_OFF);
+      UINT32 ss1_after     = *(UINT32 *)(telemetry_page + GU_TELEM_SS1_AFTER_OFF);
+      UINT32 ro_after      = *(UINT32 *)(telemetry_page + GU_TELEM_READOUT_AFTER_OFF);
       GuLog("S3 Wake Hardware Unlock Telemetry: Magic=UNLK Status=%u Chip=%#08x AssignedBAR0=%#08x\n"
-            "  BCR_Post: %#08x CPUCTL_Post: %#08x\n"
+            "  BCR_Post: %#08x CPUCTL_Post: %#08x Booter_CPUCTL: %#08x\n"
             "  SS0: %#08x -> %#08x (Target 0x88888888)\n"
             "  SS1: %#08x -> %#08x (Target 0x00000008)\n"
             "  Readout1: %#08x (Full-Rate = 0x00000000)\n",
             (unsigned)unlk_status, (unsigned)unlk_chip, (unsigned)unlk_bar0,
-            (unsigned)bcr_post, (unsigned)cpuctl_post,
+            (unsigned)bcr_post, (unsigned)cpuctl_post, (unsigned)booter_cpuctl,
             (unsigned)ss0_before, (unsigned)ss0_after,
             (unsigned)ss1_before, (unsigned)ss1_after,
             (unsigned)ro_after);

@@ -6,6 +6,40 @@ For packaged binaries and downloads, visit [GitHub Releases](https://github.com/
 
 ---
 
+## [v1.8.53] - 2026-11-24
+### Added & Fixed
+- **SEC2 FBIF & Booter DMA Handshake & Falcon CPU Execution im 32-Bit Flat Mode bei S3-Wake (addresses #19):**
+  - **Forensischer Durchbruch mit v1.8.52 bestätigt:**
+    - Live-Kernel-Telemetrie (`kdX64.exe -kl`) bei `0xd8261000` bewies den vollen Erfolg des FALCON2_BCR Switches:
+      - `+0xCC` (`FALCON2_BCR_Before`): `0x00000110` (Boot-ROM-Modus aktiv).
+      - `+0xD4` (`FALCON2_BCR_Post`): `0x00000001` (Boot-ROM-Modus erfolgreich verlassen).
+      - `+0xD0` (`SEC2_CPUCTL_Post`): `0x00000010` (Bit 4 Halt gesetzt, `0xBADF5620` vollständig eliminiert, SEC2 Falcon CPU bereit!).
+      - System-Wake: 1746 ms `BiosInitDuration`, 100% stabil, Event 107 clean.
+  - **FBIF Setup & Booter DMA Transfer (`src/s3_facs.c`):**
+    - Aktivierung des Framebuffer Interfaces (FBIF): `[ebx + 0x00840624] |= 0x80`.
+    - Quittierung anstehender Interrupts: `[ebx + 0x0084010C] = 0`.
+    - FBIF Transfer Mode Setup: `[ebx + 0x00840600] = ([ebx + 0x00840600] & ~7) | 5`.
+    - Booter Microcode DMA Programmierung:
+      - DMA Base Low (`0x00840110`): Physische 32-Bit-Adresse des in ACPI NVS gestageten Booters (`booter_dma >> 8`).
+      - DMA Base High (`0x00840114`): `0`.
+      - DMA Size & Transfer Kick (`0x00840118`): `(booter_size & ~0xFF) | 0x10`.
+  - **Falcon CPU Start & Bounded Polling auf Engine Halt:**
+    - CPU Start: `[ebx + 0x00840100] = 2`.
+    - Bounded Polling auf Engine Halt (`[ebx + 0x00840100] & 0x10 != 0`) mit maximal 50.000 Iterationen (deterministischer Abbruch, kein Hang).
+    - Speicherung des post-booter `CPUCTL`-Status nach `+0xD8` (`GU_TELEM_BOOTER_CPUCTL_POST_OFF`).
+  - **Rate-Limiter Selector Writes & Verifikation:**
+    - Schreiben von `SS0` (`0x82381C -> 0x88888888`) und `SS1` (`0x823820 -> 0x00000008`).
+    - Rücklesen von `SS0`, `SS1`, `Readout1` (`0x823818`), `PLM` (`0x823804`) in die Telemetrie `+0xA0`..`+0xAC`.
+    - Status-Evaluation (`Status = 1` bei Übereinstimmung, `Status = 2` bei Mismatch).
+  - **Architektonisches Code-Layout & Envelope Management:**
+    - Verlagerung von `RM_IDTR` (`+0x0600`), `PM_GDTR` (`+0x0608`) und `GDT` (`+0x0610`..`0x0637`) hinter die Telemetrie (`0x0500..0x05BF`).
+    - Dadurch vergrößert sich der zusammenhängende Code-Runway von 1024 Bytes auf 1280 Bytes (`< 0x0500`).
+    - Maschinencode-Größe: **1115 Bytes** (`0x045B`), womit 165 Bytes Sicherheitsabstand vor `0x0500` garantiert bleiben.
+    - Alle 8.709 Checks in 10 Test-Suites grün (`MSVC_HOST_TESTS=PASS`).
+    - Vollständiger 4-Stufen-PCIe-Teardown, 0 CMOS/RTC-Mutation, `OspmFlags = 0`.
+
+---
+
 ## [v1.8.52] - 2026-11-24
 ### Added & Fixed
 - **SEC2 Falcon BCR Switch & Boot-ROM Unmasking im 32-Bit Flat Mode bei S3-Wake (addresses #19):**

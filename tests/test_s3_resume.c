@@ -447,16 +447,16 @@ static void TestGuAcpiFacsDiscoveryAndPatching(void) {
   for (UINT32 i = 0; i <= sizeof(mock_low_tramp) - 4; i++) {
     CHECK(memcmp(mock_low_tramp + i, "FACS", 4) != 0, "Low trampoline memory must contain ZERO bytes of 'FACS'");
   }
-  /* Verify GDT + RM_IDTR at +0x0400 (v1.8.47 16->32->16 bridge), with zero FACS/RSDP */
-  CHECK(*(UINT16 *)(mock_low_tramp + 0x0400) == 0x03FF, "Low trampoline +0x0400 must contain RM_IDTR limit");
-  CHECK(*(UINT32 *)(mock_low_tramp + 0x0402) == 0, "Low trampoline +0x0402 must contain RM_IDTR base 0");
-  CHECK(*(UINT16 *)(mock_low_tramp + 0x0408) == 0x0027, "Low trampoline +0x0408 must contain PM_GDTR limit 39");
+  /* Verify GDT + RM_IDTR at +0x0600 (v1.8.53 16->32->16 bridge), with zero FACS/RSDP */
+  CHECK(*(UINT16 *)(mock_low_tramp + GU_TRAMP_RM_IDTR_OFF) == 0x03FF, "Low trampoline +0x0600 must contain RM_IDTR limit");
+  CHECK(*(UINT32 *)(mock_low_tramp + GU_TRAMP_RM_IDTR_OFF + 2) == 0, "Low trampoline +0x0602 must contain RM_IDTR base 0");
+  CHECK(*(UINT16 *)(mock_low_tramp + GU_TRAMP_PM_GDTR_OFF) == 0x0027, "Low trampoline +0x0608 must contain PM_GDTR limit 39");
   /* Verify unused buffer regions are zero-initialized */
-  for (UINT32 i = 0x438; i < 0x500; i++) {
-    CHECK(mock_low_tramp[i] == 0, "Low trampoline memory +0x438..+0x4FF must be zero-initialized");
-  }
   for (UINT32 i = 0x590; i < 0x600; i++) {
     CHECK(mock_low_tramp[i] == 0, "Low trampoline memory +0x590..+0x5FF must be zero-initialized");
+  }
+  for (UINT32 i = 0x638; i < 0x700; i++) {
+    CHECK(mock_low_tramp[i] == 0, "Low trampoline memory +0x638..+0x6FF must be zero-initialized");
   }
   /* Verify Real FACS Mirror at +0x0580 */
   CHECK(*(UINT32 *)(mock_low_tramp + GU_TRAMP_REAL_FACS_MIRROR_OFF) == 0x00007C00U, "Real FACS mirror at +0x580");
@@ -618,7 +618,7 @@ static void TestGuAcpiBuildTrampolineCode(void) {
 
   UINT32 bytes = GuAcpiBuildTrampolineCode(buffer, sizeof(buffer), tramp_phys, ctx_phys, shadow_facs_phys, telem_phys, 0xFB000000ULL, 0x80001960U, 0x802D0064U);
   CHECK(bytes > 0, "Trampoline builder must generate non-zero bytes");
-  CHECK(bytes <= 1024, "Trampoline machine code must fit within 1024 bytes (<0x0400)");
+  CHECK(bytes <= 1280, "Trampoline machine code must fit within 1280 bytes (<0x0500 telemetry area)");
 
   /* 1. Check Preamble: cli, cld */
   CHECK(buffer[0] == 0xFA, "Preamble must start with CLI (0xFA)");
@@ -752,7 +752,7 @@ static void TestGuAcpiBuildTrampolineCode(void) {
 
   /* Disassembly & Hex Dump Output for User Inspection */
   printf("\n==================== 16-BIT REAL-MODE TRAMPOLINE DISASSEMBLY & HEX DUMP ====================\n");
-  printf("Trampoline Total Size: %u bytes (Execution envelope: 0x0000 - 0x03FF, 1024 bytes limit)\n", bytes);
+  printf("Trampoline Total Size: %u bytes (Execution envelope: 0x0000 - 0x04FF, 1280 bytes limit (<0x0500))\n", bytes);
   printf("--------------------------------------------------------------------------------------------\n");
   const char *desc = "";
   BOOLEAN found_hlt = FALSE;
@@ -805,7 +805,7 @@ static void TestGuAcpiBuildTrampolineCode(void) {
     else if (buffer[i] == 0x66 && buffer[i+1] == 0xA3 && buffer[i+2] == 0x68 && buffer[i+3] == 0x05) { instr_len = 4; desc = "mov [0x0568], eax                ; Store Post-Arm GPU BAR0"; }
     else if (buffer[i] == 0x66 && buffer[i+1] == 0xA1 && buffer[i+2] == 0x3C && buffer[i+3] == 0x05) { instr_len = 4; desc = "mov eax, [0x053C]                ; Load dynamic GPU PMCSR address"; }
     else if (buffer[i] == 0x66 && buffer[i+1] == 0xA3 && buffer[i+2] == 0x6C && buffer[i+3] == 0x05) { instr_len = 4; desc = "mov [0x056C], eax                ; Store Post-Arm GPU PMCSR"; }
-    else if (buffer[i] == 0x2E && buffer[i+1] == 0x0F && buffer[i+2] == 0x01 && buffer[i+3] == 0x16 && buffer[i+4] == 0x08 && buffer[i+5] == 0x04) { instr_len = 6; desc = ".skip_bridge: lgdt [cs:0x0408]   ; Load 32-bit PM GDTR"; }
+    else if (buffer[i] == 0x2E && buffer[i+1] == 0x0F && buffer[i+2] == 0x01 && buffer[i+3] == 0x16 && buffer[i+4] == 0x08 && buffer[i+5] == 0x06) { instr_len = 6; desc = ".skip_bridge: lgdt [cs:0x0608]   ; Load 32-bit PM GDTR"; }
     else if (buffer[i] == 0x66 && buffer[i+1] == 0x0F && buffer[i+2] == 0x20 && buffer[i+3] == 0xC0) { instr_len = 4; desc = "mov eax, cr0"; }
     else if (buffer[i] == 0x0C && buffer[i+1] == 0x01) { instr_len = 2; desc = "or al, 1                         ; Set CR0.PE = 1 (Enable PM)"; }
     else if (buffer[i] == 0x66 && buffer[i+1] == 0x0F && buffer[i+2] == 0x22 && buffer[i+3] == 0xC0) { instr_len = 4; desc = "mov cr0, eax"; }
@@ -817,7 +817,7 @@ static void TestGuAcpiBuildTrampolineCode(void) {
     else if (buffer[i] == 0x8E && buffer[i+1] == 0xE8) { instr_len = 2; desc = "mov gs, ax"; }
     else if (buffer[i] == 0x8E && buffer[i+1] == 0xD0) { instr_len = 2; desc = "mov ss, ax"; }
     else if (buffer[i] == 0xC7 && buffer[i+1] == 0x05 && buffer[i+6] == 0x21 && buffer[i+7] == 0x4F && buffer[i+8] == 0x4B && buffer[i+9] == 0x32) { instr_len = 10; desc = "mov dword [HighAcpiPage+0x500], 0x324B4F21 ; Write Diagnostic Marker '!OK2'"; }
-    else if (buffer[i] == 0x0F && buffer[i+1] == 0x01 && buffer[i+2] == 0x1D) { instr_len = 7; desc = "lidt [TrampolinePhys+0x0400]        ; Load Real-Mode IDTR (Limit=0x3FF, Base=0)"; }
+    else if (buffer[i] == 0x0F && buffer[i+1] == 0x01 && buffer[i+2] == 0x1D) { instr_len = 7; desc = "lidt [TrampolinePhys+0x0600]        ; Load Real-Mode IDTR (Limit=0x3FF, Base=0)"; }
     else if (buffer[i] == 0x8B && buffer[i+1] == 0x35) { instr_len = 6; desc = "mov esi, [ShadowFACS+0x0C]     ; Read Windows Waking Vector from High Page"; }
     else if (buffer[i] == 0x85 && buffer[i+1] == 0xF6) { instr_len = 2; desc = "test esi, esi"; }
     else if (buffer[i] == 0x75 && buffer[i+1] == 0x05) { instr_len = 2; desc = "jnz .have_vec32"; }
@@ -850,6 +850,19 @@ static void TestGuAcpiBuildTrampolineCode(void) {
     else if (buffer[i] == 0x80 && buffer[i+1] == 0xFA && buffer[i+2] == 0x01) { instr_len = 3; desc = "cmp dl, 0x01                     ; Check BCR unmasked (BCR & 0x11 == 1)"; }
     else if (buffer[i] == 0x89 && buffer[i+1] == 0x83 && buffer[i+2] == 0x84 && buffer[i+3] == 0x00 && buffer[i+4] == 0x84 && buffer[i+5] == 0x00) { instr_len = 6; desc = "mov [ebx+0x840084], eax             ; Write Chip-ID to SEC2 (BAR0 + 0x840084)"; }
     else if (buffer[i] == 0x8B && buffer[i+1] == 0x83 && buffer[i+2] == 0x00 && buffer[i+3] == 0x01 && buffer[i+4] == 0x84 && buffer[i+5] == 0x00) { instr_len = 6; desc = "mov eax, [ebx+0x840100]             ; Read SEC2 Falcon CPUCTL"; }
+    else if (buffer[i] == 0x8B && buffer[i+1] == 0x83 && buffer[i+2] == 0x24 && buffer[i+3] == 0x06 && buffer[i+4] == 0x84 && buffer[i+5] == 0x00) { instr_len = 6; desc = "mov eax, [ebx+0x840624]             ; Read SEC2 FBIF Trans Enable"; }
+    else if (buffer[i] == 0x0C && buffer[i+1] == 0x80) { instr_len = 2; desc = "or al, 0x80                         ; Enable SEC2 FBIF Trans"; }
+    else if (buffer[i] == 0x89 && buffer[i+1] == 0x83 && buffer[i+2] == 0x24 && buffer[i+3] == 0x06 && buffer[i+4] == 0x84 && buffer[i+5] == 0x00) { instr_len = 6; desc = "mov [ebx+0x840624], eax             ; Write SEC2 FBIF Trans Enable"; }
+    else if (buffer[i] == 0x89 && buffer[i+1] == 0x83 && buffer[i+2] == 0x0C && buffer[i+3] == 0x01 && buffer[i+4] == 0x84 && buffer[i+5] == 0x00) { instr_len = 6; desc = "mov [ebx+0x84010C], eax             ; Clear Falcon IRQ Status (0x0084010C)"; }
+    else if (buffer[i] == 0x8B && buffer[i+1] == 0x83 && buffer[i+2] == 0x00 && buffer[i+3] == 0x06 && buffer[i+4] == 0x84 && buffer[i+5] == 0x00) { instr_len = 6; desc = "mov eax, [ebx+0x840600]             ; Read SEC2 FBIF Trans Mode"; }
+    else if (buffer[i] == 0x24 && buffer[i+1] == 0xF8) { instr_len = 2; desc = "and al, 0xF8                        ; Clear FBIF mode bits [2:0]"; }
+    else if (buffer[i] == 0x0C && buffer[i+1] == 0x05) { instr_len = 2; desc = "or al, 0x05                         ; Set FBIF trans mode 5"; }
+    else if (buffer[i] == 0x89 && buffer[i+1] == 0x83 && buffer[i+2] == 0x00 && buffer[i+3] == 0x06 && buffer[i+4] == 0x84 && buffer[i+5] == 0x00) { instr_len = 6; desc = "mov [ebx+0x840600], eax             ; Write SEC2 FBIF Trans Mode"; }
+    else if (buffer[i] == 0xC7 && buffer[i+1] == 0x83 && buffer[i+2] == 0x10 && buffer[i+3] == 0x01 && buffer[i+4] == 0x84 && buffer[i+5] == 0x00) { instr_len = 10; desc = "mov dword [ebx+0x840110], booter_dma ; Set SEC2 Booter DMA Address Low"; }
+    else if (buffer[i] == 0x89 && buffer[i+1] == 0x83 && buffer[i+2] == 0x14 && buffer[i+3] == 0x01 && buffer[i+4] == 0x84 && buffer[i+5] == 0x00) { instr_len = 6; desc = "mov [ebx+0x840114], eax             ; Set SEC2 Booter DMA Address High (0)"; }
+    else if (buffer[i] == 0xC7 && buffer[i+1] == 0x83 && buffer[i+2] == 0x18 && buffer[i+3] == 0x01 && buffer[i+4] == 0x84 && buffer[i+5] == 0x00) { instr_len = 10; desc = "mov dword [ebx+0x840118], booter_sz  ; Set SEC2 Booter DMA Size & Kick"; }
+    else if (buffer[i] == 0xC7 && buffer[i+1] == 0x83 && buffer[i+2] == 0x00 && buffer[i+3] == 0x01 && buffer[i+4] == 0x84 && buffer[i+5] == 0x00 && *(UINT32 *)(buffer + i + 6) == 2U) { instr_len = 10; desc = "mov dword [ebx+0x840100], 2          ; Start SEC2 Falcon CPU (CPUCTL = 2)"; }
+    else if (buffer[i] == 0xA8 && buffer[i+1] == 0x10) { instr_len = 2; desc = "test al, 0x10                       ; Test Falcon Halt Bit (CPUCTL & 0x10)"; }
     else if (buffer[i] == 0x49) { instr_len = 1; desc = "dec ecx                             ; Decrement loop/poll timeout"; }
     else if (buffer[i] == 0xC7 && buffer[i+1] == 0x83 && buffer[i+2] == 0x1C && buffer[i+3] == 0x38 && buffer[i+4] == 0x82 && buffer[i+5] == 0x00) { instr_len = 10; desc = "mov dword [ebx+0x82381C], 0x88888888 ; Write SS0 Rate-Limiter Unlock"; }
     else if (buffer[i] == 0xC7 && buffer[i+1] == 0x83 && buffer[i+2] == 0x20 && buffer[i+3] == 0x38 && buffer[i+4] == 0x82 && buffer[i+5] == 0x00) { instr_len = 10; desc = "mov dword [ebx+0x823820], 0x00000008 ; Write SS1 Rate-Limiter Unlock"; }
@@ -914,17 +927,17 @@ static void TestGuAcpiBuildTrampolineCode(void) {
   printf("============================================================================================\n\n");
 
   /* Explicit Sanity Check 6: 16->32->16 Flat Mode Bridge checks */
-  /* Verify RM_IDTR and PM_GDTR at buffer + 0x0400 */
-  CHECK(buffer[0x0400] == 0xFF && buffer[0x0401] == 0x03, "RM_IDTR limit must be 0x03FF");
-  CHECK(*(UINT32 *)(buffer + 0x0402) == 0, "RM_IDTR base must be 0");
-  CHECK(*(UINT16 *)(buffer + 0x0408) == 0x0027, "PM_GDTR limit must be 39 (5 descriptors)");
-  CHECK(*(UINT32 *)(buffer + 0x040A) == (UINT32)(tramp_phys + 0x0410), "PM_GDTR base must be TrampolinePhys + 0x0410");
+  /* Verify RM_IDTR and PM_GDTR at buffer + GU_TRAMP_RM_IDTR_OFF (0x0600) (v1.8.53) */
+  CHECK(buffer[0x0600] == 0xFF && buffer[0x0601] == 0x03, "RM_IDTR limit must be 0x03FF");
+  CHECK(*(UINT32 *)(buffer + 0x0602) == 0, "RM_IDTR base must be 0");
+  CHECK(*(UINT16 *)(buffer + 0x0608) == 0x0027, "PM_GDTR limit must be 39 (5 descriptors)");
+  CHECK(*(UINT32 *)(buffer + 0x060A) == (UINT32)(tramp_phys + 0x0610), "PM_GDTR base must be TrampolinePhys + 0x0610");
 
-  /* Verify GDT Descriptors at +0x0410 */
-  CHECK(buffer[0x041D] == 0x9A && buffer[0x041E] == 0xCF, "GDT[1] 32-bit Code Descriptor (0x08)");
-  CHECK(buffer[0x0425] == 0x92 && buffer[0x0426] == 0xCF, "GDT[2] 32-bit Data Descriptor (0x10)");
-  CHECK(buffer[0x042D] == 0x9A && buffer[0x042E] == 0x00, "GDT[3] 16-bit Code Descriptor (0x18)");
-  CHECK(buffer[0x0435] == 0x92 && buffer[0x0436] == 0x00, "GDT[4] 16-bit Data Descriptor (0x20)");
+  /* Verify GDT Descriptors at +0x0610 */
+  CHECK(buffer[0x061D] == 0x9A && buffer[0x061E] == 0xCF, "GDT[1] 32-bit Code Descriptor (0x08)");
+  CHECK(buffer[0x0625] == 0x92 && buffer[0x0626] == 0xCF, "GDT[2] 32-bit Data Descriptor (0x10)");
+  CHECK(buffer[0x062D] == 0x9A && buffer[0x062E] == 0x00, "GDT[3] 16-bit Code Descriptor (0x18)");
+  CHECK(buffer[0x0635] == 0x92 && buffer[0x0636] == 0x00, "GDT[4] 16-bit Data Descriptor (0x20)");
 
   /* Verify Fallback in 32-bit PM (mov esi, 0x00001000) */
   BOOLEAN found_fallback = FALSE;
@@ -1045,6 +1058,59 @@ static void TestGuAcpiBuildTrampolineCode(void) {
   CHECK(found_telem_bcr_post, "Trampoline must save post-switch FALCON2_BCR to Telemetry +0xD4");
   CHECK(found_chip_id_write, "Trampoline must write Chip-ID to SEC2 (BAR0 + 0x840084)");
   CHECK(found_telem_cpuctl_post, "Trampoline must save post-reset CPUCTL to Telemetry +0xD0");
+
+  /* Verify FBIF & Booter DMA Handshake and Falcon CPU Start (v1.8.53) */
+  BOOLEAN found_fbif_trans_read = FALSE;
+  BOOLEAN found_fbif_trans_write = FALSE;
+  BOOLEAN found_irq_clear = FALSE;
+  BOOLEAN found_fbif_mode_write = FALSE;
+  BOOLEAN found_booter_dma_low = FALSE;
+  BOOLEAN found_booter_dma_high = FALSE;
+  BOOLEAN found_booter_dma_size = FALSE;
+  BOOLEAN found_falcon_cpu_start = FALSE;
+  BOOLEAN found_poll_falcon_halt = FALSE;
+  BOOLEAN found_telem_booter_cpuctl = FALSE;
+  for (UINT32 i = pm32_offset; i < pm16_offset - 9; i++) {
+    if (buffer[i] == 0x8B && buffer[i+1] == 0x83 && *(UINT32 *)(buffer + i + 2) == 0x00840624U) {
+      found_fbif_trans_read = TRUE;
+    }
+    if (buffer[i] == 0x89 && buffer[i+1] == 0x83 && *(UINT32 *)(buffer + i + 2) == 0x00840624U) {
+      found_fbif_trans_write = TRUE;
+    }
+    if (buffer[i] == 0x89 && buffer[i+1] == 0x83 && *(UINT32 *)(buffer + i + 2) == 0x0084010CU) {
+      found_irq_clear = TRUE;
+    }
+    if (buffer[i] == 0x89 && buffer[i+1] == 0x83 && *(UINT32 *)(buffer + i + 2) == 0x00840600U) {
+      found_fbif_mode_write = TRUE;
+    }
+    if (buffer[i] == 0xC7 && buffer[i+1] == 0x83 && *(UINT32 *)(buffer + i + 2) == 0x00840110U) {
+      found_booter_dma_low = TRUE;
+    }
+    if (buffer[i] == 0x89 && buffer[i+1] == 0x83 && *(UINT32 *)(buffer + i + 2) == 0x00840114U) {
+      found_booter_dma_high = TRUE;
+    }
+    if (buffer[i] == 0xC7 && buffer[i+1] == 0x83 && *(UINT32 *)(buffer + i + 2) == 0x00840118U) {
+      found_booter_dma_size = TRUE;
+    }
+    if (buffer[i] == 0xC7 && buffer[i+1] == 0x83 && *(UINT32 *)(buffer + i + 2) == 0x00840100U && *(UINT32 *)(buffer + i + 6) == 2U) {
+      found_falcon_cpu_start = TRUE;
+    }
+    if (buffer[i] == 0xA8 && buffer[i+1] == 0x10) {
+      found_poll_falcon_halt = TRUE;
+    }
+    if (buffer[i] == 0xA3 && *(UINT32 *)(buffer + i + 1) == (UINT32)(telem_phys + 0xD8)) {
+      found_telem_booter_cpuctl = TRUE;
+    }
+  }
+  CHECK(found_fbif_trans_read && found_fbif_trans_write, "Trampoline must enable FBIF Trans (0x00840624 |= 0x80)");
+  CHECK(found_irq_clear, "Trampoline must clear Falcon IRQ Status (0x0084010C = 0)");
+  CHECK(found_fbif_mode_write, "Trampoline must setup FBIF Trans Mode (0x00840600 = (val & ~7) | 5)");
+  CHECK(found_booter_dma_low, "Trampoline must write Booter DMA Address Low to 0x00840110");
+  CHECK(found_booter_dma_high, "Trampoline must write Booter DMA Address High to 0x00840114");
+  CHECK(found_booter_dma_size, "Trampoline must write Booter Size & kick DMA to 0x00840118");
+  CHECK(found_falcon_cpu_start, "Trampoline must start Falcon CPU (0x00840100 = 2)");
+  CHECK(found_poll_falcon_halt, "Trampoline must poll Falcon Engine Halt Bit (CPUCTL & 0x10)");
+  CHECK(found_telem_booter_cpuctl, "Trampoline must save post-booter CPUCTL to Telemetry +0xD8");
 
   /* Verify MSE + BME (0x06) programmed into Root Port Command & GPU Command */
   BOOLEAN found_cmd_bme = FALSE;

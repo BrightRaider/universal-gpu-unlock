@@ -1007,6 +1007,46 @@ In **v1.8.34** habe ich die Architektur umfassend überarbeitet und perfektionie
    - Vollständiger 4-Stufen-PCIe-Teardown (GPU Cmd, GPU BAR0, Root Port Window, Root Port Cmd) garantiert saubere Übergabe an den Windows-Kernel.
    - Strikte Sicherheitsgrenzen: 0 CMOS/RTC-Mutation, `OspmFlags = 0`.
 
+### 13.25 Die v1.8.53 Architektur: SEC2 FBIF & Booter DMA Handshake & Falcon CPU Execution im 32-Bit Flat Mode bei S3-Wake
+
+1. **Forensischer Durchbruch mit v1.8.52 bestätigt:**
+   - Die Live-Kernel-Telemetrie (`kdX64.exe -kl`) bei `0xd8261000` bewies den vollen Erfolg der Falcon-Entsperrung:
+     ```text
+     #d82610c0 40000000 00000000 000067b7 00000110
+     #d82610d0 00000010 00000001 00000000 00000000
+     ```
+     - `+0xCC` (`FALCON2_BCR_Before`): `0x00000110` (Boot-ROM aktiv).
+     - `+0xD4` (`FALCON2_BCR_Post`): `0x00000001` (Boot-ROM-Modus erfolgreich verlassen!).
+     - `+0xD0` (`SEC2_CPUCTL_Post`): **`0x00000010`**! `0xBADF5620` (`SYS_PRI_ERROR_CODE`) ist vollständig verschwunden! Bit 4 (Halt) ist gesetzt, die SEC2 Falcon CPU ist unmaskiert, getaktet und empfangsbereit für DMA/Booter-Befehle.
+     - System-Wake: 1746 ms `BiosInitDuration`, 100% stabil, Event 107 clean.
+
+2. **FBIF Setup & Booter DMA Handshake (`src/s3_facs.c`):**
+   - Auf Basis der RM-Sequenz (`src/s3_resume.c:46-65`) und `src/vendor/unlock_610.c`:
+     1. FBIF Trans Enable: `[ebx + 0x00840624] |= 0x80`.
+     2. Falcon IRQ Status Clear: `[ebx + 0x0084010C] = 0`.
+     3. FBIF Trans Mode Setup: `[ebx + 0x00840600] = ([ebx + 0x00840600] & ~7) | 5`.
+     4. Booter DMA Base Low: `[ebx + 0x00840110] = booter_dma >> 8` (physische Adresse in ACPI NVS `ContextPhys + 0x01000`).
+     5. Booter DMA Base High: `[ebx + 0x00840114] = 0`.
+     6. Booter DMA Size & Kick: `[ebx + 0x00840118] = (booter_size & ~0xFF) | 0x10`.
+
+3. **Falcon CPU Start & Bounded Polling auf Engine Halt:**
+   - CPU Start: `[ebx + 0x00840100] = 2` (`CPUCTL` Start).
+   - Bounded Polling auf Halt-Bit (`[ebx + 0x00840100] & 0x10 != 0`) mit maximal 50.000 Iterationen (deterministischer Abbruch, kein Hang).
+   - Speicherung des post-booter `CPUCTL`-Status nach `+0xD8` (`GU_TELEM_BOOTER_CPUCTL_POST_OFF`).
+
+4. **Rate-Limiter Selector Writes & Verifikation:**
+   - Der vom Falcon ausgeführte Booter schaltet die Hardware-Berechtigung (PLM) intern frei.
+   - Schreiben der Rate-Limiter Selektoren: `SS0` (`0x82381C -> 0x88888888`) und `SS1` (`0x823820 -> 0x00000008`).
+   - Rücklesen von `SS0`, `SS1`, `Readout1` (`0x823818`) und `PLM` (`0x823804`) in die Telemetrie `+0xA0`..`+0xAC`.
+   - Status-Evaluation (`Status = 1` bei Erfolg, `Status = 2` bei Mismatch).
+
+5. **Architektonisches Code-Layout & Envelope Management:**
+   - Verlagerung von `RM_IDTR` (`+0x0600`), `PM_GDTR` (`+0x0608`) und `GDT` (`+0x0610`..`0x0637`) hinter die Telemetrie (`0x0500..0x05BF`).
+   - Dadurch vergrößert sich die zusammenhängende Code-Landebahn von 1024 Bytes auf 1280 Bytes (`< 0x0500`).
+   - Maschinencode-Größe: **1115 Bytes** (`0x045B`), womit 165 Bytes Sicherheitsreserve vor `0x0500` garantiert bleiben.
+   - Alle 8.709 Checks in 10 Test-Suites grün (`MSVC_HOST_TESTS=PASS`).
+   - Vollständiger 4-Stufen-PCIe-Teardown, 0 CMOS/RTC-Mutation, `OspmFlags = 0`.
+
 
 
 

@@ -45,10 +45,10 @@
 #define GU_TRAMP_BIOS_SS_OFF           0x0572U
 #define GU_TRAMP_REAL_FACS_MIRROR_OFF  0x0580U
 
-/* GDT & IDTR Offsets within Low Trampoline Memory (<1MB) (v1.8.47) */
-#define GU_TRAMP_RM_IDTR_OFF           0x0400U
-#define GU_TRAMP_PM_GDTR_OFF           0x0408U
-#define GU_TRAMP_GDT_BASE_OFF          0x0410U
+/* GDT & IDTR Offsets within Low Trampoline Memory (<1MB) (v1.8.53: 0x0600..0x063F) */
+#define GU_TRAMP_RM_IDTR_OFF           0x0600U
+#define GU_TRAMP_PM_GDTR_OFF           0x0608U
+#define GU_TRAMP_GDT_BASE_OFF          0x0610U
 
 /* S3 Wake Hardware Unlock Telemetry Offsets within Non-NVS Telemetry Page (v1.8.47) */
 #define GU_TELEM_UNLOCK_MAGIC          0x554E4C4BU /* "UNLK" */
@@ -74,6 +74,7 @@
 #define GU_TELEM_FALCON2_BCR_OFF       0x00CCU /* FALCON2_BCR (BAR0 + 0x00841668) (v1.8.51) */
 #define GU_TELEM_SEC2_CPUCTL_POST_OFF  0x00D0U /* SEC2_CPUCTL after reset cycle (BAR0 + 0x00840100) (v1.8.51) */
 #define GU_TELEM_FALCON2_BCR_POST_OFF  0x00D4U /* FALCON2_BCR after switch out of Boot-ROM (BAR0 + 0x00841668) (v1.8.52) */
+#define GU_TELEM_BOOTER_CPUCTL_POST_OFF 0x00D8U /* SEC2_CPUCTL after booter execution (BAR0 + 0x00840100) (v1.8.53) */
 
 /* Dedicated High (>1MB, <4GB) ACPI NVS Page Offsets for Shadow Tables */
 #define GU_HIGH_SHADOW_RSDP_OFF        0x0000U
