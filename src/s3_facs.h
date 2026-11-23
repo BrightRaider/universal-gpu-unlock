@@ -15,6 +15,8 @@
 
 /* Signatures */
 #define GU_ACPI_RSDP_SIGNATURE    0x2052545020445352ULL /* "RSD PTR " */
+#define GU_ACPI_XSDT_SIGNATURE    0x54445358U           /* "XSDT" */
+#define GU_ACPI_RSDT_SIGNATURE    0x54445352U           /* "RSDT" */
 #define GU_ACPI_FADT_SIGNATURE    0x50434146U           /* "FACP" */
 #define GU_ACPI_FACS_SIGNATURE    0x53434146U           /* "FACS" */
 #define GU_SHADOW_FACS_SIGNATURE  0x53554753U           /* "SGUS" */
@@ -38,6 +40,8 @@
 #define GU_TRAMP_SHADOW_FACS_OFF       0x0200U
 #define GU_TRAMP_REAL_FACS_MIRROR_OFF  0x0280U
 #define GU_TRAMP_SHADOW_FADT_OFF       0x0400U
+#define GU_TRAMP_SHADOW_RSDP_OFF       0x0600U
+#define GU_TRAMP_SHADOW_XSDT_OFF       0x0640U
 
 #pragma pack(push, 1)
 typedef struct {
@@ -53,15 +57,25 @@ typedef struct {
   EFI_PHYSICAL_ADDRESS fadt_phys;
   EFI_ACPI_2_0_FIXED_ACPI_DESCRIPTION_TABLE *shadow_fadt;
   EFI_PHYSICAL_ADDRESS shadow_fadt_phys;
+  EFI_ACPI_2_0_ROOT_SYSTEM_DESCRIPTION_POINTER *shadow_rsdp;
+  EFI_PHYSICAL_ADDRESS shadow_rsdp_phys;
+  EFI_ACPI_DESCRIPTION_HEADER *shadow_xsdt;
+  EFI_PHYSICAL_ADDRESS shadow_xsdt_phys;
   EFI_ACPI_2_0_FIRMWARE_ACPI_CONTROL_STRUCTURE *real_facs;
   EFI_PHYSICAL_ADDRESS real_facs_phys;
   EFI_PHYSICAL_ADDRESS shadow_facs_phys;
   EFI_PHYSICAL_ADDRESS trampoline_phys;
+  INTN config_table_acpi20_idx;
+  INTN config_table_acpi10_idx;
   UINT32 original_firmware_waking_vector;
   UINT64 original_xfirmware_waking_vector;
   UINT8  fadt_original_checksum;
   UINT8  xsdt_original_checksum;
   UINT8  rsdt_original_checksum;
+  UINT8  shadow_rsdp_checksum;
+  UINT8  shadow_rsdp_extended_checksum;
+  UINT8  shadow_xsdt_checksum;
+  BOOLEAN ebs_hook_installed;
 } GU_ACPI_FACS_INFO;
 #pragma pack(pop)
 
@@ -75,12 +89,12 @@ EFI_STATUS GuAcpiLocateFadtAndFacs(
 );
 
 /*
- * Installs the universal ACPI Shadow FACS and S3 Resume Trampoline:
+ * Installs the universal ACPI Shadow FACS and S3 Resume Trampoline (Plan C):
  * 1. Clones Real FACS into Shadow FACS in ACPI NVS memory.
- * 2. Rewrites FADT->FirmwareCtrl to point to Shadow FACS.
- * 3. Recalculates FADT table checksum (mandatory for Windows ACPI.sys).
- * 4. Generates the 16-bit/32-bit dual-mode S3 resume trampoline in low (<1MB) ACPI NVS.
- * 5. Hooks Real FACS->FirmwareWakingVector to point to the trampoline.
+ * 2. Builds complete Shadow Chain: ShadowRSDP -> ShadowXSDT -> ShadowFADT -> ShadowFACS.
+ * 3. Keeps RealRSDP, RealRSDT, RealXSDT, RealFADT 100% byte-for-byte untouched.
+ * 4. Hooks RealFACS->FirmwareWakingVector to point to Low Trampoline (<1MB).
+ * 5. In-place patches SystemTable->ConfigurationTable to point to ShadowRSDP.
  */
 EFI_STATUS GuAcpiInstallShadowFacs(
     IN EFI_SYSTEM_TABLE *SystemTable,
@@ -91,6 +105,17 @@ EFI_STATUS GuAcpiInstallShadowFacs(
     IN EFI_PHYSICAL_ADDRESS LowTrampPhys,
     OUT GU_ACPI_FACS_INFO *Info
 );
+
+/*
+ * ExitBootServices Sandwich Hook management (Plan C):
+ * GuAcpiInstallEbsHook hooks gBS->ExitBootServices right before starting Windows.
+ * GuHookedExitBootServices reverts gST->ConfigurationTable to RealRSDP before calling
+ * firmware ExitBootServices, and restores ShadowRSDP if ExitBootServices returns.
+ */
+EFI_STATUS GuAcpiInstallEbsHook(IN EFI_SYSTEM_TABLE *SystemTable);
+EFI_STATUS GuAcpiUninstallEbsHook(IN EFI_SYSTEM_TABLE *SystemTable);
+VOID GuAcpiApplyShadowConfigTable(VOID);
+VOID GuAcpiRestoreConfigTable(VOID);
 
 /*
  * Assembles the S3 Resume Trampoline machine code into the designated buffer.

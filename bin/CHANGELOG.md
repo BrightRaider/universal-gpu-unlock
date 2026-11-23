@@ -6,6 +6,30 @@ For packaged binaries and downloads, visit [GitHub Releases](https://github.com/
 
 ---
 
+## [v1.8.40] - 2026-11-23
+### Added & Fixed
+- **Plan C Complete Shadow ACPI Chain with ExitBootServices Sandwich Hook (addresses #19):**
+  - **Empirical Hardware Discovery (RUN0048.TXT & WinDbg Live Wake Forensics):** Live in-kernel WinDbg forensics (`kdX64.exe -kl`) after an active S3 standby cycle (29 seconds duration) proved that AMI Aptio V (`S3Resume2Pei`) completely ignores `XFirmwareCtrl` (`0xDC8BB000`) for 32-bit real-mode resumes, and instead re-reads `FirmwareCtrl` from the active FADT in memory. In Plan B, because `ShadowFADT` had `FirmwareCtrl = 0x9E200`, the firmware jumped directly to `ShadowFACS+0x0C` (`0x00001000` / `HalpRMStub`), bypassing the 16-bit trampoline (`0x9E000`).
+  - **Plan C Complete Shadow Hierarchy Architecture:**
+    - **100% Untouched Real ACPI Tables:** `RealRSDP`, `RealRSDT`, `RealXSDT`, and `RealFADT` remain completely untouched byte-for-byte in memory with valid original checksums.
+    - `RealFACS->FirmwareWakingVector` (+0x0C) is hooked to `LowTrampoline` (`0x9E000`), ensuring AMI Aptio V always resumes into our 16-bit real-mode trampoline.
+    - **Complete Shadow Chain in `EfiACPIMemoryNVS` (< 4GB):**
+      - `ShadowFACS` at `LowTrampoline + 0x200` (`0x9E200`).
+      - `ShadowFADT` at `LowTrampoline + 0x400` (`0x9E400`): Full copy of `RealFADT`, `FirmwareCtrl = (UINT32)ShadowFACS`, `XFirmwareCtrl = 0`, valid checksum.
+      - `ShadowXSDT` at `LowTrampoline + 0x640` (`0x9E640`): Full copy of `RealXSDT`, `FACP` entry diverted to `ShadowFADT`, valid checksum.
+      - `ShadowRSDP` at `LowTrampoline + 0x600` (`0x9E600`): Full copy of `RealRSDP`, `XsdtAddress = ShadowXSDT`, `RsdtAddress` untouched, valid 20-byte legacy checksum and 36-byte extended checksum.
+    - **In-Place `gST->ConfigurationTable` Patching:** Directly redirects `gEfiAcpi20TableGuid` (and `gEfiAcpiTableGuid`) to `ShadowRSDP` without calling `InstallConfigurationTable`.
+  - **Minimal `ExitBootServices` Sandwich Hook:**
+    - Hooks `gBS->ExitBootServices` right before `StartImage(Windows)` in `GuBootWindows()`.
+    - **Phase 1 (Pre-Call):** Restores `gST->ConfigurationTable` to `RealRSDP` so firmware drivers, SMM runtime handlers, and BIOS S3 state save observe pristine OEM tables. Zero BootServices calls inside the pre-call phase.
+    - Calls `OrigExitBootServices(ImageHandle, MapKey)`.
+    - **Phase 2 (Post-Call):** Re-applies `ShadowRSDP` so `winload.efi` retries (`EFI_INVALID_PARAMETER`) or late OS loader table reads see `ShadowRSDP`.
+    - Clean uninstallation on boot error or exit back to menu, ensuring zero dangling pointers.
+  - **16-Bit Real-Mode Trampoline Untouched:** Trampoline machine code preserved at 100% byte fidelity (zero MMIO, zero SEC2 unlock, zero CMOS/RTC writes, 100% stack-free).
+  - **Host Verification Suite Passing:** All 137 checks passing across 10 test suites (`MSVC_HOST_TESTS=PASS`).
+
+---
+
 ## [v1.8.39] - 2026-11-23
 ### Added & Fixed
 - **Exact FADT FACS Field Split for Windows vs. AMI Aptio V Firmware (addresses #19):**

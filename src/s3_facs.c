@@ -5,6 +5,120 @@
 
 typedef char gu_s3_ctx_size_assert[(sizeof(GU_S3_RESUME_CONTEXT) == 108) ? 1 : -1];
 
+typedef struct {
+  BOOLEAN installed;
+  INTN acpi20_idx;
+  INTN acpi10_idx;
+  VOID *orig_acpi20_vendor_table;
+  VOID *orig_acpi10_vendor_table;
+  VOID *shadow_rsdp;
+  EFI_SYSTEM_TABLE *system_table;
+  EFI_EXIT_BOOT_SERVICES orig_exit_boot_services;
+  BOOLEAN hook_active;
+} GU_ACPI_SHADOW_CHAIN_STATE;
+
+static GU_ACPI_SHADOW_CHAIN_STATE mShadowState = {
+  FALSE, -1, -1, NULL, NULL, NULL, NULL, NULL, FALSE
+};
+
+VOID GuAcpiApplyShadowConfigTable(VOID) {
+  if (!mShadowState.installed || !mShadowState.system_table || !mShadowState.shadow_rsdp) return;
+  if (mShadowState.acpi20_idx >= 0 && (UINTN)mShadowState.acpi20_idx < mShadowState.system_table->NumberOfTableEntries) {
+    mShadowState.system_table->ConfigurationTable[mShadowState.acpi20_idx].VendorTable = mShadowState.shadow_rsdp;
+  }
+  if (mShadowState.acpi10_idx >= 0 && (UINTN)mShadowState.acpi10_idx < mShadowState.system_table->NumberOfTableEntries) {
+    mShadowState.system_table->ConfigurationTable[mShadowState.acpi10_idx].VendorTable = mShadowState.shadow_rsdp;
+  }
+}
+
+VOID GuAcpiRestoreConfigTable(VOID) {
+  if (!mShadowState.installed || !mShadowState.system_table) return;
+  if (mShadowState.acpi20_idx >= 0 && (UINTN)mShadowState.acpi20_idx < mShadowState.system_table->NumberOfTableEntries) {
+    if (mShadowState.orig_acpi20_vendor_table != NULL) {
+      mShadowState.system_table->ConfigurationTable[mShadowState.acpi20_idx].VendorTable = mShadowState.orig_acpi20_vendor_table;
+    }
+  }
+  if (mShadowState.acpi10_idx >= 0 && (UINTN)mShadowState.acpi10_idx < mShadowState.system_table->NumberOfTableEntries) {
+    if (mShadowState.orig_acpi10_vendor_table != NULL) {
+      mShadowState.system_table->ConfigurationTable[mShadowState.acpi10_idx].VendorTable = mShadowState.orig_acpi10_vendor_table;
+    }
+  }
+}
+
+EFI_STATUS EFIAPI GuHookedExitBootServices(
+    IN EFI_HANDLE ImageHandle,
+    IN UINTN MapKey
+) {
+  /*
+   * PHASE 1 (Sandwich Pre-Call):
+   * Revert SystemTable ConfigurationTable to RealRSDP so that firmware drivers,
+   * SMM runtime handlers, and BIOS S3 state save observe clean, unmodified ACPI tables!
+   * MANDATORY: ABSOLUTELY NO BootServices calls inside here (no Print, no CalculateCrc32, no Logging).
+   */
+  GuAcpiRestoreConfigTable();
+
+  /* Call original firmware ExitBootServices */
+  EFI_STATUS Status = EFI_SUCCESS;
+  if (mShadowState.orig_exit_boot_services != NULL) {
+    Status = mShadowState.orig_exit_boot_services(ImageHandle, MapKey);
+  }
+
+  /*
+   * PHASE 2 (Sandwich Post-Call):
+   * If ExitBootServices returns (for example EFI_INVALID_PARAMETER retry by winload.efi
+   * or late OS loader inspection), immediately re-apply ShadowRSDP!
+   */
+  GuAcpiApplyShadowConfigTable();
+
+  return Status;
+}
+
+EFI_STATUS GuAcpiInstallEbsHook(IN EFI_SYSTEM_TABLE *SystemTable) {
+  if (!SystemTable || !SystemTable->BootServices) return EFI_INVALID_PARAMETER;
+  if (!mShadowState.installed || mShadowState.hook_active) return EFI_SUCCESS;
+
+  mShadowState.orig_exit_boot_services = SystemTable->BootServices->ExitBootServices;
+  SystemTable->BootServices->ExitBootServices = GuHookedExitBootServices;
+
+  if (SystemTable->BootServices->CalculateCrc32 != NULL) {
+    SystemTable->BootServices->Hdr.CRC32 = 0;
+    SystemTable->BootServices->CalculateCrc32(
+        SystemTable->BootServices,
+        SystemTable->BootServices->Hdr.HeaderSize,
+        &SystemTable->BootServices->Hdr.CRC32
+    );
+  }
+
+  mShadowState.hook_active = TRUE;
+  GuLog("S3 Plan C: ExitBootServices Sandwich Hook installed (Orig=%#llx Hook=%#llx)\n",
+        (unsigned long long)(UINTN)mShadowState.orig_exit_boot_services,
+        (unsigned long long)(UINTN)GuHookedExitBootServices);
+  return EFI_SUCCESS;
+}
+
+EFI_STATUS GuAcpiUninstallEbsHook(IN EFI_SYSTEM_TABLE *SystemTable) {
+  if (!SystemTable || !SystemTable->BootServices) return EFI_INVALID_PARAMETER;
+  if (!mShadowState.hook_active) return EFI_SUCCESS;
+
+  if (mShadowState.orig_exit_boot_services != NULL) {
+    SystemTable->BootServices->ExitBootServices = mShadowState.orig_exit_boot_services;
+    if (SystemTable->BootServices->CalculateCrc32 != NULL) {
+      SystemTable->BootServices->Hdr.CRC32 = 0;
+      SystemTable->BootServices->CalculateCrc32(
+          SystemTable->BootServices,
+          SystemTable->BootServices->Hdr.HeaderSize,
+          &SystemTable->BootServices->Hdr.CRC32
+      );
+    }
+    mShadowState.orig_exit_boot_services = NULL;
+  }
+
+  GuAcpiRestoreConfigTable();
+  mShadowState.hook_active = FALSE;
+  GuLog("S3 Plan C: ExitBootServices Sandwich Hook uninstalled\n");
+  return EFI_SUCCESS;
+}
+
 static BOOLEAN GuidMatch(const EFI_GUID *a, const EFI_GUID *b) {
   const UINT8 *p1 = (const UINT8 *)a;
   const UINT8 *p2 = (const UINT8 *)b;
@@ -12,6 +126,23 @@ static BOOLEAN GuidMatch(const EFI_GUID *a, const EFI_GUID *b) {
     if (p1[i] != p2[i]) return FALSE;
   }
   return TRUE;
+}
+
+/*
+ * Host-Test & 64-bit safety helper:
+ * In UEFI firmware, physical addresses are <= 4GB. In 64-bit host unit tests,
+ * stack/heap pointers exceed 32 bits (>4GB). If addr32 is >= 1MB (not low trampoline memory)
+ * and anchor pointer exceeds 4GB, merge upper 32 bits from anchor so pointers remain valid.
+ */
+static inline VOID *GuAcpiPaddrToPtr(UINT32 addr32, const VOID *anchor) {
+  if (addr32 == 0) return NULL;
+  UINTN addr = (UINTN)addr32;
+#if defined(_WIN64) || defined(__x86_64__)
+  if (addr32 >= 0x00100000ULL && anchor != NULL && (UINTN)anchor > 0xFFFFFFFFULL) {
+    addr |= ((UINTN)anchor & ~0xFFFFFFFFULL);
+  }
+#endif
+  return (VOID *)addr;
 }
 
 EFI_STATUS GuAcpiLocateFadtAndFacs(
@@ -27,18 +158,32 @@ EFI_STATUS GuAcpiLocateFadtAndFacs(
   EFI_ACPI_2_0_ROOT_SYSTEM_DESCRIPTION_POINTER *rsdp = NULL;
 
   /* 1. Search UEFI System Configuration Table for RSDP */
+  Info->config_table_acpi20_idx = -1;
+  Info->config_table_acpi10_idx = -1;
+
   for (UINTN i = 0; i < SystemTable->NumberOfTableEntries; i++) {
     if (GuidMatch(&SystemTable->ConfigurationTable[i].VendorGuid, &Acpi20Guid)) {
-      rsdp = (EFI_ACPI_2_0_ROOT_SYSTEM_DESCRIPTION_POINTER *)SystemTable->ConfigurationTable[i].VendorTable;
-      break;
+      if (Info->config_table_acpi20_idx < 0) {
+        Info->config_table_acpi20_idx = (INTN)i;
+        rsdp = (EFI_ACPI_2_0_ROOT_SYSTEM_DESCRIPTION_POINTER *)SystemTable->ConfigurationTable[i].VendorTable;
+      }
+    } else if (GuidMatch(&SystemTable->ConfigurationTable[i].VendorGuid, &Acpi10Guid)) {
+      if (Info->config_table_acpi10_idx < 0) {
+        Info->config_table_acpi10_idx = (INTN)i;
+        if (!rsdp) {
+          rsdp = (EFI_ACPI_2_0_ROOT_SYSTEM_DESCRIPTION_POINTER *)SystemTable->ConfigurationTable[i].VendorTable;
+        }
+      }
     }
   }
-  if (!rsdp) {
-    for (UINTN i = 0; i < SystemTable->NumberOfTableEntries; i++) {
-      if (GuidMatch(&SystemTable->ConfigurationTable[i].VendorGuid, &Acpi10Guid)) {
-        rsdp = (EFI_ACPI_2_0_ROOT_SYSTEM_DESCRIPTION_POINTER *)SystemTable->ConfigurationTable[i].VendorTable;
-        break;
-      }
+
+  /* Warm-Reset / Re-Entry Detection: If ConfigurationTable was already pointing to ShadowRSDP (< 1MB or active shadow state) */
+  if (rsdp != NULL && ((EFI_PHYSICAL_ADDRESS)(UINTN)rsdp < 0x00100000ULL ||
+                       (mShadowState.installed && (VOID *)rsdp == mShadowState.shadow_rsdp))) {
+    if (mShadowState.installed && mShadowState.orig_acpi20_vendor_table != NULL) {
+      GuLog("GuAcpiLocateFadtAndFacs: Existing Shadow RSDP detected at %#llx; recovered Real RSDP at %#llx\n",
+            (unsigned long long)(UINTN)rsdp, (unsigned long long)(UINTN)mShadowState.orig_acpi20_vendor_table);
+      rsdp = (EFI_ACPI_2_0_ROOT_SYSTEM_DESCRIPTION_POINTER *)mShadowState.orig_acpi20_vendor_table;
     }
   }
 
@@ -86,20 +231,20 @@ EFI_STATUS GuAcpiLocateFadtAndFacs(
 
   /* 3. Traverse RSDT (32-bit table pointers) */
   if (rsdp->RsdtAddress != 0) {
-    EFI_ACPI_DESCRIPTION_HEADER *rsdt = (EFI_ACPI_DESCRIPTION_HEADER *)(UINTN)rsdp->RsdtAddress;
+    EFI_ACPI_DESCRIPTION_HEADER *rsdt = (EFI_ACPI_DESCRIPTION_HEADER *)GuAcpiPaddrToPtr(rsdp->RsdtAddress, rsdp);
     if (rsdt && rsdt->Length >= sizeof(EFI_ACPI_DESCRIPTION_HEADER)) {
       Info->rsdt = rsdt;
-      Info->rsdt_phys = (EFI_PHYSICAL_ADDRESS)rsdp->RsdtAddress;
+      Info->rsdt_phys = (EFI_PHYSICAL_ADDRESS)(UINTN)rsdt;
       Info->rsdt_original_checksum = rsdt->Checksum;
       UINTN count = (rsdt->Length - sizeof(EFI_ACPI_DESCRIPTION_HEADER)) / sizeof(UINT32);
       UINT8 *entry_ptr = ((UINT8 *)rsdt) + sizeof(EFI_ACPI_DESCRIPTION_HEADER);
       for (UINTN i = 0; i < count; i++) {
         UINT32 table_phys = 0;
         memcpy(&table_phys, entry_ptr + i * sizeof(UINT32), sizeof(UINT32));
-        EFI_ACPI_DESCRIPTION_HEADER *tbl = (EFI_ACPI_DESCRIPTION_HEADER *)(UINTN)table_phys;
+        EFI_ACPI_DESCRIPTION_HEADER *tbl = (EFI_ACPI_DESCRIPTION_HEADER *)GuAcpiPaddrToPtr(table_phys, rsdp);
         if (tbl && tbl->Signature == GU_ACPI_FADT_SIGNATURE) {
           rsdt_fadt = (EFI_ACPI_2_0_FIXED_ACPI_DESCRIPTION_TABLE *)tbl;
-          rsdt_fadt_phys = (EFI_PHYSICAL_ADDRESS)table_phys;
+          rsdt_fadt_phys = (EFI_PHYSICAL_ADDRESS)(UINTN)tbl;
           Info->rsdt_fadt_index = (INTN)i;
           break;
         }
@@ -147,11 +292,11 @@ EFI_STATUS GuAcpiLocateFadtAndFacs(
    */
   EFI_PHYSICAL_ADDRESS facs_phys = 0;
   if (fadt->FirmwareCtrl != 0 && (EFI_PHYSICAL_ADDRESS)fadt->FirmwareCtrl >= 0x00100000ULL) {
-    facs_phys = (EFI_PHYSICAL_ADDRESS)fadt->FirmwareCtrl;
+    facs_phys = (EFI_PHYSICAL_ADDRESS)(UINTN)GuAcpiPaddrToPtr(fadt->FirmwareCtrl, rsdp);
   } else if (fadt->Header.Length >= 140 && fadt->XFirmwareCtrl >= 0x00100000ULL) {
     facs_phys = (EFI_PHYSICAL_ADDRESS)fadt->XFirmwareCtrl;
   } else if (fadt->FirmwareCtrl != 0) {
-    facs_phys = (EFI_PHYSICAL_ADDRESS)fadt->FirmwareCtrl;
+    facs_phys = (EFI_PHYSICAL_ADDRESS)(UINTN)GuAcpiPaddrToPtr(fadt->FirmwareCtrl, rsdp);
   } else if (fadt->Header.Length >= 140 && fadt->XFirmwareCtrl != 0) {
     facs_phys = (EFI_PHYSICAL_ADDRESS)fadt->XFirmwareCtrl;
   }
@@ -713,34 +858,31 @@ EFI_STATUS GuAcpiInstallShadowFacs(
   Info->trampoline_phys = trampoline_phys;
 
   /*
-   * Plan B: RSDT / XSDT Split Architecture
-   * 1. Log pre-patch state: RSDT, XSDT, original FADT address, and their original checksums.
+   * Plan C: Complete Shadow Chain Architecture (v1.8.40)
+   * Real ACPI tables (RealRSDP, RealRSDT, RealXSDT, RealFADT) remain 100% UNTOUCHED byte-for-byte.
+   * Complete shadow hierarchy is constructed in EfiACPIMemoryNVS:
+   * ShadowRSDP (0x9E600) -> ShadowXSDT (0x9E640) -> ShadowFADT (0x9E400) -> ShadowFACS (0x9E200)
    */
-  GuLog("S3 Plan B Pre-Patch: RSDT=%#llx (Chk=%#02x) XSDT=%#llx (Chk=%#02x) OrigFADT=%#llx (Len=%u Chk=%#02x)\n",
-        (unsigned long long)Info->rsdt_phys, (unsigned)Info->rsdt_original_checksum,
+  GuLog("S3 Plan C Pre-Build: RealRSDP=%#llx RealXSDT=%#llx (Chk=%#02x) RealFADT=%#llx (Len=%u Chk=%#02x)\n",
+        (unsigned long long)(UINTN)Info->rsdp,
         (unsigned long long)Info->xsdt_phys, (unsigned)Info->xsdt_original_checksum,
         (unsigned long long)Info->fadt_phys, (unsigned)Info->fadt->Header.Length,
         (unsigned)Info->fadt_original_checksum);
 
   /*
-   * 2. Populate ShadowFADT at LowTrampoline + 0x400 (e.g. 0x9E400):
-   *    Copy full Header.Length bytes from original FADT.
+   * 1. Populate ShadowFADT at LowTrampoline + 0x400 (e.g. 0x9E400):
+   *    Copy full Header.Length bytes from original RealFADT.
+   *    Set FirmwareCtrl = ShadowFACS (0x9E200), XFirmwareCtrl = 0.
+   *    Recalculate ShadowFADT->Header.Checksum.
    */
   UINT32 fadt_len = Info->fadt->Header.Length;
-  if (fadt_len > (4096 - GU_TRAMP_SHADOW_FADT_OFF)) {
-    fadt_len = 4096 - GU_TRAMP_SHADOW_FADT_OFF;
+  if (fadt_len > (GU_TRAMP_SHADOW_RSDP_OFF - GU_TRAMP_SHADOW_FADT_OFF)) {
+    fadt_len = GU_TRAMP_SHADOW_RSDP_OFF - GU_TRAMP_SHADOW_FADT_OFF;
   }
   memcpy(shadow_fadt, Info->fadt, fadt_len);
-
-  /*
-   * 3. In ShadowFADT (for XSDT / Windows & BIOS):
-   *    - FirmwareCtrl = (UINT32)shadow_facs_phys (0x9E200) -> Windows exclusively reads offset 0x24 (FirmwareCtrl)
-   *    - XFirmwareCtrl = (UINT64)Info->real_facs_phys (0xDC8BB000) -> AMI Aptio V PEI prioritizes offset 0x84 (XFirmwareCtrl)
-   *    - Recalculate ShadowFADT->Header.Checksum
-   */
   shadow_fadt->FirmwareCtrl = (UINT32)shadow_facs_phys;
   if (shadow_fadt->Header.Length >= 140) {
-    shadow_fadt->XFirmwareCtrl = (UINT64)Info->real_facs_phys;
+    shadow_fadt->XFirmwareCtrl = 0;
   }
   shadow_fadt->Header.Checksum = 0;
   UINT8 sf_sum = 0;
@@ -751,75 +893,137 @@ EFI_STATUS GuAcpiInstallShadowFacs(
   shadow_fadt->Header.Checksum = (UINT8)(0 - sf_sum);
 
   /*
-   * 4. In Original FADT (for RSDT / 32-bit BIOS):
-   *    - FirmwareCtrl = RealFACS (0xDC8BB000)
-   *    - XFirmwareCtrl = 0 (clean original layout)
-   *    - Recalculate FADT->Header.Checksum
+   * 2. Populate ShadowXSDT:
+   *    If RealXSDT fits in remaining LowTrampoline buffer (Length <= 0x9C0 = 2496 bytes),
+   *    place at LowTrampoline + 0x640 (e.g. 0x9E640). Otherwise allocate a page under 4GB.
+   *    Copy RealXSDT, update FACP/FADT entry to point to ShadowFADT, recalculate Checksum.
    */
-  Info->fadt->FirmwareCtrl = (UINT32)Info->real_facs_phys;
-  if (Info->fadt->Header.Length >= 140) {
-    Info->fadt->XFirmwareCtrl = 0;
-  }
-  Info->fadt->Header.Checksum = 0;
-  UINT8 f_sum = 0;
-  UINT8 *f_bytes = (UINT8 *)Info->fadt;
-  for (UINT32 i = 0; i < Info->fadt->Header.Length; i++) {
-    f_sum = (UINT8)(f_sum + f_bytes[i]);
-  }
-  Info->fadt->Header.Checksum = (UINT8)(0 - f_sum);
+  EFI_ACPI_DESCRIPTION_HEADER *shadow_xsdt = NULL;
+  EFI_PHYSICAL_ADDRESS shadow_xsdt_phys = 0;
 
-  /*
-   * 5. In XSDT:
-   *    Divert the 64-bit table pointer for FACP/FADT to shadow_fadt_phys.
-   *    Recalculate XSDT->Header.Checksum.
-   */
-  if (Info->xsdt && Info->xsdt_fadt_index >= 0) {
-    UINT8 *entry_ptr = ((UINT8 *)Info->xsdt) + sizeof(EFI_ACPI_DESCRIPTION_HEADER);
-    UINT64 sf_phys64 = (UINT64)shadow_fadt_phys;
-    memcpy(entry_ptr + Info->xsdt_fadt_index * sizeof(UINT64), &sf_phys64, sizeof(UINT64));
-
-    Info->xsdt->Checksum = 0;
-    UINT8 xsdt_sum = 0;
-    UINT8 *xsdt_bytes = (UINT8 *)Info->xsdt;
-    for (UINT32 i = 0; i < Info->xsdt->Length; i++) {
-      xsdt_sum = (UINT8)(xsdt_sum + xsdt_bytes[i]);
+  if (Info->xsdt != NULL) {
+    UINT32 max_inline_xsdt = 4096 - GU_TRAMP_SHADOW_XSDT_OFF;
+    if (Info->xsdt->Length <= max_inline_xsdt) {
+      shadow_xsdt = (EFI_ACPI_DESCRIPTION_HEADER *)(low_base + GU_TRAMP_SHADOW_XSDT_OFF);
+      shadow_xsdt_phys = LowTrampPhys + GU_TRAMP_SHADOW_XSDT_OFF;
+    } else if (SystemTable->BootServices && SystemTable->BootServices->AllocatePages) {
+      EFI_PHYSICAL_ADDRESS alloc_phys = 0xFFFFFFFFULL;
+      EFI_STATUS as = SystemTable->BootServices->AllocatePages(
+          AllocateMaxAddress,
+          EfiACPIMemoryNVS,
+          1,
+          &alloc_phys
+      );
+      if (!EFI_ERROR(as)) {
+        shadow_xsdt = (EFI_ACPI_DESCRIPTION_HEADER *)(UINTN)alloc_phys;
+        shadow_xsdt_phys = alloc_phys;
+      }
     }
-    Info->xsdt->Checksum = (UINT8)(0 - xsdt_sum);
-  } else if (!Info->xsdt && Info->rsdt && Info->rsdt_fadt_index >= 0) {
-    /* ACPI 1.0 Fallback (no XSDT): update RSDT 32-bit entry */
-    UINT8 *entry_ptr = ((UINT8 *)Info->rsdt) + sizeof(EFI_ACPI_DESCRIPTION_HEADER);
-    UINT32 sf_phys32 = (UINT32)shadow_fadt_phys;
-    memcpy(entry_ptr + Info->rsdt_fadt_index * sizeof(UINT32), &sf_phys32, sizeof(UINT32));
+  }
 
-    Info->rsdt->Checksum = 0;
-    UINT8 rsdt_sum = 0;
-    UINT8 *rsdt_bytes = (UINT8 *)Info->rsdt;
-    for (UINT32 i = 0; i < Info->rsdt->Length; i++) {
-      rsdt_sum = (UINT8)(rsdt_sum + rsdt_bytes[i]);
+  if (shadow_xsdt != NULL && Info->xsdt != NULL) {
+    memcpy(shadow_xsdt, Info->xsdt, Info->xsdt->Length);
+    if (Info->xsdt_fadt_index >= 0) {
+      UINT8 *entry_ptr = ((UINT8 *)shadow_xsdt) + sizeof(EFI_ACPI_DESCRIPTION_HEADER);
+      UINT64 sf_phys64 = (UINT64)shadow_fadt_phys;
+      memcpy(entry_ptr + Info->xsdt_fadt_index * sizeof(UINT64), &sf_phys64, sizeof(UINT64));
     }
-    Info->rsdt->Checksum = (UINT8)(0 - rsdt_sum);
+    shadow_xsdt->Checksum = 0;
+    UINT8 sxsdt_sum = 0;
+    UINT8 *sxsdt_bytes = (UINT8 *)shadow_xsdt;
+    for (UINT32 i = 0; i < shadow_xsdt->Length; i++) {
+      sxsdt_sum = (UINT8)(sxsdt_sum + sxsdt_bytes[i]);
+    }
+    shadow_xsdt->Checksum = (UINT8)(0 - sxsdt_sum);
   }
 
   /*
-   * 6. Hook Real FACS waking vector to point to our Low Trampoline (<1MB)
+   * 3. Populate ShadowRSDP at LowTrampoline + 0x600 (e.g. 0x9E600):
+   *    Copy RealRSDP (36 bytes for Revision >= 2).
+   *    Set XsdtAddress = ShadowXSDT.
+   *    Leave RsdtAddress = RealRSDP->RsdtAddress untouched.
+   *    Recalculate 20-byte legacy Checksum (Offset 8), THEN 36-byte ExtendedChecksum (Offset 32).
+   */
+  EFI_ACPI_2_0_ROOT_SYSTEM_DESCRIPTION_POINTER *shadow_rsdp =
+      (EFI_ACPI_2_0_ROOT_SYSTEM_DESCRIPTION_POINTER *)(low_base + GU_TRAMP_SHADOW_RSDP_OFF);
+  EFI_PHYSICAL_ADDRESS shadow_rsdp_phys = LowTrampPhys + GU_TRAMP_SHADOW_RSDP_OFF;
+
+  UINT32 rsdp_len = (Info->rsdp->Revision >= 2 && Info->rsdp->Length >= 36) ? Info->rsdp->Length : 36;
+  memcpy(shadow_rsdp, Info->rsdp, rsdp_len);
+  shadow_rsdp->XsdtAddress = (UINT64)shadow_xsdt_phys;
+  shadow_rsdp->RsdtAddress = Info->rsdp->RsdtAddress; /* Untouched */
+
+  /* Checksum 1: 20-byte legacy Checksum (Offset 8) */
+  shadow_rsdp->Checksum = 0;
+  UINT8 rsdp_sum20 = 0;
+  UINT8 *rsdp_bytes = (UINT8 *)shadow_rsdp;
+  for (UINT32 i = 0; i < 20; i++) {
+    rsdp_sum20 = (UINT8)(rsdp_sum20 + rsdp_bytes[i]);
+  }
+  shadow_rsdp->Checksum = (UINT8)(0 - rsdp_sum20);
+
+  /* Checksum 2: 36-byte ExtendedChecksum (Offset 32) */
+  shadow_rsdp->ExtendedChecksum = 0;
+  UINT8 rsdp_sum36 = 0;
+  for (UINT32 i = 0; i < shadow_rsdp->Length; i++) {
+    rsdp_sum36 = (UINT8)(rsdp_sum36 + rsdp_bytes[i]);
+  }
+  shadow_rsdp->ExtendedChecksum = (UINT8)(0 - rsdp_sum36);
+
+  /*
+   * 4. In-Place Patch SystemTable->ConfigurationTable:
+   *    Save original VendorTable pointers, point entries to ShadowRSDP.
+   */
+  mShadowState.installed = TRUE;
+  mShadowState.acpi20_idx = Info->config_table_acpi20_idx;
+  mShadowState.acpi10_idx = Info->config_table_acpi10_idx;
+  mShadowState.orig_acpi20_vendor_table = (Info->config_table_acpi20_idx >= 0) ?
+      (VOID *)(UINTN)Info->rsdp : NULL;
+  mShadowState.orig_acpi10_vendor_table = (Info->config_table_acpi10_idx >= 0) ?
+      (VOID *)(UINTN)Info->rsdp : NULL;
+  mShadowState.shadow_rsdp = (VOID *)(UINTN)shadow_rsdp_phys;
+  mShadowState.system_table = SystemTable;
+  mShadowState.orig_exit_boot_services = NULL;
+  mShadowState.hook_active = FALSE;
+
+  GuAcpiApplyShadowConfigTable();
+
+  /*
+   * 5. Hook Real FACS waking vector to point to our Low Trampoline (<1MB)
+   *    RealFACS is what AMI Aptio V PEI wakes to!
+   *    RealFADT and RealXSDT are 100% UNTOUCHED!
    */
   Info->real_facs->FirmwareWakingVector = (UINT32)trampoline_phys;
 
-  GuLog("S3 Plan B RSDT/XSDT Split Armed:\n"
-        "  RSDT [idx=%d] -> RealFADT=%#llx (FirmwareCtrl=%#08x XFirmwareCtrl=%#llx Chk=%#02x)\n"
-        "  XSDT [idx=%d] -> ShadowFADT=%#llx (FirmwareCtrl=%#08x XFirmwareCtrl=%#llx Chk=%#02x, XSDT Chk=%#02x)\n"
-        "  RealFACS=%#llx (WakingVector=%#08x) ShadowFACS=%#llx LowTrampoline=%#llx\n",
-        (int)Info->rsdt_fadt_index, (unsigned long long)Info->fadt_phys,
-        (unsigned)Info->fadt->FirmwareCtrl, (unsigned long long)Info->fadt->XFirmwareCtrl,
-        (unsigned)Info->fadt->Header.Checksum,
-        (int)Info->xsdt_fadt_index, (unsigned long long)shadow_fadt_phys,
-        (unsigned)shadow_fadt->FirmwareCtrl, (unsigned long long)shadow_fadt->XFirmwareCtrl,
-        (unsigned)shadow_fadt->Header.Checksum,
-        Info->xsdt ? (unsigned)Info->xsdt->Checksum : 0,
-        (unsigned long long)Info->real_facs_phys,
+  /* Record pointers and checksums into Info for telemetry & tests */
+  Info->shadow_fadt = shadow_fadt;
+  Info->shadow_fadt_phys = shadow_fadt_phys;
+  Info->shadow_xsdt = shadow_xsdt;
+  Info->shadow_xsdt_phys = shadow_xsdt_phys;
+  Info->shadow_rsdp = shadow_rsdp;
+  Info->shadow_rsdp_phys = shadow_rsdp_phys;
+  Info->shadow_rsdp_checksum = shadow_rsdp->Checksum;
+  Info->shadow_rsdp_extended_checksum = shadow_rsdp->ExtendedChecksum;
+  Info->shadow_xsdt_checksum = shadow_xsdt ? shadow_xsdt->Checksum : 0;
+  Info->trampoline_phys = trampoline_phys;
+  Info->ebs_hook_installed = FALSE;
+
+  GuLog("S3 Plan C Complete Shadow Chain Armed:\n"
+        "  RealRSDP=%#llx RealXSDT=%#llx RealFADT=%#llx RealFACS=%#llx (WakingVector=%#08x)\n"
+        "  ShadowRSDP=%#llx (Chk20=%#02x ExtChk36=%#02x) -> ShadowXSDT=%#llx (Chk=%#02x)\n"
+        "  ShadowXSDT [idx=%d] -> ShadowFADT=%#llx (FirmwareCtrl=%#08x XFirmwareCtrl=0 Chk=%#02x)\n"
+        "  ShadowFACS=%#llx LowTrampoline=%#llx\n"
+        "  ConfigTable In-Place Patched: Acpi20Idx=%d (RealRSDP=%#llx -> ShadowRSDP=%#llx) Acpi10Idx=%d\n",
+        (unsigned long long)(UINTN)Info->rsdp, (unsigned long long)Info->xsdt_phys,
+        (unsigned long long)Info->fadt_phys, (unsigned long long)Info->real_facs_phys,
         (unsigned)Info->real_facs->FirmwareWakingVector,
-        (unsigned long long)shadow_facs_phys,
-        (unsigned long long)trampoline_phys);
+        (unsigned long long)shadow_rsdp_phys, (unsigned)shadow_rsdp->Checksum, (unsigned)shadow_rsdp->ExtendedChecksum,
+        (unsigned long long)shadow_xsdt_phys, shadow_xsdt ? (unsigned)shadow_xsdt->Checksum : 0,
+        (int)Info->xsdt_fadt_index, (unsigned long long)shadow_fadt_phys,
+        (unsigned)shadow_fadt->FirmwareCtrl, (unsigned)shadow_fadt->Header.Checksum,
+        (unsigned long long)shadow_facs_phys, (unsigned long long)trampoline_phys,
+        (int)mShadowState.acpi20_idx, (unsigned long long)(UINTN)mShadowState.orig_acpi20_vendor_table,
+        (unsigned long long)shadow_rsdp_phys, (int)mShadowState.acpi10_idx);
 
   return EFI_SUCCESS;
 }

@@ -14,6 +14,8 @@ BOOLEAN GuIsUnlocked(VOID) { return FALSE; }
 const GU_ARCH_ASSETS *GuGetArchAssets(VOID) { return NULL; }
 VOID *GuAlloc(size_t n) { (void)n; return NULL; }
 VOID GuFree(VOID *p) { (void)p; }
+EFI_STATUS GuAcpiInstallEbsHook(EFI_SYSTEM_TABLE *SystemTable) { (void)SystemTable; return EFI_SUCCESS; }
+EFI_STATUS GuAcpiUninstallEbsHook(EFI_SYSTEM_TABLE *SystemTable) { (void)SystemTable; return EFI_SUCCESS; }
 
 static int failures;
 #define CHECK(c) do { if (!(c)) { printf("FAIL line %d: %s\n", __LINE__, #c); failures++; } } while (0)

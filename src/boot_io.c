@@ -13,6 +13,7 @@
 #include "profile.h"
 
 #include "sha256.h"
+#include "s3_facs.h"
 
 #include <Protocol/LoadedImage.h>
 
@@ -838,10 +839,21 @@ EFI_STATUS GuBootWindows(VOID) {
   if (!Windows)
     return EFI_NOT_READY;
 
-  return Table->BootServices->StartImage(Windows, NULL, NULL);
+  /* Plan C: Install ExitBootServices Sandwich Hook right before starting Windows */
+  (VOID)GuAcpiInstallEbsHook(Table);
+
+  EFI_STATUS s = Table->BootServices->StartImage(Windows, NULL, NULL);
+
+  /* If StartImage returns (error or exit), cleanly uninstall hook and restore config table */
+  (VOID)GuAcpiUninstallEbsHook(Table);
+
+  return s;
 }
 
 VOID GuBootHalt(VOID) {
+  /* Ensure any active ExitBootServices hook is cleanly uninstalled on halt */
+  (VOID)GuAcpiUninstallEbsHook(Table);
+
   GuBootUnsilence();
 
   if (Table && Table->ConIn && Table->ConIn->ReadKeyStroke) {

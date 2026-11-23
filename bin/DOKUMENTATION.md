@@ -387,3 +387,35 @@ In **v1.8.34** habe ich die Architektur umfassend überarbeitet und perfektionie
    Das Trampolin liest `0x00001000` aus `ShadowFACS+0x0C` (`0x9E20C`), berechnet exakt nach ACPI-Spezifikation `Offset = 0x1000 & 0x0F = 0x0000` und `Segment = 0x1000 >> 4 = 0x0100` (`0100:0000` = `0x00001000`), stellt den BIOS-Stack wieder her und springt per `jmp far ptr cs:[0x0300]` sauber zu Windows `HalpRMStub`.
 5. **Host-Test Suite:**
    Alle 106 Tests bestanden (`MSVC_HOST_TESTS=PASS`).
+
+### 13.9 Die v1.8.40 Architektur: Plan C – Komplette Shadow-Kette & ExitBootServices-Sandwich-Hook
+1. **Empirischer Live-Beweis nach S3-Aufwachen (RUN0048.TXT & WinDbg):**
+   Die Live-Kernel-Messung (`kdX64.exe -kl`) in der laufenden Windows-Sitzung nach 29 Sekunden Standby (Aufwachen um 13:22:50 per Power-Button) erbrachte den endgültigen Beweis:
+   - Windows hatte `ShadowFACS` (`0x9E200`) gemappt und `0x00001000` (`HalpRMStub`) in `ShadowFACS+0x0C` (`0x9E20C`) eingetragen.
+   - AMI Aptio V (`S3Resume2Pei`) ignorierte `XFirmwareCtrl` (`0xDC8BB000`) für das 32-Bit Real-Mode-Aufwachen vollständig und las stattdessen ebenfalls `FirmwareCtrl` (`0x9E200`), fand dort `0x00001000` vor und sprang direkt nach `0x00001000`. Das 16-Bit-Trampolin (`0x9E000`) wurde übersprungen (`Telemetrie-Entry 0xAA01` blieb `0000`).
+   - `RealFACS` (`0xDC8BB000`) bei Offset `0x0C` stand unverändert auf `0x0009E000`.
+   - **Schlussfolgerung:** Jede In-Place-Änderung an `FirmwareCtrl` in der von BIOS und OS geteilten FADT führt dazu, dass das BIOS denselben FACS-Eintrag wie Windows liest.
+
+2. **Die Plan C Architektur (Komplette Schatten-Kette):**
+   - **Original-Tabellen 100 % unberührt:** `RealRSDP`, `RealRSDT`, `RealXSDT` und `RealFADT` bleiben byte-genau unverändert (keine Schreibzugriffe, originale Checksummen).
+   - In `RealFACS` (+0x0C) wird der Waking Vector wie bisher auf `LowTrampoline` (`0x9E000`) gesetzt.
+   - **Komplette Schatten-Kette im `EfiACPIMemoryNVS` (< 4 GB):**
+     - `ShadowFACS` bei `LowTrampoline + 0x200` (`0x9E200`).
+     - `ShadowFADT` bei `LowTrampoline + 0x400` (`0x9E400`): Vollständige Kopie der `RealFADT`, `FirmwareCtrl = (UINT32)ShadowFACS`, `XFirmwareCtrl = 0`, Checksumme 0 mod 256.
+     - `ShadowXSDT` bei `LowTrampoline + 0x640` (`0x9E640`): Vollständige Kopie der `RealXSDT`, nur der `FACP`-Eintrag wird auf `ShadowFADT` umgebogen, Checksumme 0 mod 256.
+     - `ShadowRSDP` bei `LowTrampoline + 0x600` (`0x9E600`): Vollständige Kopie der `RealRSDP`, `XsdtAddress = ShadowXSDT`, `RsdtAddress` unverändert auf `RealRSDT`. Zuerst 20-Byte-Checksumme (Offset 8), danach 36-Byte-ExtendedChecksum (Offset 32) neu berechnet.
+   - **In-Place `gST->ConfigurationTable` Patching:**
+     `gST->ConfigurationTable[idx].VendorTable` für `gEfiAcpi20TableGuid` und `gEfiAcpiTableGuid` wird direkt auf `ShadowRSDP` umgebogen.
+
+3. **Minimaler ExitBootServices-Sandwich-Hook:**
+   - Direkt vor `StartImage(Windows)` in `GuBootWindows()` wird `gBS->ExitBootServices` gehookt.
+   - **Phase 1 (Pre-Call):** Direkt vor Aufruf des originalen `ExitBootServices` setzt der Hook `ConfigurationTable` auf `RealRSDP` zurück. Firmware-Treiber, SMM-Laufzeit-Handler und BIOS S3-State-Save sehen die originale, unberührte OEM-Tabelle. Keine BootServices-Aufrufe (kein Logging, kein Print) im Pre-Call.
+   - `OrigExitBootServices(ImageHandle, MapKey)` wird ausgeführt.
+   - **Phase 2 (Post-Call):** Bei Rückkehr (z. B. `EFI_INVALID_PARAMETER`-Retry von `winload.efi` oder spätem Lesen) wird sofort wieder `ShadowRSDP` gesetzt.
+   - Bei Abbruch oder Rückkehr aus `StartImage` wird der Hook deinstalliert und `ConfigurationTable` dauerhaft auf `RealRSDP` restauriert.
+
+4. **16-Bit Real-Mode Trampolin unverändert:**
+   Das Trampolin bleibt zu 100 % unverändert (weiterhin kein MMIO, kein SEC2-Unlock, kein CMOS/RTC).
+
+5. **Host-Test Suite:**
+   Alle 137 Tests in 10 Test-Suites bestanden (`MSVC_HOST_TESTS=PASS`).

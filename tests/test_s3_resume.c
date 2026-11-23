@@ -186,6 +186,23 @@ static void TestGuS3GuidsAndOpcodes(void) {
   CHECK(EFI_BOOT_SCRIPT_DISPATCH_2_OPCODE == 0x09, "DISPATCH_2 must be 0x09");
 }
 
+static VOID *g_mock_ebs_observed_vendor_table = NULL;
+static EFI_SYSTEM_TABLE mock_st;
+
+static EFI_STATUS EFIAPI MockOriginalExitBootServices(EFI_HANDLE ImageHandle, UINTN MapKey) {
+  (VOID)ImageHandle; (VOID)MapKey;
+  if (mock_st.ConfigurationTable) {
+    g_mock_ebs_observed_vendor_table = mock_st.ConfigurationTable[0].VendorTable;
+  }
+  return EFI_SUCCESS;
+}
+
+static EFI_STATUS EFIAPI MockCalculateCrc32(VOID *Data, UINTN DataSize, UINT32 *Crc32) {
+  (VOID)Data; (VOID)DataSize;
+  if (Crc32) *Crc32 = 0x12345678;
+  return EFI_SUCCESS;
+}
+
 static void TestGuAcpiFacsDiscoveryAndPatching(void) {
   printf("[6] Testing Universal ACPI FACS & FADT Discovery and Shadow Patching...\n");
 
@@ -255,20 +272,46 @@ static void TestGuAcpiFacsDiscoveryAndPatching(void) {
   EFI_ACPI_2_0_ROOT_SYSTEM_DESCRIPTION_POINTER mock_rsdp;
   memset(&mock_rsdp, 0, sizeof(mock_rsdp));
   mock_rsdp.Signature = GU_ACPI_RSDP_SIGNATURE;
+  mock_rsdp.Length = sizeof(mock_rsdp);
   mock_rsdp.Revision = 2;
   mock_rsdp.RsdtAddress = (UINT32)(uintptr_t)&mock_rsdt;
   mock_rsdp.XsdtAddress = (UINT64)(uintptr_t)&mock_xsdt;
 
-  /* Mock EFI System Table */
+  /* Calculate initial mock RSDP checksums */
+  mock_rsdp.Checksum = 0;
+  UINT8 rsdp_init_sum20 = 0;
+  UINT8 *p_mrsdp = (UINT8 *)&mock_rsdp;
+  for (UINT32 i = 0; i < 20; i++) rsdp_init_sum20 = (UINT8)(rsdp_init_sum20 + p_mrsdp[i]);
+  mock_rsdp.Checksum = (UINT8)(0 - rsdp_init_sum20);
+
+  mock_rsdp.ExtendedChecksum = 0;
+  UINT8 rsdp_init_sum36 = 0;
+  for (UINT32 i = 0; i < mock_rsdp.Length; i++) rsdp_init_sum36 = (UINT8)(rsdp_init_sum36 + p_mrsdp[i]);
+  mock_rsdp.ExtendedChecksum = (UINT8)(0 - rsdp_init_sum36);
+
+  /* Save original checksums of untouched real tables */
+  UINT8 orig_fadt_checksum = mock_fadt.Header.Checksum;
+  UINT8 orig_xsdt_checksum = mock_xsdt.Header.Checksum;
+  UINT8 orig_rsdt_checksum = mock_rsdt.Header.Checksum;
+  UINT8 orig_rsdp_checksum = mock_rsdp.Checksum;
+  UINT8 orig_rsdp_ext_checksum = mock_rsdp.ExtendedChecksum;
+
+  /* Mock EFI System Table & Boot Services */
+  EFI_BOOT_SERVICES mock_bs;
+  memset(&mock_bs, 0, sizeof(mock_bs));
+  mock_bs.Hdr.HeaderSize = sizeof(mock_bs);
+  mock_bs.ExitBootServices = MockOriginalExitBootServices;
+  mock_bs.CalculateCrc32 = MockCalculateCrc32;
+
   EFI_CONFIGURATION_TABLE config_tables[1];
   EFI_GUID acpi20_guid = GU_EFI_ACPI_20_TABLE_GUID;
   config_tables[0].VendorGuid = acpi20_guid;
   config_tables[0].VendorTable = &mock_rsdp;
 
-  EFI_SYSTEM_TABLE mock_st;
   memset(&mock_st, 0, sizeof(mock_st));
   mock_st.NumberOfTableEntries = 1;
   mock_st.ConfigurationTable = config_tables;
+  mock_st.BootServices = &mock_bs;
 
   /* Run Discovery */
   GU_ACPI_FACS_INFO info;
@@ -325,51 +368,25 @@ static void TestGuAcpiFacsDiscoveryAndPatching(void) {
   CHECK(s == EFI_SUCCESS, "GuAcpiInstallShadowFacs must return EFI_SUCCESS");
   CHECK(info.shadow_facs_phys == mock_low_tramp_phys + 0x00200, "Shadow FACS physical address must be low_tramp + 0x200");
   CHECK(info.shadow_fadt_phys == mock_low_tramp_phys + 0x00400, "Shadow FADT physical address must be low_tramp + 0x400");
+  CHECK(info.shadow_rsdp_phys == mock_low_tramp_phys + 0x00600, "Shadow RSDP physical address must be low_tramp + 0x600");
+  CHECK(info.shadow_xsdt_phys == mock_low_tramp_phys + 0x00640, "Shadow XSDT physical address must be low_tramp + 0x640");
   CHECK(info.trampoline_phys == mock_low_tramp_phys, "Trampoline physical address must be mock_low_tramp_phys (<1MB)");
 
-  /* Verify Plan B: Shadow FADT at low_tramp + 0x400 (for XSDT / Windows & BIOS) */
-  EFI_ACPI_2_0_FIXED_ACPI_DESCRIPTION_TABLE *shadow_fadt =
-      (EFI_ACPI_2_0_FIXED_ACPI_DESCRIPTION_TABLE *)(mock_low_tramp + 0x00400);
-  CHECK(shadow_fadt->Header.Signature == GU_ACPI_FADT_SIGNATURE, "Shadow FADT signature must be 'FACP'");
-  CHECK(shadow_fadt->FirmwareCtrl == (UINT32)(mock_low_tramp_phys + 0x00200), "Shadow FADT FirmwareCtrl must point to Shadow FACS (0x9E200) for Windows");
-  CHECK(shadow_fadt->XFirmwareCtrl == (UINT64)info.real_facs_phys, "Shadow FADT XFirmwareCtrl must point to Real FACS (0xDC8BB000) for AMI Aptio V");
+  /* 1. Verify Plan C: Real ACPI tables remain 100% UNTOUCHED byte-for-byte */
+  CHECK(mock_fadt.Header.Checksum == orig_fadt_checksum, "Real FADT checksum must be byte-for-byte UNTOUCHED");
+  CHECK(mock_xsdt.Header.Checksum == orig_xsdt_checksum, "Real XSDT checksum must be byte-for-byte UNTOUCHED");
+  CHECK(mock_rsdt.Header.Checksum == orig_rsdt_checksum, "Real RSDT checksum must be byte-for-byte UNTOUCHED");
+  CHECK(mock_rsdp.Checksum == orig_rsdp_checksum, "Real RSDP 20-byte checksum must be byte-for-byte UNTOUCHED");
+  CHECK(mock_rsdp.ExtendedChecksum == orig_rsdp_ext_checksum, "Real RSDP 36-byte extended checksum must be byte-for-byte UNTOUCHED");
+  CHECK(mock_xsdt.Entry[0] == (UINT64)(uintptr_t)&mock_fadt, "Real XSDT Entry[0] must still point to Real FADT");
+  CHECK(mock_rsdt.Entry[0] == (UINT32)(uintptr_t)&mock_fadt, "Real RSDT Entry[0] must still point to Real FADT");
 
-  /* Verify Shadow FADT checksum was recalculated and is valid */
-  sum = 0;
-  p = (UINT8 *)shadow_fadt;
-  for (UINT32 i = 0; i < shadow_fadt->Header.Length; i++) sum = (UINT8)(sum + p[i]);
-  CHECK(sum == 0, "Shadow FADT checksum must be 0 mod 256");
-
-  /* Verify Plan B: Original FADT (for RSDT / 32-bit BIOS) */
-  CHECK(mock_fadt.FirmwareCtrl == (UINT32)info.real_facs_phys, "Original FADT FirmwareCtrl must point to Real FACS for BIOS");
-  CHECK(mock_fadt.XFirmwareCtrl == 0, "Original FADT XFirmwareCtrl must be 0");
-
-  /* Verify Original FADT checksum was recalculated and is valid */
-  sum = 0;
-  p = (UINT8 *)&mock_fadt;
-  for (UINT32 i = 0; i < mock_fadt.Header.Length; i++) sum = (UINT8)(sum + p[i]);
-  CHECK(sum == 0, "Original FADT checksum must be 0 mod 256");
-
-  /* Verify Plan B: XSDT entry diverted to Shadow FADT */
-  CHECK(mock_xsdt.Entry[0] == (UINT64)(mock_low_tramp_phys + 0x00400), "XSDT Entry[0] must point to Shadow FADT");
-
-  /* Verify XSDT checksum was recalculated and is valid */
-  sum = 0;
-  p = (UINT8 *)&mock_xsdt;
-  for (UINT32 i = 0; i < mock_xsdt.Header.Length; i++) sum = (UINT8)(sum + p[i]);
-  CHECK(sum == 0, "Updated XSDT checksum must be 0 mod 256");
-
-  /* Verify RSDT entry remains pointing to Real FADT */
-  CHECK(mock_rsdt.Entry[0] == (UINT32)(uintptr_t)&mock_fadt, "RSDT Entry[0] must remain pointing to Real FADT");
-
-  /* Verify Real FACS was hooked to point to Low Trampoline */
+  /* Verify Real FACS was hooked to point to Low Trampoline (<1MB) for AMI Aptio V */
   CHECK(mock_facs.FirmwareWakingVector == (UINT32)mock_low_tramp_phys, "Real FACS FirmwareWakingVector must point to Low Trampoline");
   CHECK(mock_facs.XFirmwareWakingVector == 0, "Real FACS XFirmwareWakingVector must be cleared");
-
-  /* Verify bit 1 (64-bit wake supported) is cleared in both tables */
   CHECK((mock_facs.Flags & 2U) == 0, "Real FACS 64-bit wake flag must be cleared");
 
-  /* Verify Shadow FACS retains identical signature and hardware signature */
+  /* 2. Verify Plan C: Shadow FACS */
   EFI_ACPI_2_0_FIRMWARE_ACPI_CONTROL_STRUCTURE *shadow_facs =
       (EFI_ACPI_2_0_FIRMWARE_ACPI_CONTROL_STRUCTURE *)(mock_low_tramp + 0x00200);
   CHECK(shadow_facs->Signature == GU_ACPI_FACS_SIGNATURE, "Shadow FACS signature must be 'FACS'");
@@ -377,14 +394,79 @@ static void TestGuAcpiFacsDiscoveryAndPatching(void) {
   CHECK(shadow_facs->FirmwareWakingVector == 0, "Shadow FACS FirmwareWakingVector initialized to 0");
   CHECK((shadow_facs->Flags & 2U) == 0, "Shadow FACS 64-bit wake flag must be cleared");
 
-  /* Verify warm reset recovery: re-running discovery when XSDT points to Shadow FADT recovers Real FADT & Real FACS */
+  /* 3. Verify Plan C: Shadow FADT at low_tramp + 0x400 */
+  EFI_ACPI_2_0_FIXED_ACPI_DESCRIPTION_TABLE *shadow_fadt =
+      (EFI_ACPI_2_0_FIXED_ACPI_DESCRIPTION_TABLE *)(mock_low_tramp + 0x00400);
+  CHECK(shadow_fadt->Header.Signature == GU_ACPI_FADT_SIGNATURE, "Shadow FADT signature must be 'FACP'");
+  CHECK(shadow_fadt->FirmwareCtrl == (UINT32)(mock_low_tramp_phys + 0x00200), "Shadow FADT FirmwareCtrl must point to Shadow FACS (0x9E200) for Windows");
+  CHECK(shadow_fadt->XFirmwareCtrl == 0, "Shadow FADT XFirmwareCtrl must be 0");
+
+  sum = 0;
+  p = (UINT8 *)shadow_fadt;
+  for (UINT32 i = 0; i < shadow_fadt->Header.Length; i++) sum = (UINT8)(sum + p[i]);
+  CHECK(sum == 0, "Shadow FADT checksum must be 0 mod 256");
+
+  /* 4. Verify Plan C: Shadow XSDT at low_tramp + 0x640 */
+  EFI_ACPI_DESCRIPTION_HEADER *shadow_xsdt =
+      (EFI_ACPI_DESCRIPTION_HEADER *)(mock_low_tramp + 0x00640);
+  CHECK(shadow_xsdt->Signature == GU_ACPI_XSDT_SIGNATURE, "Shadow XSDT signature must be 'XSDT'");
+  UINT64 *sxsdt_entries = (UINT64 *)((UINT8 *)shadow_xsdt + sizeof(EFI_ACPI_DESCRIPTION_HEADER));
+  CHECK(sxsdt_entries[0] == (UINT64)(mock_low_tramp_phys + 0x00400), "Shadow XSDT Entry[0] must point to Shadow FADT");
+
+  sum = 0;
+  p = (UINT8 *)shadow_xsdt;
+  for (UINT32 i = 0; i < shadow_xsdt->Length; i++) sum = (UINT8)(sum + p[i]);
+  CHECK(sum == 0, "Shadow XSDT checksum must be 0 mod 256");
+
+  /* 5. Verify Plan C: Shadow RSDP at low_tramp + 0x600 */
+  EFI_ACPI_2_0_ROOT_SYSTEM_DESCRIPTION_POINTER *shadow_rsdp =
+      (EFI_ACPI_2_0_ROOT_SYSTEM_DESCRIPTION_POINTER *)(mock_low_tramp + 0x00600);
+  CHECK(shadow_rsdp->Signature == GU_ACPI_RSDP_SIGNATURE, "Shadow RSDP signature must be 'RSD PTR '");
+  CHECK(shadow_rsdp->XsdtAddress == (UINT64)(mock_low_tramp_phys + 0x00640), "Shadow RSDP XsdtAddress must point to Shadow XSDT");
+  CHECK(shadow_rsdp->RsdtAddress == mock_rsdp.RsdtAddress, "Shadow RSDP RsdtAddress must remain pointing to Real RSDT");
+
+  sum = 0;
+  p = (UINT8 *)shadow_rsdp;
+  for (UINT32 i = 0; i < 20; i++) sum = (UINT8)(sum + p[i]);
+  CHECK(sum == 0, "Shadow RSDP 20-byte legacy checksum must be 0 mod 256");
+
+  sum = 0;
+  for (UINT32 i = 0; i < shadow_rsdp->Length; i++) sum = (UINT8)(sum + p[i]);
+  CHECK(sum == 0, "Shadow RSDP 36-byte extended checksum must be 0 mod 256");
+
+  /* 6. Verify ConfigurationTable In-Place Patching */
+  CHECK(mock_st.ConfigurationTable[0].VendorTable == (VOID *)(UINTN)(mock_low_tramp_phys + 0x00600),
+        "SystemTable ConfigurationTable must point to Shadow RSDP");
+
+  /* 7. Verify ExitBootServices Sandwich Hook */
+  g_mock_ebs_observed_vendor_table = NULL;
+  s = GuAcpiInstallEbsHook(&mock_st);
+  CHECK(s == EFI_SUCCESS, "GuAcpiInstallEbsHook must return EFI_SUCCESS");
+  CHECK(mock_st.BootServices->ExitBootServices != MockOriginalExitBootServices, "EBS pointer must be hooked");
+
+  /* Invoke hooked EBS */
+  s = mock_st.BootServices->ExitBootServices((EFI_HANDLE)0x1, 0x1234);
+  CHECK(s == EFI_SUCCESS, "Hooked EBS invocation must return EFI_SUCCESS");
+  CHECK(g_mock_ebs_observed_vendor_table == &mock_rsdp,
+        "Inside EBS sandwich: firmware/SMM must observe Real RSDP in ConfigurationTable");
+  CHECK(mock_st.ConfigurationTable[0].VendorTable == (VOID *)(UINTN)(mock_low_tramp_phys + 0x00600),
+        "After EBS: ConfigurationTable must be restored to Shadow RSDP for OS bootloader");
+
+  /* Uninstall EBS Hook */
+  GuAcpiUninstallEbsHook(&mock_st);
+  CHECK(mock_st.BootServices->ExitBootServices == MockOriginalExitBootServices,
+        "Uninstalling EBS hook must restore original BootServices pointer");
+  CHECK(mock_st.ConfigurationTable[0].VendorTable == &mock_rsdp,
+        "Uninstalling EBS hook must restore ConfigurationTable to Real RSDP");
+
+  /* 8. Verify warm reset recovery: re-running discovery recovers Real FADT & Real FACS */
   GU_ACPI_FACS_INFO info_warm;
   s = GuAcpiLocateFadtAndFacs(&mock_st, &info_warm);
   CHECK(s == EFI_SUCCESS, "Warm reset discovery must succeed");
   CHECK(info_warm.fadt == &mock_fadt, "Warm reset must recover original Real FADT from RSDT");
   CHECK(info_warm.real_facs == &mock_facs, "Warm reset must recover original Real FACS table");
   CHECK(info_warm.real_facs_phys == (EFI_PHYSICAL_ADDRESS)(uintptr_t)&mock_facs, "Warm reset must recover original Real FACS address");
-  printf("[6] Discovery & Shadow FACS Patching (including Warm Reset): OK!\n");
+  printf("[6] Discovery, Shadow Chain & EBS Sandwich (Plan C): OK!\n");
   fflush(stdout);
 }
 
