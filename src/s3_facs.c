@@ -245,11 +245,11 @@ UINT32 GuAcpiBuildTrampolineCode(
   *e++ = 0x66; *e++ = 0x0D; *e++ = 0x00; *e++ = 0x2D; *e++ = 0x2D; *e++ = 0x00; /* or eax, 0x002D2D00 */
 
   /* Write new bus numbers to Root Port 0:3:1 offset 0x18 (0x80001918) */
-  *e++ = 0x66; *e++ = 0x50;                                       /* push eax */
+  *e++ = 0x66; *e++ = 0x89; *e++ = 0xC1;                         /* mov ecx, eax (save in ECX, 100% stack-free) */
   *e++ = 0x66; *e++ = 0xB8; *e++ = 0x18; *e++ = 0x19; *e++ = 0x00; *e++ = 0x80; /* mov eax, 0x80001918 */
   *e++ = 0xBA; *e++ = 0xF8; *e++ = 0x0C;                         /* mov dx, 0x0CF8 */
   *e++ = 0x66; *e++ = 0xEF;                                       /* out dx, eax */
-  *e++ = 0x66; *e++ = 0x58;                                       /* pop eax */
+  *e++ = 0x66; *e++ = 0x89; *e++ = 0xC8;                         /* mov eax, ecx (restore from ECX, 100% stack-free) */
   *e++ = 0xBA; *e++ = 0xFC; *e++ = 0x0C;                         /* mov dx, 0x0CFC */
   *e++ = 0x66; *e++ = 0xEF;                                       /* out dx, eax */
 
@@ -396,6 +396,8 @@ static UINT32 GuFindRootPortLinkReg(EFI_BOOT_SERVICES *bs, UINT8 target_bus) {
   EFI_STATUS s = bs->LocateHandleBuffer(ByProtocol, &pci_guid, NULL, &count, &handles);
   if (EFI_ERROR(s) || !handles) return fallback_reg;
 
+  UINT32 fallback_match_reg = 0;
+
   for (UINTN i = 0; i < count; i++) {
     EFI_PCI_IO_PROTOCOL *io = NULL;
     if (EFI_ERROR(bs->HandleProtocol(handles[i], &pci_guid, (VOID **)&io)) || !io) continue;
@@ -408,7 +410,9 @@ static UINT32 GuFindRootPortLinkReg(EFI_BOOT_SERVICES *bs, UINT8 target_bus) {
       if (io->GetLocation) {
         (VOID)io->GetLocation(io, &seg, &bus, &dev, &func);
       }
-      if (sec_bus == target_bus || (bus == 0 && dev == 3 && func == 1)) {
+      BOOLEAN is_target = (sec_bus == target_bus);
+      BOOLEAN is_default_bdf = (bus == 0 && dev == 3 && func == 1);
+      if (is_target || (is_default_bdf && fallback_match_reg == 0)) {
         UINT8 cap_ptr = 0;
         (VOID)io->Pci.Read(io, EfiPciIoWidthUint8, 0x34, 1, &cap_ptr);
         UINTN steps = 0;
@@ -419,8 +423,12 @@ static UINT32 GuFindRootPortLinkReg(EFI_BOOT_SERVICES *bs, UINT8 target_bus) {
           if (cap_id == 0x10) { /* PCI Express Capability */
             UINT32 reg_off = (UINT32)(cap_ptr + 0x10);
             UINT32 pci_addr = 0x80000000U | ((UINT32)bus << 16) | ((UINT32)dev << 11) | ((UINT32)func << 8) | (reg_off & ~3U);
-            bs->FreePool(handles);
-            return pci_addr;
+            if (is_target) {
+              bs->FreePool(handles);
+              return pci_addr;
+            }
+            fallback_match_reg = pci_addr;
+            break;
           }
           cap_ptr = next_ptr;
         }
@@ -428,7 +436,7 @@ static UINT32 GuFindRootPortLinkReg(EFI_BOOT_SERVICES *bs, UINT8 target_bus) {
     }
   }
   bs->FreePool(handles);
-  return fallback_reg;
+  return fallback_match_reg ? fallback_match_reg : fallback_reg;
 }
 
 /*
@@ -506,30 +514,56 @@ EFI_STATUS GuAcpiInstallShadowFacs(
     return s;
   }
 
-  /* Check for prior wake telemetry in low trampoline memory */
+  /* Check for prior wake telemetry in low trampoline memory or low pages (0x90000..0x9F000) */
   UINT8 *low_base = (UINT8 *)LowTrampBuffer;
-  UINT32 prior_magic = *(UINT32 *)(low_base + GU_TRAMP_MAGIC_OFF);
-  if (prior_magic == GU_TRAMP_TELEMETRY_MAGIC) {
-    UINT16 entry_status = *(UINT16 *)(low_base + GU_TRAMP_ENTRY_STATUS_OFF);
-    UINT16 exit_status  = *(UINT16 *)(low_base + GU_TRAMP_EXIT_STATUS_OFF);
-    UINT32 full_vec     = *(UINT32 *)(low_base + GU_TRAMP_CAPTURED_VEC_OFF);
-    UINT16 tgt_off      = *(UINT16 *)(low_base + GU_TRAMP_TARGET_PTR_OFF);
-    UINT16 tgt_seg      = *(UINT16 *)(low_base + GU_TRAMP_TARGET_PTR_OFF + 2);
-    GuLog("S3 Prior Wake Telemetry: Magic=S3_T Entry=%#04x Vector=%#08x Target=%04x:%04x Exit=%#04x\n",
+  UINT8 *telemetry_page = NULL;
+  EFI_PHYSICAL_ADDRESS telemetry_phys = 0;
+
+  if (*(UINT32 *)(low_base + GU_TRAMP_MAGIC_OFF) == GU_TRAMP_TELEMETRY_MAGIC) {
+    UINT16 entry_chk = *(UINT16 *)(low_base + GU_TRAMP_ENTRY_STATUS_OFF);
+    if (entry_chk == 0xAA01 || entry_chk == 0xDEAD) {
+      telemetry_page = low_base;
+      telemetry_phys = LowTrampPhys;
+    }
+  }
+
+  if (!telemetry_page && LowTrampPhys < 0x00100000ULL) {
+    /* Scan 16 low-memory pages from 0x00090000 to 0x0009F000 (4-KB steps) */
+    for (EFI_PHYSICAL_ADDRESS page_addr = 0x00090000ULL; page_addr <= 0x0009F000ULL; page_addr += 4096) {
+      UINT8 *candidate = (UINT8 *)(UINTN)page_addr;
+      if (*(UINT32 *)(candidate + GU_TRAMP_MAGIC_OFF) == GU_TRAMP_TELEMETRY_MAGIC) {
+        UINT16 entry_chk = *(UINT16 *)(candidate + GU_TRAMP_ENTRY_STATUS_OFF);
+        if (entry_chk == 0xAA01 || entry_chk == 0xDEAD) {
+          telemetry_page = candidate;
+          telemetry_phys = page_addr;
+          break;
+        }
+      }
+    }
+  }
+
+  if (telemetry_page != NULL) {
+    UINT16 entry_status = *(UINT16 *)(telemetry_page + GU_TRAMP_ENTRY_STATUS_OFF);
+    UINT16 exit_status  = *(UINT16 *)(telemetry_page + GU_TRAMP_EXIT_STATUS_OFF);
+    UINT32 full_vec     = *(UINT32 *)(telemetry_page + GU_TRAMP_CAPTURED_VEC_OFF);
+    UINT16 tgt_off      = *(UINT16 *)(telemetry_page + GU_TRAMP_TARGET_PTR_OFF);
+    UINT16 tgt_seg      = *(UINT16 *)(telemetry_page + GU_TRAMP_TARGET_PTR_OFF + 2);
+    GuLog("S3 Prior Wake Telemetry (Page %#llx): Magic=S3_T Entry=%#04x Vector=%#08x Target=%04x:%04x Exit=%#04x\n",
+          (unsigned long long)telemetry_phys,
           (unsigned)entry_status, (unsigned)full_vec, (unsigned)tgt_seg, (unsigned)tgt_off, (unsigned)exit_status);
 
-    UINT32 br_id   = *(UINT32 *)(low_base + GU_TRAMP_PCI_PROBE_RAW_OFF + 0x00);
-    UINT32 br_cmd  = *(UINT32 *)(low_base + GU_TRAMP_PCI_PROBE_RAW_OFF + 0x04);
-    UINT32 br_bus  = *(UINT32 *)(low_base + GU_TRAMP_PCI_PROBE_RAW_OFF + 0x08);
-    UINT32 br_lnk  = *(UINT32 *)(low_base + GU_TRAMP_PCI_PROBE_RAW_OFF + 0x0C);
-    UINT32 gpu_id  = *(UINT32 *)(low_base + GU_TRAMP_PCI_PROBE_RAW_OFF + 0x10);
-    UINT32 gpu_cmd = *(UINT32 *)(low_base + GU_TRAMP_PCI_PROBE_RAW_OFF + 0x14);
-    UINT32 gpu_bar = *(UINT32 *)(low_base + GU_TRAMP_PCI_PROBE_RAW_OFF + 0x18);
-    UINT32 gpu_pm  = *(UINT32 *)(low_base + GU_TRAMP_PCI_PROBE_RAW_OFF + 0x1C);
-    UINT32 post_id = *(UINT32 *)(low_base + GU_TRAMP_PCI_PROBE_POST_OFF + 0x00);
-    UINT32 post_cmd= *(UINT32 *)(low_base + GU_TRAMP_PCI_PROBE_POST_OFF + 0x04);
-    UINT32 post_bar= *(UINT32 *)(low_base + GU_TRAMP_PCI_PROBE_POST_OFF + 0x08);
-    UINT32 post_pm = *(UINT32 *)(low_base + GU_TRAMP_PCI_PROBE_POST_OFF + 0x0C);
+    UINT32 br_id   = *(UINT32 *)(telemetry_page + GU_TRAMP_PCI_PROBE_RAW_OFF + 0x00);
+    UINT32 br_cmd  = *(UINT32 *)(telemetry_page + GU_TRAMP_PCI_PROBE_RAW_OFF + 0x04);
+    UINT32 br_bus  = *(UINT32 *)(telemetry_page + GU_TRAMP_PCI_PROBE_RAW_OFF + 0x08);
+    UINT32 br_lnk  = *(UINT32 *)(telemetry_page + GU_TRAMP_PCI_PROBE_RAW_OFF + 0x0C);
+    UINT32 gpu_id  = *(UINT32 *)(telemetry_page + GU_TRAMP_PCI_PROBE_RAW_OFF + 0x10);
+    UINT32 gpu_cmd = *(UINT32 *)(telemetry_page + GU_TRAMP_PCI_PROBE_RAW_OFF + 0x14);
+    UINT32 gpu_bar = *(UINT32 *)(telemetry_page + GU_TRAMP_PCI_PROBE_RAW_OFF + 0x18);
+    UINT32 gpu_pm  = *(UINT32 *)(telemetry_page + GU_TRAMP_PCI_PROBE_RAW_OFF + 0x1C);
+    UINT32 post_id = *(UINT32 *)(telemetry_page + GU_TRAMP_PCI_PROBE_POST_OFF + 0x00);
+    UINT32 post_cmd= *(UINT32 *)(telemetry_page + GU_TRAMP_PCI_PROBE_POST_OFF + 0x04);
+    UINT32 post_bar= *(UINT32 *)(telemetry_page + GU_TRAMP_PCI_PROBE_POST_OFF + 0x08);
+    UINT32 post_pm = *(UINT32 *)(telemetry_page + GU_TRAMP_PCI_PROBE_POST_OFF + 0x0C);
 
     UINT16 lnk_status = (UINT16)(br_lnk >> 16);
     BOOLEAN dllla = (lnk_status & 0x2000U) != 0;
@@ -549,6 +583,11 @@ EFI_STATUS GuAcpiInstallShadowFacs(
           (unsigned)gpu_id, (unsigned)gpu_cmd, (unsigned)gpu_bar, (unsigned)gpu_pm,
           (unsigned)post_id, (unsigned)post_cmd, (unsigned)post_bar, (unsigned)post_pm,
           (unsigned)br_bus);
+
+    /* Zero out the telemetry magic on the found page after reading */
+    *(UINT32 *)(telemetry_page + GU_TRAMP_MAGIC_OFF) = 0;
+  } else {
+    GuLog("S3 Prior Wake Telemetry: none found\n");
   }
 
   /*

@@ -148,7 +148,7 @@ Alle Kernkomponenten werden über gemockte Firmware-Services automatisiert valid
 5. `test_gpu_topology`: Negative Topology Isolation (44 Checks).
 6. `test_gpu_discovery`: PCI I/O Protocol Adapter & Memory-Decode-Aktivierung (21 Checks).
 7. `test_turing_local`: Turing TU102/TU104/TU106 Device-IDs & Binär-Hashes.
-8. `test_s3_resume`: Universal S3 Resume Engine, ACPI FACS Shadow Intercept & Dual-Mode Trampoline (55 Checks).
+8. `test_s3_resume`: Universal S3 Resume Engine, ACPI FACS Shadow Intercept & 16-Bit Trampoline (106 Checks).
 
 ---
 

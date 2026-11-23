@@ -140,7 +140,6 @@ EFI_STATUS GuS3PrepareAndRegister(EFI_SYSTEM_TABLE *t) {
   }
 
   UINT8 *low_tramp_base = (UINT8 *)(UINTN)low_tramp_phys;
-  memset(low_tramp_base, 0, 4096);
 
   GU_S3_RESUME_CONTEXT *ctx = (GU_S3_RESUME_CONTEXT *)nvs_base;
   ctx->magic = GU_S3_CONTEXT_MAGIC;

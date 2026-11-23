@@ -19,10 +19,22 @@
 #include "../src/compat/compat.h"
 #include <stddef.h>
 
+#include <stdarg.h>
+
 GU_PLATFORM Gu;
 GU_ASSET GuAssets[5];
+static char g_log_history[8192] = {0};
+
 VOID GuLog(const char *Format, ...) {
-  (VOID)Format;
+  char temp[1024];
+  va_list args;
+  va_start(args, Format);
+  vsnprintf(temp, sizeof(temp), Format, args);
+  va_end(args);
+  size_t cur = strlen(g_log_history);
+  if (cur + strlen(temp) + 1 < sizeof(g_log_history)) {
+    strcat(g_log_history, temp);
+  }
 }
 
 static unsigned int g_checks = 0;
@@ -254,6 +266,20 @@ static void TestGuAcpiFacsDiscoveryAndPatching(void) {
   memset(mock_low_tramp, 0, sizeof(mock_low_tramp));
   EFI_PHYSICAL_ADDRESS mock_low_tramp_phys = (EFI_PHYSICAL_ADDRESS)(uintptr_t)mock_low_tramp;
 
+  /* Host-Test: Pre-populate mock telemetry in mock_low_tramp to verify it is NOT destroyed before reading */
+  *(UINT32 *)(mock_low_tramp + GU_TRAMP_MAGIC_OFF) = GU_TRAMP_TELEMETRY_MAGIC;
+  *(UINT16 *)(mock_low_tramp + GU_TRAMP_ENTRY_STATUS_OFF) = 0xAA01;
+  *(UINT16 *)(mock_low_tramp + GU_TRAMP_EXIT_STATUS_OFF) = 0xAA02;
+  *(UINT32 *)(mock_low_tramp + GU_TRAMP_CAPTURED_VEC_OFF) = 0x0009E000U;
+  *(UINT16 *)(mock_low_tramp + GU_TRAMP_TARGET_PTR_OFF) = 0x0000;
+  *(UINT16 *)(mock_low_tramp + GU_TRAMP_TARGET_PTR_OFF + 2) = 0x9E00;
+  *(UINT32 *)(mock_low_tramp + GU_TRAMP_PCI_PROBE_RAW_OFF + 0x00) = 0x10221483U; /* AMD Root Port */
+  *(UINT32 *)(mock_low_tramp + GU_TRAMP_PCI_PROBE_RAW_OFF + 0x08) = 0x002D2D00U;
+  *(UINT32 *)(mock_low_tramp + GU_TRAMP_PCI_PROBE_RAW_OFF + 0x0C) = 0x20430040U; /* Gen4 x16 DLLLA=1 */
+  *(UINT32 *)(mock_low_tramp + GU_TRAMP_PCI_PROBE_RAW_OFF + 0x10) = 0x10DE2684U; /* RTX 4090 */
+
+  g_log_history[0] = '\0';
+
   GU_S3_RESUME_CONTEXT ctx;
   memset(&ctx, 0, sizeof(ctx));
   ctx.magic = GU_S3_CONTEXT_MAGIC;
@@ -262,8 +288,17 @@ static void TestGuAcpiFacsDiscoveryAndPatching(void) {
   ctx.val_ss1 = 0x00000008U;
   ctx.pci_cmd_port_addr = 0x80000004U;
 
-  /* Install Shadow FACS */
+  /* Install Shadow FACS - must read pre-populated telemetry before low_base is zeroed */
   s = GuAcpiInstallShadowFacs(&mock_st, &ctx, mock_nvs, mock_nvs_phys, mock_low_tramp, mock_low_tramp_phys, &info);
+  CHECK(s == EFI_SUCCESS, "GuAcpiInstallShadowFacs must return EFI_SUCCESS");
+  CHECK(strstr(g_log_history, "S3 Prior Wake Telemetry") != NULL, "Prior wake telemetry must be read and logged");
+  CHECK(strstr(g_log_history, "DLLLA=1") != NULL, "Link status telemetry must report DLLLA=1");
+
+  /* Verify fresh re-invocation logs 'none found' */
+  g_log_history[0] = '\0';
+  s = GuAcpiInstallShadowFacs(&mock_st, &ctx, mock_nvs, mock_nvs_phys, mock_low_tramp, mock_low_tramp_phys, &info);
+  CHECK(s == EFI_SUCCESS, "Second GuAcpiInstallShadowFacs must return EFI_SUCCESS");
+  CHECK(strstr(g_log_history, "S3 Prior Wake Telemetry: none found") != NULL, "Re-run must log 'none found'");
   CHECK(s == EFI_SUCCESS, "GuAcpiInstallShadowFacs must return EFI_SUCCESS");
   CHECK(info.shadow_facs_phys == mock_low_tramp_phys + 0x00200, "Shadow FACS physical address must be low_tramp + 0x200");
   CHECK(info.trampoline_phys == mock_low_tramp_phys, "Trampoline physical address must be mock_low_tramp_phys (<1MB)");
@@ -357,22 +392,46 @@ static void TestGuAcpiBuildTrampolineCode(void) {
   CHECK(num_outs >= 8, "Trampoline must contain at least 8 32-bit OUT instructions (66 EF)");
   CHECK(num_ins >= 5, "Trampoline must contain at least 5 32-bit IN instructions (66 ED)");
 
-  /* Explicit Sanity Check 2: Verify Root Port Offset 0x18 is restored from [0x0348] */
-  BOOLEAN found_restore_18 = FALSE;
-  for (UINT32 i = 0; i < bytes - 12; i++) {
-    /* mov eax, 0x80001918 (66 B8 18 19 00 80) ... mov eax, [0x0348] (66 A1 48 03) ... out dx, eax (66 EF) */
-    if (buffer[i] == 0x66 && buffer[i+1] == 0xB8 && buffer[i+2] == 0x18 && buffer[i+3] == 0x19 &&
-        buffer[i+4] == 0x00 && buffer[i+5] == 0x80) {
-      for (UINT32 j = i + 6; j < bytes - 6; j++) {
-        if (buffer[j] == 0x66 && buffer[j+1] == 0xA1 && buffer[j+2] == 0x48 && buffer[j+3] == 0x03) {
-          found_restore_18 = TRUE;
-          break;
-        }
-      }
+  /* Explicit Sanity Check 2: Verify exact contiguous bridge restore sequence (20 bytes) */
+  static const UINT8 kExpectedBridgeRestore[20] = {
+    0x66, 0xB8, 0x18, 0x19, 0x00, 0x80, /* mov eax, 0x80001918 */
+    0xBA, 0xF8, 0x0C,                   /* mov dx, 0x0CF8 */
+    0x66, 0xEF,                         /* out dx, eax */
+    0x66, 0xA1, 0x48, 0x03,             /* mov eax, [0x0348] */
+    0xBA, 0xFC, 0x0C,                   /* mov dx, 0x0CFC */
+    0x66, 0xEF                          /* out dx, eax */
+  };
+  BOOLEAN found_exact_restore = FALSE;
+  for (UINT32 i = 0; i <= bytes - sizeof(kExpectedBridgeRestore); i++) {
+    if (memcmp(buffer + i, kExpectedBridgeRestore, sizeof(kExpectedBridgeRestore)) == 0) {
+      found_exact_restore = TRUE;
       break;
     }
   }
-  CHECK(found_restore_18, "Trampoline must restore Root Port 0:3:1 Offset 0x18 from original [0x0348]");
+  CHECK(found_exact_restore, "Trampoline must contain exact contiguous bridge restore sequence (66 B8 18 19 00 80 ...)");
+
+  /* Explicit Sanity Check 2b: Verify trampoline is 100% stack-free (no push eax 66 50 or pop eax 66 58) */
+  BOOLEAN found_stack_op = FALSE;
+  for (UINT32 i = 0; i < bytes; i++) {
+    if (buffer[i] == 0x66 && i + 1 < bytes && (buffer[i+1] == 0x50 || buffer[i+1] == 0x58)) {
+      found_stack_op = TRUE;
+      break;
+    }
+    if (buffer[i] == 0x50 || buffer[i] == 0x58) {
+      found_stack_op = TRUE;
+      break;
+    }
+  }
+  CHECK(!found_stack_op, "Trampoline must be 100% stack-free (no push eax or pop eax)");
+
+  BOOLEAN found_mov_ecx_eax = FALSE;
+  BOOLEAN found_mov_eax_ecx = FALSE;
+  for (UINT32 i = 0; i < bytes - 2; i++) {
+    if (buffer[i] == 0x66 && buffer[i+1] == 0x89 && buffer[i+2] == 0xC1) found_mov_ecx_eax = TRUE;
+    if (buffer[i] == 0x66 && buffer[i+1] == 0x89 && buffer[i+2] == 0xC8) found_mov_eax_ecx = TRUE;
+  }
+  CHECK(found_mov_ecx_eax, "Trampoline must contain mov ecx, eax (66 89 C1)");
+  CHECK(found_mov_eax_ecx, "Trampoline must contain mov eax, ecx (66 89 C8)");
 
   /* Explicit Sanity Check 3: Verify NO MSE/BME (0x0006) is written to Offset 0x04 */
   BOOLEAN found_write_04 = FALSE;
@@ -436,9 +495,9 @@ static void TestGuAcpiBuildTrampolineCode(void) {
     else if (buffer[i] == 0x66 && buffer[i+1] == 0xA1 && buffer[i+2] == 0x48 && buffer[i+3] == 0x03) { instr_len = 4; desc = "mov eax, [0x0348]                ; Load original Root Port Bus Numbers"; }
     else if (buffer[i] == 0x66 && buffer[i+1] == 0x25 && buffer[i+2] == 0x00 && buffer[i+5] == 0xFF) { instr_len = 6; desc = "and eax, 0xFF000000              ; Preserve Latency Timer (bits 31:24)"; }
     else if (buffer[i] == 0x66 && buffer[i+1] == 0x0D && buffer[i+2] == 0x00 && buffer[i+3] == 0x2D) { instr_len = 6; desc = "or eax, 0x002D2D00               ; Pri=0, Sec=0x2D, Sub=0x2D"; }
-    else if (buffer[i] == 0x66 && buffer[i+1] == 0x50) { instr_len = 2; desc = "push eax                         ; Save modified bus numbers"; }
+    else if (buffer[i] == 0x66 && buffer[i+1] == 0x89 && buffer[i+2] == 0xC1) { instr_len = 3; desc = "mov ecx, eax                    ; Save modified bus numbers in ECX (stack-free)"; }
     else if (buffer[i] == 0x66 && buffer[i+1] == 0xB8 && buffer[i+2] == 0x18 && buffer[i+3] == 0x19) { instr_len = 6; desc = "mov eax, 0x80001918              ; Root Port 0:3:1 Offset 0x18"; }
-    else if (buffer[i] == 0x66 && buffer[i+1] == 0x58) { instr_len = 2; desc = "pop eax                          ; Pop modified bus numbers"; }
+    else if (buffer[i] == 0x66 && buffer[i+1] == 0x89 && buffer[i+2] == 0xC8) { instr_len = 3; desc = "mov eax, ecx                    ; Restore modified bus numbers from ECX (stack-free)"; }
     else if (buffer[i] == 0x66 && buffer[i+1] == 0xB8 && buffer[i+2] == 0x00 && buffer[i+4] == 0x2D) { instr_len = 6; desc = "mov eax, 0x802D0000              ; GPU 45:0:0 DevID"; }
     else if (buffer[i] == 0x66 && buffer[i+1] == 0xA3 && buffer[i+2] == 0x60 && buffer[i+3] == 0x03) { instr_len = 4; desc = "mov [0x0360], eax                ; Store Post-Arm GPU DevID"; }
     else if (buffer[i] == 0x66 && buffer[i+1] == 0xB8 && buffer[i+2] == 0x04 && buffer[i+4] == 0x2D) { instr_len = 6; desc = "mov eax, 0x802D0004              ; GPU 45:0:0 Cmd/Stat"; }
