@@ -190,6 +190,7 @@ static VOID *g_mock_ebs_observed_vendor_table = NULL;
 static EFI_SYSTEM_TABLE mock_st;
 static EFI_STATUS g_mock_ebs_return_status = EFI_SUCCESS;
 static UINT8 g_mock_high_acpi[4096];
+static UINT8 g_mock_telemetry_page[4096];
 static UINT32 g_mock_s3_save_call_count = 0;
 static VOID *g_mock_s3_save_observed_vendor_table = NULL;
 
@@ -214,10 +215,13 @@ static EFI_STATUS EFIAPI MockAllocatePages(
     IN OUT EFI_PHYSICAL_ADDRESS *Memory
 ) {
   (VOID)Type;
-  (VOID)MemoryType;
   (VOID)Pages;
   if (!Memory) return EFI_INVALID_PARAMETER;
-  *Memory = (EFI_PHYSICAL_ADDRESS)(uintptr_t)g_mock_high_acpi;
+  if (MemoryType == EfiRuntimeServicesData || MemoryType == EfiReservedMemoryType) {
+    *Memory = (EFI_PHYSICAL_ADDRESS)(uintptr_t)g_mock_telemetry_page;
+  } else {
+    *Memory = (EFI_PHYSICAL_ADDRESS)(uintptr_t)g_mock_high_acpi;
+  }
   return EFI_SUCCESS;
 }
 
@@ -405,8 +409,9 @@ static void TestGuAcpiFacsDiscoveryAndPatching(void) {
   ctx.val_ss1 = 0x00000008U;
   ctx.pci_cmd_port_addr = 0x80000004U;
 
-  /* Reset high ACPI mock memory and S3Save state */
+  /* Reset high ACPI mock memory, telemetry page and S3Save state */
   memset(g_mock_high_acpi, 0, sizeof(g_mock_high_acpi));
+  memset(g_mock_telemetry_page, 0, sizeof(g_mock_telemetry_page));
   g_mock_s3_save_call_count = 0;
   g_mock_s3_save_observed_vendor_table = NULL;
   g_mock_s3_save_protocol.S3Save = MockOriginalS3Save;
@@ -425,7 +430,9 @@ static void TestGuAcpiFacsDiscoveryAndPatching(void) {
   CHECK(s == EFI_SUCCESS, "GuAcpiInstallShadowFacs must return EFI_SUCCESS");
 
   EFI_PHYSICAL_ADDRESS expected_high_acpi_phys = (EFI_PHYSICAL_ADDRESS)(uintptr_t)g_mock_high_acpi;
+  EFI_PHYSICAL_ADDRESS expected_telemetry_phys = (EFI_PHYSICAL_ADDRESS)(uintptr_t)g_mock_telemetry_page;
   CHECK(info.high_acpi_phys == expected_high_acpi_phys, "High ACPI physical address must match allocated page");
+  CHECK(info.telemetry_page_phys == expected_telemetry_phys, "Telemetry page physical address must match allocated page");
   CHECK(info.shadow_facs_phys == expected_high_acpi_phys + GU_HIGH_SHADOW_FACS_OFF, "Shadow FACS physical address must be high page + 0x400");
   CHECK(info.shadow_fadt_phys == expected_high_acpi_phys + GU_HIGH_SHADOW_FADT_OFF, "Shadow FADT physical address must be high page + 0x200");
   CHECK(info.shadow_rsdp_phys == expected_high_acpi_phys + GU_HIGH_SHADOW_RSDP_OFF, "Shadow RSDP physical address must be high page + 0x000");
@@ -601,8 +608,9 @@ static void TestGuAcpiBuildTrampolineCode(void) {
   EFI_PHYSICAL_ADDRESS tramp_phys = 0x0009E000ULL;
   EFI_PHYSICAL_ADDRESS ctx_phys = 0xdc5d8000ULL;
   EFI_PHYSICAL_ADDRESS shadow_facs_phys = 0xdc617400ULL;
+  EFI_PHYSICAL_ADDRESS telem_phys = 0xDA000000ULL;
 
-  UINT32 bytes = GuAcpiBuildTrampolineCode(buffer, sizeof(buffer), tramp_phys, ctx_phys, shadow_facs_phys, 0x80001960U, 0x802D0064U);
+  UINT32 bytes = GuAcpiBuildTrampolineCode(buffer, sizeof(buffer), tramp_phys, ctx_phys, shadow_facs_phys, telem_phys, 0x80001960U, 0x802D0064U);
   CHECK(bytes > 0, "Trampoline builder must generate non-zero bytes");
   CHECK(bytes <= 512, "Pure 16-bit real mode trampoline must fit within 512 bytes");
 
@@ -847,15 +855,30 @@ static void TestGuAcpiBuildTrampolineCode(void) {
   }
   CHECK(found_fallback, "Trampoline must fall back to mov esi, 0x00001000 when waking vector is 0");
 
-  /* Verify Diagnostic Marker 0x324B4F21 ('!OK2') write */
+  /* Verify Diagnostic Marker 0x324B4F21 ('!OK2') write to telem_phys */
   BOOLEAN found_marker = FALSE;
+  BOOLEAN found_marker_addr = FALSE;
   for (UINT32 i = 0; i < bytes - 9; i++) {
     if (buffer[i] == 0xC7 && buffer[i+1] == 0x05 && buffer[i+6] == 0x21 && buffer[i+7] == 0x4F && buffer[i+8] == 0x4B && buffer[i+9] == 0x32) {
       found_marker = TRUE;
+      if (*(UINT32 *)(buffer + i + 2) == (UINT32)telem_phys) {
+        found_marker_addr = TRUE;
+      }
       break;
     }
   }
-  CHECK(found_marker, "Trampoline must write diagnostic marker 0x324B4F21 (!OK2) to HighAcpiPage+0x500");
+  CHECK(found_marker, "Trampoline must write diagnostic marker 0x324B4F21 (!OK2) to TelemetryPage");
+  CHECK(found_marker_addr, "Marker write destination address must match telem_phys (0xDA000000)");
+
+  /* Verify Telemetry Mirroring destination (EDI = telem_phys + 0x04) */
+  BOOLEAN found_edi_addr = FALSE;
+  for (UINT32 i = 0; i < bytes - 4; i++) {
+    if (buffer[i] == 0xBF && *(UINT32 *)(buffer + i + 1) == (UINT32)(telem_phys + 0x04)) {
+      found_edi_addr = TRUE;
+      break;
+    }
+  }
+  CHECK(found_edi_addr, "rep movsd destination (EDI) must match telem_phys + 0x04 (0xDA000004)");
 
   /* Verify Telemetry Mirroring (rep movsd: F3 A5) */
   BOOLEAN found_rep_movsd = FALSE;
@@ -865,7 +888,7 @@ static void TestGuAcpiBuildTrampolineCode(void) {
       break;
     }
   }
-  CHECK(found_rep_movsd, "Trampoline must contain rep movsd (F3 A5) to mirror telemetry to HighAcpiPage");
+  CHECK(found_rep_movsd, "Trampoline must contain rep movsd (F3 A5) to mirror telemetry to TelemetryPage");
 
   /* Verify Return to Real Mode (CR0.PE clear and far jump) */
   BOOLEAN found_cr0_clear = FALSE;

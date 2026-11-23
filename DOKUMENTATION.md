@@ -1,7 +1,7 @@
 # Technische Dokumentation: Universal GPU Unlock (Multi-Gen)
 
 > **Tool:** Universal GPU Unlock  
-> **Version:** v1.8.46b  
+> **Version:** v1.8.46c  
 > **Architekturen:** NVIDIA Ada Lovelace (RTX 40), Ampere (RTX 30), Turing (RTX 20 / CMP)  
 > **Unterstützte Betriebssysteme:** Windows 10, Windows 11, WSL2 / Ubuntu CUDA Container  
 
@@ -726,6 +726,38 @@ In **v1.8.34** habe ich die Architektur umfassend überarbeitet und perfektionie
 4. **Code- und Test-Verifikation:**
    - Gesamtlänge des Maschinencodes im Trampolin: 420 Bytes (512-Byte-Limit strikt eingehalten).
    - Alle 8.432 Checks in `Run-MsvcHostTests.ps1` grün (`MSVC_HOST_TESTS=PASS`).
+
+---
+
+### 13.18 Die v1.8.46c Architektur: Dedizierte Non-NVS Telemetrie-Seite zur Umgehung von `nt!HalpRestoreNvsArea`
+
+1. **Problemstellung: Auslöschung der Telemetrie durch den Windows-HAL:**
+   - Beim S3-Wake-Test von v1.8.46b wachte Windows einwandfrei auf (1572 ms, Kernel-Power Event 107/130/131, kein Reboot).
+   - Die Disassembly von `nt!HalpAcpiPostSleep` und die Inspektion von `nt!HalpNvsRegionData` in WinDbg enthüllten jedoch die Ursache für das Nullen von `HighAcpiPage + 0x500`:
+     - Region 0: `0x0009E000` (4 KB) -> Low-Trampolin
+     - Region 1: `0x0A200000` (56 KB) -> APIC/Data
+     - Region 2: `0xDADDA000` (Länge `0x01B00000` = 27 MB, Ende `0xDC8DA000`)
+   - `HighAcpiPage` (`0xDC617000`) liegt direkt in Region 2 (`0xDADDA000 <= 0xDC617000 < 0xDC8DA000`)!
+   - Vor dem Suspend sichert Windows alle registrierten NVS-Regionen in `nt!HalpNvsPreservedData`. Nach dem Wake ruft `nt!HalpRestoreNvsArea` ein 27 MB großes `nt!memcpy` auf, das die gesamten 27 MB mit dem Vor-Schlaf-Snapshot überschreibt. Dadurch wurden alle im 32-Bit-Flat-Mode geschriebenen Telemetriedaten (inklusive des Markers `0x324B4F21`) unmittelbar nach dem Wake wieder auf 0 zurückgesetzt!
+
+2. **Lösungsansatz: Dedizierte Allokation außerhalb des NVS-Bereichs:**
+   - Speicher vom Typ `EfiRuntimeServicesData` oder `EfiReservedMemoryType` wird von Windows ACPI **nicht** in `nt!HalpNvsRegionData` aufgenommen.
+   - Die Funktion `GuAcpiAllocateTelemetryPage()` allokiert eine dedizierte 4-KB-Seite mit `AllocateMaxAddress <= 0xDADD9000` als `EfiRuntimeServicesData`.
+   - Da diese Seite außerhalb von `0xDADDA000..0xDC8DA000` liegt:
+     a) Wird sie von `nt!HalpRestoreNvsArea` garantiert nicht überschrieben.
+     b) Wird sie von `winload.efi` in den virtuellen Kernel-Adressraum gemappt, wodurch physische Reads in WinDbg `-kl` (`!dd <phys> L20`) zuverlässig gelingen.
+   - Die physische Adresse wird im Boot-Log (`RUN*.TXT`) und in der ACPI-Übersicht geloggt.
+
+3. **Anpassung der 32-Bit-Flat-Mode-Spiegelung:**
+   - Der Maschinencode des Trampolins schreibt den Marker `0x324B4F21` (`!OK2`) nun direkt an Offset `+0x00` der dedizierten Telemetrie-Seite.
+   - Anschließend kopiert `rep movsd` (`ECX = 31`) die 124 Bytes ab `0x0009E304` nach `+0x04` dieser Seite.
+   - Nach dem S3-Wake kann der gesamte Block in Windows über den WinDbg-Befehl `!dd <telemetry_page_phys> L20` vollständig und unverändert inspiziert werden.
+
+4. **Verifikation:**
+   - Maschinencode-Größe: 420 Bytes (512-Byte-Limit eingehalten).
+   - Alle 8.435 Checks in 10 MSVC-Host-Test-Suites erfolgreich bestanden (`MSVC_HOST_TESTS=PASS`).
+   - Strikte Sicherheitsgrenzen: 0 MMIO-Writes, 0 SEC2-Unlock, 0 CMOS-Mutation, `OspmFlags = 0`.
+
 
 
 

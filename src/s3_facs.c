@@ -21,6 +21,7 @@ typedef struct {
   VOID *shadow_rsdp;
   VOID *high_acpi_page;
   EFI_PHYSICAL_ADDRESS high_acpi_phys;
+  EFI_PHYSICAL_ADDRESS telemetry_page_phys;
   VOID *low_trampoline;
   EFI_SYSTEM_TABLE *system_table;
   EFI_EXIT_BOOT_SERVICES orig_exit_boot_services;
@@ -32,7 +33,7 @@ typedef struct {
 } GU_ACPI_SHADOW_CHAIN_STATE;
 
 static GU_ACPI_SHADOW_CHAIN_STATE mShadowState = {
-  FALSE, FALSE, NULL, NULL, NULL, 0, NULL, NULL, NULL, FALSE, NULL, NULL, FALSE, 0
+  FALSE, FALSE, NULL, NULL, NULL, 0, 0, NULL, NULL, NULL, FALSE, NULL, NULL, FALSE, 0
 };
 
 UINT32 GuAcpiApplyShadowConfigTable(VOID) {
@@ -440,6 +441,7 @@ UINT32 GuAcpiBuildTrampolineCode(
     IN EFI_PHYSICAL_ADDRESS TrampolinePhys,
     IN EFI_PHYSICAL_ADDRESS ContextPhys,
     IN EFI_PHYSICAL_ADDRESS ShadowFacsPhys,
+    IN EFI_PHYSICAL_ADDRESS TelemetryPhys,
     IN UINT32 RootPortLinkReg,
     IN UINT32 GpuPmcsrReg
 ) {
@@ -479,7 +481,7 @@ UINT32 GuAcpiBuildTrampolineCode(
   EFI_PHYSICAL_ADDRESS high_acpi_phys = (ShadowFacsPhys >= GU_HIGH_SHADOW_FACS_OFF) ?
       (ShadowFacsPhys - GU_HIGH_SHADOW_FACS_OFF) : ShadowFacsPhys;
   UINT32 shadow_wake_phys = (UINT32)(ShadowFacsPhys + 0x0C);
-  UINT32 high_telem_dest = (UINT32)(high_acpi_phys + 0x0500);
+  UINT32 high_telem_dest = TelemetryPhys ? (UINT32)TelemetryPhys : (UINT32)(high_acpi_phys + 0x0500);
 
   /* Pre-populate PCI probe addresses at +0x0320 (8 dwords = 32 bytes) */
   UINT32 *probe_addrs = (UINT32 *)(Buffer + 0x0320);
@@ -888,6 +890,65 @@ static UINT32 GuFindGpuPmcsrReg(EFI_BOOT_SERVICES *bs, EFI_PCI_IO_PROTOCOL *gpu_
   return fallback_reg;
 }
 
+/*
+ * Allocates a dedicated 4KB telemetry page of EfiRuntimeServicesData (or EfiReservedMemoryType)
+ * strictly OUTSIDE the 27MB NVS zone (0xDADDA000..0xDC8DA000) so that nt!HalpRestoreNvsArea
+ * does NOT overwrite it during S3 wake (v1.8.46c).
+ */
+static EFI_PHYSICAL_ADDRESS GuAcpiAllocateTelemetryPage(
+    IN EFI_BOOT_SERVICES *bs
+) {
+  if (!bs || !bs->AllocatePages) return 0;
+
+  EFI_PHYSICAL_ADDRESS telem_phys = 0;
+  EFI_STATUS s;
+
+  /* Strategy 1: AllocateMaxAddress <= 0xDADD9000 (below 27MB NVS block) as EfiRuntimeServicesData */
+  telem_phys = 0xDADD9000ULL;
+  s = bs->AllocatePages(AllocateMaxAddress, EfiRuntimeServicesData, 1, &telem_phys);
+  if (!EFI_ERROR(s) && telem_phys >= 0x00100000ULL && (telem_phys < 0xDADDA000ULL || telem_phys >= 0xDC8DA000ULL)) {
+    memset((VOID *)(UINTN)telem_phys, 0, 4096);
+    return telem_phys;
+  }
+
+  /* Strategy 2: AllocateMaxAddress <= 0xDADD9000 as EfiReservedMemoryType */
+  telem_phys = 0xDADD9000ULL;
+  s = bs->AllocatePages(AllocateMaxAddress, EfiReservedMemoryType, 1, &telem_phys);
+  if (!EFI_ERROR(s) && telem_phys >= 0x00100000ULL && (telem_phys < 0xDADDA000ULL || telem_phys >= 0xDC8DA000ULL)) {
+    memset((VOID *)(UINTN)telem_phys, 0, 4096);
+    return telem_phys;
+  }
+
+  /* Strategy 3: Try candidate physical addresses outside the NVS zone */
+  static const EFI_PHYSICAL_ADDRESS candidate_addrs[] = {
+    0xDA000000ULL, 0xD9000000ULL, 0xD8000000ULL,
+    0xDD000000ULL, 0xDE000000ULL, 0xDF000000ULL
+  };
+  for (UINTN i = 0; i < sizeof(candidate_addrs)/sizeof(candidate_addrs[0]); i++) {
+    telem_phys = candidate_addrs[i];
+    s = bs->AllocatePages(AllocateAddress, EfiRuntimeServicesData, 1, &telem_phys);
+    if (!EFI_ERROR(s)) {
+      memset((VOID *)(UINTN)telem_phys, 0, 4096);
+      return telem_phys;
+    }
+  }
+
+  /* Strategy 4: AllocateMaxAddress 4GB with NVS bounds check */
+  telem_phys = 0xFFFFFFFFULL;
+  s = bs->AllocatePages(AllocateMaxAddress, EfiRuntimeServicesData, 1, &telem_phys);
+  if (!EFI_ERROR(s)) {
+    if (telem_phys < 0xDADDA000ULL || telem_phys >= 0xDC8DA000ULL) {
+      memset((VOID *)(UINTN)telem_phys, 0, 4096);
+      return telem_phys;
+    }
+    if (bs->FreePages) {
+      bs->FreePages(telem_phys, 1);
+    }
+  }
+
+  return 0;
+}
+
 EFI_STATUS GuAcpiInstallShadowFacs(
     IN EFI_SYSTEM_TABLE *SystemTable,
     IN GU_S3_RESUME_CONTEXT *Context,
@@ -1075,6 +1136,17 @@ EFI_STATUS GuAcpiInstallShadowFacs(
   GuLog("S3 Hardware Recon Config: Root Port LinkReg=%#08x (Cap 0x10+0x10), GPU PMCSR=%#08x (Cap 0x01+0x04)\n",
         (unsigned)root_port_link_reg, (unsigned)gpu_pmcsr_reg);
 
+  /* Allocate dedicated 4KB telemetry page outside the 27MB NVS zone (v1.8.46c) */
+  EFI_PHYSICAL_ADDRESS telem_page_phys = GuAcpiAllocateTelemetryPage(SystemTable->BootServices);
+  Info->telemetry_page_phys = telem_page_phys;
+  mShadowState.telemetry_page_phys = telem_page_phys;
+  if (telem_page_phys != 0) {
+    GuLog("S3 Dedicated Telemetry Page: Allocated at %#llx (outside NVS 0xdadda000..0xdc8da000)\n",
+          (unsigned long long)telem_page_phys);
+  } else {
+    GuLog("S3 Dedicated Telemetry Page: Allocation failed, falling back to HighAcpiPage+0x500\n");
+  }
+
   /* 4. Build Pure 16-bit Real Mode S3 Resume Trampoline machine code in low memory (<1MB) */
   UINT32 tramp_bytes = GuAcpiBuildTrampolineCode(
       low_base,
@@ -1082,6 +1154,7 @@ EFI_STATUS GuAcpiInstallShadowFacs(
       trampoline_phys,
       NvsPhys,
       shadow_facs_phys,
+      telem_page_phys,
       root_port_link_reg,
       gpu_pmcsr_reg
   );
@@ -1349,6 +1422,7 @@ EFI_STATUS GuAcpiInstallShadowFacs(
         "  ShadowRSDP=%#llx (Chk20=%#02x ExtChk36=%#02x) -> ShadowXSDT=%#llx (Chk=%#02x)\n"
         "  ShadowXSDT [idx=%d] -> ShadowFADT=%#llx (FirmwareCtrl=%#08x XFirmwareCtrl=0 Chk=%#02x)\n"
         "  ShadowFACS=%#llx LowTrampoline=%#llx HighAcpiPage=%#llx\n"
+        "  TelemetryPage=%#llx (outside 0xdadda000..0xdc8da000)\n"
         "  ConfigTable In-Place Patching: DEFERRED to GuBootWindows()\n",
         (unsigned long long)(UINTN)Info->rsdp, (unsigned long long)Info->xsdt_phys,
         (unsigned long long)Info->fadt_phys, (unsigned long long)Info->real_facs_phys,
@@ -1358,7 +1432,8 @@ EFI_STATUS GuAcpiInstallShadowFacs(
         (int)Info->xsdt_fadt_index, (unsigned long long)shadow_fadt_phys,
         (unsigned)shadow_fadt->FirmwareCtrl, (unsigned)shadow_fadt->Header.Checksum,
         (unsigned long long)shadow_facs_phys, (unsigned long long)trampoline_phys,
-        (unsigned long long)high_acpi_phys);
+        (unsigned long long)high_acpi_phys,
+        (unsigned long long)telem_page_phys);
 
   return EFI_SUCCESS;
 }

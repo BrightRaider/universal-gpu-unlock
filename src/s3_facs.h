@@ -74,6 +74,7 @@ typedef struct {
   EFI_PHYSICAL_ADDRESS shadow_facs_phys;
   EFI_PHYSICAL_ADDRESS high_acpi_phys;
   EFI_PHYSICAL_ADDRESS trampoline_phys;
+  EFI_PHYSICAL_ADDRESS telemetry_page_phys;
   INTN config_table_acpi20_idx;
   INTN config_table_acpi10_idx;
   UINT32 original_firmware_waking_vector;
@@ -137,6 +138,7 @@ UINT32 GuAcpiBuildTrampolineCode(
     IN EFI_PHYSICAL_ADDRESS TrampolinePhys,
     IN EFI_PHYSICAL_ADDRESS ContextPhys,
     IN EFI_PHYSICAL_ADDRESS ShadowFacsPhys,
+    IN EFI_PHYSICAL_ADDRESS TelemetryPhys,
     IN UINT32 RootPortLinkReg,
     IN UINT32 GpuPmcsrReg
 );

@@ -6,6 +6,29 @@ For packaged binaries and downloads, visit [GitHub Releases](https://github.com/
 
 ---
 
+## [v1.8.46c] - 2026-11-23
+### Added & Fixed
+- **Dedizierte Non-NVS Telemetrie-Seite zur Umgehung von `nt!HalpRestoreNvsArea` (addresses #19):**
+  - **Identifikation des Telemetrie-Überschreibens durch den Windows-HAL:**
+    - Live-Analysen von `nt!HalpAcpiPostSleep` und `nt!HalpNvsRegionData` in WinDbg ergaben, dass Windows vor dem S3-Schlaf alle ACPI-NVS-Bereiche snapshotet:
+      - Region 0: `0x0009E000` (4 KB) -> Low-Trampolin
+      - Region 1: `0x0A200000` (56 KB) -> APIC/Data
+      - Region 2: `0xDADDA000` (Länge `0x01B00000` = 27 MB, Ende `0xDC8DA000`)
+    - `HighAcpiPage` (`0xDC617000`) liegt mitten in Region 2 (`0xDADDA000 <= 0xDC617000 < 0xDC8DA000`). Beim S3-Wake führt `nt!HalpRestoreNvsArea` ein 27 MB großes `memcpy` aus, das den Vor-Schlaf-Zustand (Nullen bei `+0x0500`) wiederherstellt und somit gespiegelte Telemetrie sofort auslöscht.
+  - **Dedizierte Telemetrie-Allokation außerhalb der NVS-Zone:**
+    - `GuAcpiAllocateTelemetryPage()` allokiert eine dedizierte 4-KB-Seite (`EfiRuntimeServicesData` oder `EfiReservedMemoryType`) strikt AUSSERHALB von `0xDADDA000..0xDC8DA000` (bevorzugt unterhalb bei `AllocateMaxAddress <= 0xDADD9000`).
+    - Da `EfiRuntimeServicesData` nicht in `nt!HalpNvsRegionData` registriert ist, bleibt die Seite von `nt!HalpRestoreNvsArea` unberührt und wird zudem von `winload.efi` in den virtuellen Adressraum des Kernels gemappt.
+    - Die physische Adresse wird in `Info->telemetry_page_phys` gespeichert und im Boot-Log (`RUN*.TXT`) protokolliert.
+  - **32-Bit Flat Mode Marker & Telemetrie-Kopie:**
+    - Im 32-Bit Flat Protected Mode schreibt das Trampolin den Diagnose-Marker `0x324B4F21` (`!OK2`) direkt an `+0x00` dieser dedizierten Seite.
+    - Kopiert anschließend die 31 DWORDs (124 Bytes) ab `0x0009E304` nach `+0x04` (`rep movsd`, `ECX = 31`).
+    - Nach dem Wake ist der gesamte Telemetrieblock in Windows per WinDbg über `!dd <telemetry_page_phys> L20` vollständig und unversehrt auslesbar.
+  - **Host-Tests & Envelope:**
+    - Alle 8.435 Checks in 10 Test-Suites grün (`MSVC_HOST_TESTS=PASS`).
+    - Strikte Sicherheitsgrenzen: 0 MMIO writes, 0 SEC2, 0 CMOS mutation, OspmFlags=0.
+
+---
+
 ## [v1.8.46b] - 2026-11-23
 ### Added & Fixed
 - **Diagnose-Marker 0x324B4F21 ('!OK2') & ausgerichtete 31-DWORD Telemetrie-Spiegelung (addresses #19):**
