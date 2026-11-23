@@ -466,6 +466,9 @@ UINT32 GuAcpiBuildTrampolineCode(
   UINT32 booter_dma = ContextPhys ? (UINT32)(ContextPhys + 0x01000U) : 0x00021000U;
   UINT32 booter_size = (GuAssets[0].firmware.size > 0) ? (UINT32)GuAssets[0].firmware.size : 57672U;
   UINT32 booter_sz_param = (booter_size & ~0xFFU) | 0x10U;
+  (VOID)booter_dma;
+  (VOID)booter_size;
+  (VOID)booter_sz_param;
 
   /* Pre-populate PCI probe addresses at +0x0520 (8 dwords = 32 bytes) */
   UINT32 *probe_addrs = (UINT32 *)(Buffer + 0x0520);
@@ -766,64 +769,70 @@ UINT32 GuAcpiBuildTrampolineCode(
   UINT8 *fault_jmp2 = e;
   *e++ = 0x0F; *e++ = 0x84; *e++ = 0x00; *e++ = 0x00; *e++ = 0x00; *e++ = 0x00; /* jz near .fault */
 
-  /* ==================== SEC2 FALCON BOOTER HANDSHAKE (v1.8.50) ==================== */
-  /* Reset SEC2: mov dword [ebx + 0x008403C0], 0 */
-  *e++ = 0xC7; *e++ = 0x83; *(UINT32 *)e = 0x008403C0U; e += 4;
-  *e++ = 0x00; *e++ = 0x00; *e++ = 0x00; *e++ = 0x00;
-
-  /* Enable FBIF interface: bar[0x00840624] |= (1 << 7) */
-  *e++ = 0x8B; *e++ = 0x83; *(UINT32 *)e = 0x00840624U; e += 4; /* mov eax, [ebx + 0x00840624] */
-  *e++ = 0x0C; *e++ = 0x80;                                     /* or al, 0x80 */
-  *e++ = 0x89; *e++ = 0x83; *(UINT32 *)e = 0x00840624U; e += 4; /* mov [ebx + 0x00840624], eax */
-
-  /* Clear Falcon IRQ / status: mov dword [ebx + 0x0084010C], 0 */
-  *e++ = 0xC7; *e++ = 0x83; *(UINT32 *)e = 0x0084010CU; e += 4;
-  *e++ = 0x00; *e++ = 0x00; *e++ = 0x00; *e++ = 0x00;
-
-  /* Setup trans mode: bar[0x00840600] = (bar[0x00840600] & ~7) | 5 */
-  *e++ = 0x8B; *e++ = 0x83; *(UINT32 *)e = 0x00840600U; e += 4; /* mov eax, [ebx + 0x00840600] */
-  *e++ = 0x24; *e++ = 0xF8;                                     /* and al, 0xF8 */
-  *e++ = 0x0C; *e++ = 0x05;                                     /* or al, 0x05 */
-  *e++ = 0x89; *e++ = 0x83; *(UINT32 *)e = 0x00840600U; e += 4; /* mov [ebx + 0x00840600], eax */
-
-  /* Program Booter DMA address: mov dword [ebx + 0x00840110], booter_dma >> 8 */
-  *e++ = 0xC7; *e++ = 0x83; *(UINT32 *)e = 0x00840110U; e += 4;
-  *(UINT32 *)e = (booter_dma >> 8); e += 4;
-
-  /* Program Booter DMA high address: mov dword [ebx + 0x00840114], 0 */
-  *e++ = 0xC7; *e++ = 0x83; *(UINT32 *)e = 0x00840114U; e += 4;
-  *e++ = 0x00; *e++ = 0x00; *e++ = 0x00; *e++ = 0x00;
-
-  /* Program Booter Size: mov dword [ebx + 0x00840118], (booter_size & ~0xFF) | 0x10 */
-  *e++ = 0xC7; *e++ = 0x83; *(UINT32 *)e = 0x00840118U; e += 4;
-  *(UINT32 *)e = booter_sz_param; e += 4;
-
-  /* Start Falcon CPU: mov dword [ebx + 0x00840100], 2 */
-  *e++ = 0xC7; *e++ = 0x83; *(UINT32 *)e = 0x00840100U; e += 4;
-  *e++ = 0x02; *e++ = 0x00; *e++ = 0x00; *e++ = 0x00;
-
-  /* Poll Falcon Halt (0x00840100 & 0x10) with 50,000 iteration timeout */
-  *e++ = 0xB9; *e++ = 0x50; *e++ = 0xC3; *e++ = 0x00; *e++ = 0x00; /* mov ecx, 50000 */
-  UINT8 *poll_start = e;
-  *e++ = 0x8B; *e++ = 0x83; *(UINT32 *)e = 0x00840100U; e += 4; /* mov eax, [ebx + 0x00840100] */
-  *e++ = 0xA8; *e++ = 0x10;                                     /* test al, 0x10 */
-  *e++ = 0x75;                                                 /* jnz .poll_done */
-  UINT8 *poll_break = e++;
-  *e++ = 0x49;                                                 /* dec ecx */
-  *e++ = 0x75;                                                 /* jnz poll_start */
-  *e++ = (UINT8)(poll_start - (e + 1));
-  *poll_break = (UINT8)(e - (poll_break + 1));
-
-  /* .poll_done: Save Falcon CPUCTL halt state to telemetry +0xC0 */
+  /* ==================== SEC2 DIAGNOSTICS & RESET CYCLE (v1.8.51) ==================== */
+  /* 1. Capture initial telemetry starting at +0xC0 */
+  /* +0xC0: PMC_ENABLE (BAR0 + 0x00000200) */
+  *e++ = 0x8B; *e++ = 0x83; *(UINT32 *)e = 0x00000200U; e += 4; /* mov eax, [ebx + 0x00000200] */
   *e++ = 0xA3; *(UINT32 *)e = (UINT32)(high_telem_dest + 0xC0); e += 4; /* mov [dest+0xC0], eax */
 
-  /* Read SEC2 Marker from BAR0 + 0x00840040 and save to telemetry +0xC4 */
-  *e++ = 0x8B; *e++ = 0x83; *(UINT32 *)e = 0x00840040U; e += 4; /* mov eax, [ebx + 0x00840040] */
+  /* +0xC4: SEC2_RESET (BAR0 + 0x008403C0) */
+  *e++ = 0x8B; *e++ = 0x83; *(UINT32 *)e = 0x008403C0U; e += 4; /* mov eax, [ebx + 0x008403C0] */
   *e++ = 0xA3; *(UINT32 *)e = (UINT32)(high_telem_dest + 0xC4); e += 4; /* mov [dest+0xC4], eax */
 
-  /* Clear SEC2 reset to leave hardware clean: mov dword [ebx + 0x008403C0], 0 */
-  *e++ = 0xC7; *e++ = 0x83; *(UINT32 *)e = 0x008403C0U; e += 4;
-  *e++ = 0x00; *e++ = 0x00; *e++ = 0x00; *e++ = 0x00;
+  /* +0xC8: SEC2_HWCFG2 (BAR0 + 0x008400F4) */
+  *e++ = 0x8B; *e++ = 0x83; *(UINT32 *)e = 0x008400F4U; e += 4; /* mov eax, [ebx + 0x008400F4] */
+  *e++ = 0xA3; *(UINT32 *)e = (UINT32)(high_telem_dest + 0xC8); e += 4; /* mov [dest+0xC8], eax */
+
+  /* +0xCC: FALCON2_BCR (BAR0 + 0x00841668) */
+  *e++ = 0x8B; *e++ = 0x83; *(UINT32 *)e = 0x00841668U; e += 4; /* mov eax, [ebx + 0x00841668] */
+  *e++ = 0xA3; *(UINT32 *)e = (UINT32)(high_telem_dest + 0xCC); e += 4; /* mov [dest+0xCC], eax */
+
+  /* 2. Execute Falcon Reset Cycle */
+  /* Read 0x008403C0, assert reset (or al, 1), write back */
+  *e++ = 0x8B; *e++ = 0x83; *(UINT32 *)e = 0x008403C0U; e += 4; /* mov eax, [ebx + 0x008403C0] */
+  *e++ = 0x0C; *e++ = 0x01;                                     /* or al, 0x01 */
+  *e++ = 0x89; *e++ = 0x83; *(UINT32 *)e = 0x008403C0U; e += 4; /* mov [ebx + 0x008403C0], eax */
+
+  /* 10 dummy reads of 0x008403C0 for signal propagation */
+  *e++ = 0xB9; *e++ = 0x0A; *e++ = 0x00; *e++ = 0x00; *e++ = 0x00; /* mov ecx, 10 */
+  UINT8 *dummy_loop1 = e;
+  *e++ = 0x8B; *e++ = 0x83; *(UINT32 *)e = 0x008403C0U; e += 4; /* mov eax, [ebx + 0x008403C0] */
+  *e++ = 0x49;                                                 /* dec ecx */
+  *e++ = 0x75;                                                 /* jnz dummy_loop1 */
+  *e++ = (UINT8)(dummy_loop1 - (e + 1));
+
+  /* Release reset: read 0x008403C0, and al, ~1, write back */
+  *e++ = 0x8B; *e++ = 0x83; *(UINT32 *)e = 0x008403C0U; e += 4; /* mov eax, [ebx + 0x008403C0] */
+  *e++ = 0x24; *e++ = 0xFE;                                     /* and al, 0xFE */
+  *e++ = 0x89; *e++ = 0x83; *(UINT32 *)e = 0x008403C0U; e += 4; /* mov [ebx + 0x008403C0], eax */
+
+  /* 10 dummy reads of 0x008403C0 after reset release */
+  *e++ = 0xB9; *e++ = 0x0A; *e++ = 0x00; *e++ = 0x00; *e++ = 0x00; /* mov ecx, 10 */
+  UINT8 *dummy_loop2 = e;
+  *e++ = 0x8B; *e++ = 0x83; *(UINT32 *)e = 0x008403C0U; e += 4; /* mov eax, [ebx + 0x008403C0] */
+  *e++ = 0x49;                                                 /* dec ecx */
+  *e++ = 0x75;                                                 /* jnz dummy_loop2 */
+  *e++ = (UINT8)(dummy_loop2 - (e + 1));
+
+  /* Poll 0x008400F4 Bit 12 (Memory Scrubbing Active) == 0 with bounded timeout */
+  *e++ = 0xB9; *e++ = 0x50; *e++ = 0xC3; *e++ = 0x00; *e++ = 0x00; /* mov ecx, 50000 */
+  UINT8 *scrub_poll_start = e;
+  *e++ = 0x8B; *e++ = 0x83; *(UINT32 *)e = 0x008400F4U; e += 4; /* mov eax, [ebx + 0x008400F4] */
+  *e++ = 0xA9; *e++ = 0x00; *e++ = 0x10; *e++ = 0x00; *e++ = 0x00; /* test eax, 0x00001000 */
+  *e++ = 0x74;                                                 /* jz .scrub_done */
+  UINT8 *scrub_break = e++;
+  *e++ = 0x49;                                                 /* dec ecx */
+  *e++ = 0x75;                                                 /* jnz scrub_poll_start */
+  *e++ = (UINT8)(scrub_poll_start - (e + 1));
+  *scrub_break = (UINT8)(e - (scrub_break + 1));
+
+  /* Write Chip-ID to 0x00840084 */
+  *e++ = 0x8B; *e++ = 0x03;                                     /* mov eax, [ebx] */
+  *e++ = 0x89; *e++ = 0x83; *(UINT32 *)e = 0x00840084U; e += 4; /* mov [ebx + 0x00840084], eax */
+
+  /* Read 0x00840100 (CPUCTL) after reset cycle and save to +0xD0 */
+  *e++ = 0x8B; *e++ = 0x83; *(UINT32 *)e = 0x00840100U; e += 4; /* mov eax, [ebx + 0x00840100] */
+  *e++ = 0xA3; *(UINT32 *)e = (UINT32)(high_telem_dest + 0xD0); e += 4; /* mov [dest+0xD0], eax */
 
   /* Read pre-unlock registers: SS0 (0x82381C), SS1 (0x823820), PLM (0x823804), Readout1 (0x823818) */
   *e++ = 0x8B; *e++ = 0x83; *(UINT32 *)e = 0x0082381CU; e += 4; /* mov eax, [ebx + 0x0082381C] */

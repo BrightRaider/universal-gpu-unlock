@@ -1,7 +1,7 @@
 # Technische Dokumentation: Universal GPU Unlock (Multi-Gen)
 
 > **Tool:** Universal GPU Unlock  
-> **Version:** v1.8.50  
+> **Version:** v1.8.51  
 > **Architekturen:** NVIDIA Ada Lovelace (RTX 40), Ampere (RTX 30), Turing (RTX 20 / CMP)  
 > **Unterstützte Betriebssysteme:** Windows 10, Windows 11, WSL2 / Ubuntu CUDA Container  
 
@@ -937,6 +937,38 @@ In **v1.8.34** habe ich die Architektur umfassend überarbeitet und perfektionie
    - Vollständige Wiederherstellung aller vier PCIe-Register (GPU Cmd, GPU BAR0, Root Port Window, Root Port Cmd) vor Rückkehr in den 16-Bit Real Mode.
    - Maschinencode-Größe: 973 Bytes (Envelope: 1024 Bytes, 51 Bytes Puffer vor GDT bei `+0x0400`).
    - Alle 8.695 Checks in 10 Test-Suites erfolgreich bestanden (`MSVC_HOST_TESTS=PASS`).
+   - Strikte Sicherheitsgrenzen: 0 CMOS/RTC-Mutation, `OspmFlags = 0`.
+
+---
+
+### 13.23 Die v1.8.51 Architektur: SEC2 Falcon Hardware-Diagnostics & Deterministischer Reset-Zyklus im 32-Bit Flat Mode bei S3-Wake
+
+1. **Ausgangslage und forensischer Beweis aus dem v1.8.50 S3-Wake-Test:**
+   - Der S3-Wake lief stabil und fehlerfrei durch (Kernel-Power Event 107, Wake-Dauer 1571 ms), und der 4-Stufen-PCIe-Teardown stellte alle Register sauber wieder her.
+   - Die Auslesung von `+0xC0` (`SEC2_CPUCTL` an `[ebx + 0x00840100]`) lieferte jedoch den Wert `0xBADF5620`.
+   - **Hardware-Bedeutung von `0xBADF5620`:** Auf NVIDIA Ada Lovelace / Ampere ist `0xBADFxxxx` der standardisierte Hardware-Sentinel **`SYS_PRI_ERROR_CODE`** (Processor Request Interface Decode Error / Bus Fault). Er signalisiert, dass die SEC2 Falcon Engine im ungetakteten, gesperrten oder im Memory-Scrubbing-Zustand verharrt. Ein einfaches Schreiben von `0` an `0x008403C0` aktiviert den Falcon nicht.
+
+2. **Telemetrie-Erweiterung zur empirischen Zustandsanalyse (ab `+0xC0`):**
+   - Um den genauen Power-, Clock- und Reset-Zustand beim S3-Wake vor jedem Hardware-Eingriff zu erfassen, sichert das 32-Bit Flat Mode Trampolin vier Schlüsselregister in den Non-NVS-Telemetriebereich:
+     - `+0xC0`: `PMC_ENABLE` (`BAR0 + 0x00000200`) – Dokumentiert, ob die Engine-Taktung / Power Domain aktiv ist (`GU_TELEM_PMC_ENABLE_OFF`).
+     - `+0xC4`: `SEC2_RESET` (`BAR0 + 0x008403C0`) – Dokumentiert den initialen Reset-Status (`GU_TELEM_SEC2_RESET_OFF`).
+     - `+0xC8`: `SEC2_HWCFG2` (`BAR0 + 0x008400F4`) – Dokumentiert die Hardware-Konfiguration und das Scrubbing-Bit 12 (`GU_TELEM_SEC2_HWCFG2_OFF`).
+     - `+0xCC`: `FALCON2_BCR` (`BAR0 + 0x00841668`) – Dokumentiert das Boot Control Register (`GU_TELEM_FALCON2_BCR_OFF`).
+
+3. **Exakter Falcon-Reset-Zyklus nach Resource-Manager-Spezifikation:**
+   - Gemäß der NVIDIA-Takt- und Reset-Spezifikation (`src/vendor/unlock_610.c:474-500`) führt das Trampolin den vollständigen Reset-Zyklus mit Signal-Propagation aus:
+     1. **Assert Reset:** `0x008403C0` lesen, Bit 0 setzen (`or al, 0x01`), zurückschreiben.
+     2. **Signal-Propagation 1:** 10 Dummy-Reads auf `0x008403C0` via `ecx`-Zählschleife.
+     3. **Release Reset:** `0x008403C0` lesen, Bit 0 löschen (`and al, 0xFE`), zurückschreiben.
+     4. **Signal-Propagation 2:** 10 Dummy-Reads auf `0x008403C0` via `ecx`-Zählschleife.
+     5. **Memory-Scrubbing Polling:** Bounded Polling auf Bit 12 von `0x008400F4` (`test eax, 0x00001000`, `jz .scrub_done`) mit 50.000 Iterationen Timeout.
+     6. **Chip-ID Registrierung:** Schreiben der GPU-Chip-ID (`0x192000a1`) an `0x00840084`.
+     7. **Post-Reset CPUCTL Auslesung:** `0x00840100` (`CPUCTL`) erneut auslesen und nach `+0xD0` schreiben (`GU_TELEM_SEC2_CPUCTL_POST_OFF`), um zu verifizieren, ob der Falcon aus `0xBADF5620` erwacht ist.
+
+4. **Code Envelope, Test-Verifikation & Sicherheit:**
+   - Maschinencode-Größe: **979 Bytes** (Envelope: 1024 Bytes, 45 Bytes Puffer vor `RM_IDTR` bei `+0x0400`).
+   - Alle 8.697 Checks in 10 Test-Suites grün (`MSVC_HOST_TESTS=PASS`).
+   - Vollständiger 4-Stufen-PCIe-Teardown (GPU Cmd, GPU BAR0, Root Port Window, Root Port Cmd) garantiert saubere Übergabe an den Windows-Kernel.
    - Strikte Sicherheitsgrenzen: 0 CMOS/RTC-Mutation, `OspmFlags = 0`.
 
 

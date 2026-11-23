@@ -6,6 +6,34 @@ For packaged binaries and downloads, visit [GitHub Releases](https://github.com/
 
 ---
 
+## [v1.8.51] - 2026-11-24
+### Added & Fixed
+- **SEC2 Falcon Hardware-Diagnostics & Deterministischer Reset-Zyklus im 32-Bit Flat Mode bei S3-Wake (addresses #19):**
+  - **Forensische Bestätigung aus dem v1.8.50 S3-Wake-Test:**
+    - Live-Kernel-Telemetrie (`kdX64.exe -kl`) bei `0xd8261000` dokumentierte einen schnellen, stabilen S3-Resume (1571 ms, Kernel-Power Event 107) mit fehlerfreiem 4-Stufen-PCIe-Teardown.
+    - Die Auslesung von `+0xC0` (`SEC2_CPUCTL` an `[ebx + 0x00840100]`) ergab `0xBADF5620` (`SYS_PRI_ERROR_CODE`). Auf NVIDIA AD102 liefert die Processor Request Interface (PRI) diesen Sentinel-Fehlercode, wenn der Falcon-Engine-Block im Reset verharrt, ungetaktet ist oder Memory-Scrubbing aktiv ist.
+  - **Erweiterte Hardware-Zustandserfassung ab `+0xC0`:**
+    - Erfassung des nativen Initialzustands vor jeglicher Manipulation:
+      - `+0xC0`: `PMC_ENABLE` (`BAR0 + 0x00000200`) – Prüfung, ob Engine-Clock/Power aktiv ist (`GU_TELEM_PMC_ENABLE_OFF`).
+      - `+0xC4`: `SEC2_RESET` (`BAR0 + 0x008403C0`) – Erfassung des Reset-Zustands (`GU_TELEM_SEC2_RESET_OFF`).
+      - `+0xC8`: `SEC2_HWCFG2` (`BAR0 + 0x008400F4`) – Erfassung der Hardware-Konfiguration (`GU_TELEM_SEC2_HWCFG2_OFF`).
+      - `+0xCC`: `FALCON2_BCR` (`BAR0 + 0x00841668`) – Erfassung des Boot Control Registers (`GU_TELEM_FALCON2_BCR_OFF`).
+  - **Exakter Falcon-Reset-Zyklus nach RM-Spezifikation:**
+    - Signal-Propagation und Scrubbing-Handling gemäß `src/vendor/unlock_610.c`:
+      1. Reset Assert: `0x008403C0` lesen, `| 1` schreiben.
+      2. Signal-Propagation: 10 Dummy-Reads von `0x008403C0` via Loop.
+      3. Reset Release: `0x008403C0` lesen, `& ~1` schreiben.
+      4. Signal-Propagation: 10 Dummy-Reads von `0x008403C0` via Loop.
+      5. Memory Scrubbing Polling: Bounded Timeout-Loop (50.000 Iterationen) auf Bit 12 von `0x008400F4` (`test eax, 0x00001000`, `jz .scrub_done`).
+      6. Chip-ID Registrierung: Schreiben der Chip-ID (`0x192000a1`) an `0x00840084`.
+      7. Post-Reset Verifikation: Auslesen von `0x00840100` (`CPUCTL`) und Speichern in Telemetrie `+0xD0` (`GU_TELEM_SEC2_CPUCTL_POST_OFF`).
+  - **Code Envelope & Host-Tests:**
+    - Maschinencode-Größe: 979 Bytes (perfekt innerhalb des 1024-Byte-Envelopes `< 0x0400`, 45 Bytes Reserve vor `RM_IDTR` / GDT).
+    - Alle 8.697 Checks in allen Test-Suites grün (`MSVC_HOST_TESTS=PASS`).
+    - Strikte Sicherheitsgrenzen: 0 CMOS/RTC-Mutation, `OspmFlags = 0`, 4-Stufen-Teardown vollständig intakt.
+
+---
+
 ## [v1.8.50] - 2026-11-23
 ### Added & Fixed
 - **SEC2 Falcon Booter Handshake & PCIe Bus Master DMA im 32-Bit Flat Mode bei S3-Wake (addresses #19):**

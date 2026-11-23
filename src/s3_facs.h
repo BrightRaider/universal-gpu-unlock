@@ -68,8 +68,11 @@
 #define GU_TELEM_RP_MEM_BEFORE_OFF     0x00B4U /* Root Port MemBase/Limit before */
 #define GU_TELEM_GPU_CMD_BEFORE_OFF    0x00B8U /* GPU Command before */
 #define GU_TELEM_GPU_BAR0_BEFORE_OFF   0x00BCU /* GPU BAR0 before */
-#define GU_TELEM_SEC2_CPUCTL_OFF       0x00C0U /* SEC2 Falcon CPUCTL / Halt State */
-#define GU_TELEM_SEC2_MARKER_OFF       0x00C4U /* SEC2 Marker (e.g. 0x67b00001) */
+#define GU_TELEM_PMC_ENABLE_OFF        0x00C0U /* PMC_ENABLE (BAR0 + 0x00000200) (v1.8.51) */
+#define GU_TELEM_SEC2_RESET_OFF        0x00C4U /* SEC2_RESET (BAR0 + 0x008403C0) (v1.8.51) */
+#define GU_TELEM_SEC2_HWCFG2_OFF       0x00C8U /* SEC2_HWCFG2 (BAR0 + 0x008400F4) (v1.8.51) */
+#define GU_TELEM_FALCON2_BCR_OFF       0x00CCU /* FALCON2_BCR (BAR0 + 0x00841668) (v1.8.51) */
+#define GU_TELEM_SEC2_CPUCTL_POST_OFF  0x00D0U /* SEC2_CPUCTL after reset cycle (BAR0 + 0x00840100) (v1.8.51) */
 
 /* Dedicated High (>1MB, <4GB) ACPI NVS Page Offsets for Shadow Tables */
 #define GU_HIGH_SHADOW_RSDP_OFF        0x0000U
