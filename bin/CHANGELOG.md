@@ -6,6 +6,33 @@ For packaged binaries and downloads, visit [GitHub Releases](https://github.com/
 
 ---
 
+## [v1.8.43] - 2026-11-23
+### Added & Fixed
+- **Universal Polyglot Dual-Mode S3 Resume Trampoline (32-Bit Flat PM + 64-Bit Long Mode) via FACS Waking Vector (addresses #19):**
+  - **Empirical Hardware Discovery & AMI Aptio V Wake Root Cause Analysis:**
+    - Testing v1.8.42 revealed an immediate black screen hang upon S3 standby resume.
+    - EDK2 `S3Resume2Pei` analysis showed that on AMD AM4 (MSI MEG X570 ACE / Ryzen 9 5950X), AMI Aptio V's PEI phase is 32-bit (IA32). When `OspmFlags |= 0x01` is set, firmware only attempts 64-bit Long Mode if `PcdDxeIplSwitchToLongMode` is true in PEI; on consumer desktop boards, this PCD is disabled, hanging the PEI core or dropping off.
+    - When `OspmFlags == 0` (Windows default), `S3Resume2Pei` instead executes `SwitchStack` to `XFirmwareWakingVector` in **32-Bit Flat Protected Mode with Paging Disabled**!
+    - The v1.8.42 trampoline, compiled exclusively for `BITS 64` with RIP-relative addressing, mis-decoded in 32-bit mode as absolute memory accesses (`[0x00000304]`, `[0x000000D8]`), corrupting the Real-Mode IVT and jumping to garbage.
+  - **Polyglot Dual-Mode Preamble (`FA FC 31 C0 40 0F 84 <disp32>`):**
+    - `FA` (`cli`), `FC` (`cld`), `31 C0` (`xor eax, eax` $\rightarrow$ `ZF = 1`).
+    - `40`: In 32-bit mode, opcode `40` executes `inc eax` (increments EAX to 1, clearing `ZF = 0`). In 64-bit mode, opcode `40` is a REX prefix on the following jump; it leaves registers untouched and preserves `ZF = 1`!
+    - `0F 84 <disp32>` (`jz rel32`): In 32-bit mode, `ZF = 0` $\rightarrow$ jump is NOT taken, falling through to Section 1 (32-Bit Flat PM). In 64-bit mode, `ZF = 1` $\rightarrow$ jump is taken, branching to Section 2 (64-Bit Long Mode Bridge).
+  - **Standardized `OspmFlags = 0` & Dual Vector Population:**
+    - Both `ShadowFACS` and `RealFACS` have `OspmFlags = 0` (clean unpaged 32-bit handoff from AMI Aptio V).
+    - Both `FirmwareWakingVector` (+0x0C) and `XFirmwareWakingVector` (+0x18) point to `LowTrampoline` (`0x9E000`).
+  - **Consolidated Native Flat 32-Bit Recon & Resume Engine:**
+    - Section 1 (32-bit entry): Checkpoint `0x3201`, Magic `'S3_T'`, native 8-dword PCIe CF8/CFC recon, bridge arming/restore, waking vector read from `ShadowFACS + 0x0C`, CS:IP calculation, real-mode tail patch, GDTR load, and direct far jump `0x0018:pm16`.
+    - Section 2 (64-bit bridge): Checkpoint `0x6401`, Magic `'S3_T'`, loads GDTR64, indirect far jump `FF 2D` into 32-bit Compatibility Mode (`0x0008:pm32_compat`), clears `CR0.PG` (deactivates IA-32e mode per Intel SDM 9.8.5.4), and branches via `jmp rel32` into the common 32-bit engine (`.sec1_common`).
+    - Section 3 (16-bit PM): Reloads data segments with `0x0020`, loads Real-Mode IDTR (`lidt [0x01B4]`), clears `CR0.PE`, and far jumps into Real Mode (`rm16`).
+    - Section 4 (16-bit RM): Sets DS=CS, Checkpoint 2 `0xAA02` at `[0x0312]`, zeroes all GPRs & segment registers, and far jumps directly into Windows `HalpRMStub` (`0100:0000`).
+  - **Size & Test Verification:**
+    - Trampoline machine code is 355 bytes, comfortably fitting before GDT at `0x0180` (384 bytes).
+    - All 170 host tests in 10 test suites passing (`MSVC_HOST_TESTS=PASS`).
+    - Strictly compliant with safety rules: pure PCI config space (CF8/CFC), zero BAR0 MMIO writes, zero SEC2 unlock, zero CMOS/RTC mutation.
+
+---
+
 ## [v1.8.42] - 2026-11-23
 ### Added & Fixed
 - **64-Bit Long Mode S3 Resume Trampoline via `FACS->XFirmwareWakingVector` (+0x18) (addresses #19):**

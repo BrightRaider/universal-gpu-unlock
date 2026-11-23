@@ -425,33 +425,46 @@ UINT32 GuAcpiBuildTrampolineCode(
   UINT8 *e = Buffer + 0x000;
 
   /* =========================================================================
-   * SECTION 1: 64-BIT LONG MODE ENTRY (BITS 64, stack-free)
-   * Entered from EDK2 S3Resume2Pei via FACS->XFirmwareWakingVector (+0x18).
-   * CS: Flat 64-bit Code Segment, DS/ES/SS: Flat Data Segment, CR0.PG=1.
+   * SECTION 0: POLYGLOT PREAMBLE (Valid in both 32-bit PM and 64-bit Long Mode)
+   * Bytes 0..10:
+   *   cli                  (FA)
+   *   cld                  (FC)
+   *   xor eax, eax         (31 C0)
+   *   inc eax              (40: in 32-bit: inc eax -> ZF=0; in 64-bit: REX prefix -> ZF=1)
+   *   jz near .is_64bit    (0F 84 <disp32>: 32-bit: no jump; 64-bit: jump!)
    * ========================================================================= */
   *e++ = 0xFA; /* cli */
   *e++ = 0xFC; /* cld */
+  *e++ = 0x31; *e++ = 0xC0; /* xor eax, eax */
+  *e++ = 0x40;             /* inc eax (32-bit) / REX (64-bit) */
+  *e++ = 0x0F; *e++ = 0x84; /* jz near .is_64bit */
+  UINT8 *jz_64bit_disp = e; e += 4; /* placeholder for 32-bit displacement */
 
-  /* Set Entry Checkpoint: mov dword ptr [rip + disp32], 0x0000AA01 (to LowTrampoline + 0x0310) */
+  /* =========================================================================
+   * SECTION 1: 32-BIT FLAT PROTECTED MODE PATH (BITS 32, stack-free)
+   * Entered when firmware invokes XFirmwareWakingVector in 32-bit PM (OspmFlags=0).
+   * Paging is OFF, flat 4GB linear memory.
+   * ========================================================================= */
+  /* Checkpoint 1 (32-bit entry): mov dword ptr [TrampolinePhys + 0x0310], 0x00003201 */
   *e++ = 0xC7; *e++ = 0x05;
-  UINT8 *chk1_disp = e; e += 4;
-  *e++ = 0x01; *e++ = 0xAA; *e++ = 0x00; *e++ = 0x00;
-  *(INT32 *)chk1_disp = (INT32)(0x0310 - (e - Buffer));
+  *(UINT32 *)e = (UINT32)(TrampolinePhys + 0x0310); e += 4;
+  *(UINT32 *)e = 0x00003201U; e += 4;
 
-  /* Set Telemetry Magic: mov dword ptr [rip + disp32], 0x53335F54 ('S3_T', to LowTrampoline + 0x031C) */
+  /* Magic: mov dword ptr [TrampolinePhys + 0x031C], 0x53335F54 ('S3_T') */
   *e++ = 0xC7; *e++ = 0x05;
-  UINT8 *magic_disp = e; e += 4;
-  *e++ = 0x54; *e++ = 0x5F; *e++ = 0x33; *e++ = 0x53;
-  *(INT32 *)magic_disp = (INT32)(0x031C - (e - Buffer));
+  *(UINT32 *)e = (UINT32)(TrampolinePhys + 0x031C); e += 4;
+  *(UINT32 *)e = 0x53335F54U; e += 4;
 
-  /* 64-bit PCI Probe Loop: esi=0x0320, edi=0x0340, ecx=8, dx=0x0CF8 */
+  UINT8 *sec1_common_start = e;
+
+  /* 32-bit PCI Probe Loop (8 dwords): esi=probe_addrs, edi=raw_results, ecx=8, dx=0x0CF8 */
   *e++ = 0xBE; *(UINT32 *)e = (UINT32)(TrampolinePhys + 0x0320); e += 4; /* mov esi, imm32 */
   *e++ = 0xBF; *(UINT32 *)e = (UINT32)(TrampolinePhys + 0x0340); e += 4; /* mov edi, imm32 */
   *e++ = 0xB9; *(UINT32 *)e = 8; e += 4;                                 /* mov ecx, 8 */
   *e++ = 0x66; *e++ = 0xBA; *e++ = 0xF8; *e++ = 0x0C;                   /* mov dx, 0x0CF8 */
 
-  UINT8 *pci_loop_start = e;
-  *e++ = 0x8B; *e++ = 0x06;                         /* mov eax, [rsi] */
+  UINT8 *pci_loop32_start = e;
+  *e++ = 0x8B; *e++ = 0x06;                         /* mov eax, [esi] */
   *e++ = 0xEF;                                     /* out dx, eax */
   *e++ = 0x80; *e++ = 0xC2; *e++ = 0x04;             /* add dl, 4 (0x0CFC) */
   *e++ = 0xED;                                     /* in eax, dx */
@@ -460,175 +473,150 @@ UINT32 GuAcpiBuildTrampolineCode(
   *e++ = 0x83; *e++ = 0xC6; *e++ = 0x04;             /* add esi, 4 */
   *e++ = 0x83; *e++ = 0xC7; *e++ = 0x04;             /* add edi, 4 */
   *e++ = 0xE2;                                     /* loop .pci_loop */
-  INT8 loop_disp = (INT8)(pci_loop_start - (e + 1));
-  *e++ = (UINT8)loop_disp;
+  *e++ = (UINT8)(pci_loop32_start - (e + 1));
 
-  /* Check AMD Vendor ID 0x1022 at [TrampolinePhys + 0x0340]: mov ax, [rip + disp32] */
-  *e++ = 0x66; *e++ = 0x8B; *e++ = 0x05;
-  UINT8 *amd_chk_disp = e; e += 4;
-  *(INT32 *)amd_chk_disp = (INT32)(0x0340 - (e - Buffer));
+  /* Check AMD Vendor ID 0x1022 at [TrampolinePhys + 0x0340] */
+  *e++ = 0x66; *e++ = 0xA1; *(UINT32 *)e = (UINT32)(TrampolinePhys + 0x0340); e += 4; /* mov ax, [0x9E340] */
   *e++ = 0x66; *e++ = 0x3D; *e++ = 0x22; *e++ = 0x10; /* cmp ax, 0x1022 */
-  *e++ = 0x75;                                       /* jne short .skip_bridge */
-  UINT8 *skip_bridge_disp = e++;
+  *e++ = 0x75; UINT8 *skip_bridge32_disp = e++;      /* jne short .skip_bridge32 */
 
-  /*
-   * 1. Load original Bus Numbers from [TrampolinePhys + 0x0348], preserve Latency Timer (bits 31:24),
-   * set Pri=0, Sec=0x2D, Sub=0x2D:
-   */
-  *e++ = 0x8B; *e++ = 0x05;
-  UINT8 *bus_rd_disp = e; e += 4;
-  *(INT32 *)bus_rd_disp = (INT32)(0x0348 - (e - Buffer));
-  *e++ = 0x25; *e++ = 0x00; *e++ = 0x00; *e++ = 0x00; *e++ = 0xFF; /* and eax, 0xFF000000 */
-  *e++ = 0x0D; *e++ = 0x00; *e++ = 0x2D; *e++ = 0x2D; *e++ = 0x00; /* or eax, 0x002D2D00 */
-  *e++ = 0x89; *e++ = 0xC1;                                         /* mov ecx, eax */
+  /* Bridge arming */
+  *e++ = 0xA1; *(UINT32 *)e = (UINT32)(TrampolinePhys + 0x0348); e += 4; /* mov eax, [0x9E348] */
+  *e++ = 0x25; *e++ = 0x00; *e++ = 0x00; *e++ = 0x00; *e++ = 0xFF;     /* and eax, 0xFF000000 */
+  *e++ = 0x0D; *e++ = 0x00; *e++ = 0x2D; *e++ = 0x2D; *e++ = 0x00;     /* or eax, 0x002D2D00 */
+  *e++ = 0x89; *e++ = 0xC1;                                             /* mov ecx, eax */
 
-  /* Write new bus numbers to Root Port 0:3:1 offset 0x18 (0x80001918) */
-  *e++ = 0xB8; *e++ = 0x18; *e++ = 0x19; *e++ = 0x00; *e++ = 0x80; /* mov eax, 0x80001918 */
-  *e++ = 0xEF;                                                     /* out dx, eax (dx is 0x0CF8) */
-  *e++ = 0x89; *e++ = 0xC8;                                         /* mov eax, ecx */
-  *e++ = 0x80; *e++ = 0xC2; *e++ = 0x04;                           /* add dl, 4 (0x0CFC) */
-  *e++ = 0xEF;                                                     /* out dx, eax */
-  *e++ = 0x80; *e++ = 0xEA; *e++ = 0x04;                           /* sub dl, 4 (0x0CF8) */
+  *e++ = 0xB8; *e++ = 0x18; *e++ = 0x19; *e++ = 0x00; *e++ = 0x80;     /* mov eax, 0x80001918 */
+  *e++ = 0xEF;                                                         /* out dx, eax */
+  *e++ = 0x89; *e++ = 0xC8;                                             /* mov eax, ecx */
+  *e++ = 0x80; *e++ = 0xC2; *e++ = 0x04;                               /* add dl, 4 */
+  *e++ = 0xEF;                                                         /* out dx, eax */
+  *e++ = 0x80; *e++ = 0xEA; *e++ = 0x04;                               /* sub dl, 4 */
 
-  /* 2. Probe GPU 45:0:0 now that bridge is routing: 4 registers from probe_addrs[4..7] */
-  *e++ = 0xBE; *(UINT32 *)e = (UINT32)(TrampolinePhys + 0x0330); e += 4; /* mov esi, imm32 (probe_addrs[4]) */
-  *e++ = 0xBF; *(UINT32 *)e = (UINT32)(TrampolinePhys + 0x0360); e += 4; /* mov edi, imm32 (post-arm results) */
-  *e++ = 0xB9; *(UINT32 *)e = 4; e += 4;                                 /* mov ecx, 4 */
+  /* GPU Probe (4 dwords) */
+  *e++ = 0xBE; *(UINT32 *)e = (UINT32)(TrampolinePhys + 0x0330); e += 4;
+  *e++ = 0xBF; *(UINT32 *)e = (UINT32)(TrampolinePhys + 0x0360); e += 4;
+  *e++ = 0xB9; *(UINT32 *)e = 4; e += 4;
 
-  UINT8 *gpu_loop_start = e;
-  *e++ = 0x8B; *e++ = 0x06;                         /* mov eax, [rsi] */
-  *e++ = 0xEF;                                     /* out dx, eax */
-  *e++ = 0x80; *e++ = 0xC2; *e++ = 0x04;             /* add dl, 4 (0x0CFC) */
-  *e++ = 0xED;                                     /* in eax, dx */
-  *e++ = 0x80; *e++ = 0xEA; *e++ = 0x04;             /* sub dl, 4 (0x0CF8) */
-  *e++ = 0x89; *e++ = 0x07;                         /* mov [rdi], eax */
-  *e++ = 0x83; *e++ = 0xC6; *e++ = 0x04;             /* add esi, 4 */
-  *e++ = 0x83; *e++ = 0xC7; *e++ = 0x04;             /* add edi, 4 */
-  *e++ = 0xE2;                                     /* loop .gpu_loop */
-  INT8 gpu_loop_disp = (INT8)(gpu_loop_start - (e + 1));
-  *e++ = (UINT8)gpu_loop_disp;
+  UINT8 *gpu_loop32_start = e;
+  *e++ = 0x8B; *e++ = 0x06;
+  *e++ = 0xEF;
+  *e++ = 0x80; *e++ = 0xC2; *e++ = 0x04;
+  *e++ = 0xED;
+  *e++ = 0x80; *e++ = 0xEA; *e++ = 0x04;
+  *e++ = 0x89; *e++ = 0x07;
+  *e++ = 0x83; *e++ = 0xC6; *e++ = 0x04;
+  *e++ = 0x83; *e++ = 0xC7; *e++ = 0x04;
+  *e++ = 0xE2;
+  *e++ = (UINT8)(gpu_loop32_start - (e + 1));
 
-  /* 3. MANDATORY BRIDGE RESTORE: Restore Root Port Offset 0x18 to exact original value! */
-  *e++ = 0xB8; *e++ = 0x18; *e++ = 0x19; *e++ = 0x00; *e++ = 0x80; /* mov eax, 0x80001918 */
-  *e++ = 0xEF;                                                     /* out dx, eax (dx is 0x0CF8) */
-  *e++ = 0x8B; *e++ = 0x05;
-  UINT8 *bus_restore_disp = e; e += 4;
-  *(INT32 *)bus_restore_disp = (INT32)(0x0348 - (e - Buffer));
-  *e++ = 0x80; *e++ = 0xC2; *e++ = 0x04;                           /* add dl, 4 (0x0CFC) */
-  *e++ = 0xEF;                                                     /* out dx, eax */
+  /* Restore Bridge */
+  *e++ = 0xB8; *e++ = 0x18; *e++ = 0x19; *e++ = 0x00; *e++ = 0x80;
+  *e++ = 0xEF;
+  *e++ = 0xA1; *(UINT32 *)e = (UINT32)(TrampolinePhys + 0x0348); e += 4;
+  *e++ = 0x80; *e++ = 0xC2; *e++ = 0x04;
+  *e++ = 0xEF;
 
-  /* Patch .skip_bridge short jne displacement */
-  *skip_bridge_disp = (UINT8)(e - (skip_bridge_disp + 1));
+  *skip_bridge32_disp = (UINT8)(e - (skip_bridge32_disp + 1));
 
-  /* Read 32-bit waking vector from Shadow FACS at [ShadowFacsPhys + 0x0C] (Offset 0x020C) */
-  *e++ = 0x8B; *e++ = 0x05;
-  UINT8 *sfacs_vec_disp = e; e += 4;
-  *(INT32 *)sfacs_vec_disp = (INT32)(0x020C - (e - Buffer));
-  *e++ = 0x85; *e++ = 0xC0; /* test eax, eax */
-  *e++ = 0x75; UINT8 *f_vec0 = e++; /* jnz .have_vec */
+  /* Read 32-bit waking vector from Shadow FACS at [ShadowFacsPhys + 0x0C] */
+  *e++ = 0xA1; *(UINT32 *)e = (UINT32)(ShadowFacsPhys + 0x0C); e += 4; /* mov eax, [ShadowFacsPhys + 0x0C] */
+  *e++ = 0x85; *e++ = 0xC0;                                            /* test eax, eax */
+  *e++ = 0x75; UINT8 *f_vec32_0 = e++;                                /* jnz .got_vec32 */
 
-  /* Fallback: Read backup from low-memory mirror at [TrampolinePhys + 0x0280] */
-  *e++ = 0x8B; *e++ = 0x05;
-  UINT8 *mirror_vec_disp = e; e += 4;
-  *(INT32 *)mirror_vec_disp = (INT32)(0x0280 - (e - Buffer));
-  *e++ = 0x85; *e++ = 0xC0; /* test eax, eax */
-  *e++ = 0x75; UINT8 *f_vec1 = e++; /* jnz .have_vec */
+  /* Fallback: Read backup from Real FACS [RealFacsPhys + 0x0C] */
+  *e++ = 0xA1; *(UINT32 *)e = (UINT32)(RealFacsPhys + 0x0C); e += 4;
+  *e++ = 0x85; *e++ = 0xC0;
+  *e++ = 0x75; UINT8 *f_vec32_1 = e++;
 
-  /* No vector found in any FACS table! Flag error 0xDEAD and halt safely */
-  *e++ = 0x66; *e++ = 0xC7; *e++ = 0x05;
-  UINT8 *dead_disp = e; e += 4;
-  *e++ = 0xAD; *e++ = 0xDE; /* mov word ptr [rip + disp32], 0xDEAD (to 0x0310) */
-  *(INT32 *)dead_disp = (INT32)(0x0310 - (e - Buffer));
-  *e++ = 0xF4; /* hlt */
+  /* Ultimate fallback: 0x00001000 */
+  *e++ = 0xB8; *(UINT32 *)e = 0x00001000U; e += 4;
 
-  /* .have_vec target */
-  *f_vec0 = (UINT8)(e - (f_vec0 + 1));
-  *f_vec1 = (UINT8)(e - (f_vec1 + 1));
+  *f_vec32_0 = (UINT8)(e - (f_vec32_0 + 1));
+  *f_vec32_1 = (UINT8)(e - (f_vec32_1 + 1));
 
-  /* Save captured vector to telemetry [TrampolinePhys + 0x0314] */
-  *e++ = 0x89; *e++ = 0x05;
-  UINT8 *cap_vec_disp = e; e += 4;
-  *(INT32 *)cap_vec_disp = (INT32)(0x0314 - (e - Buffer));
+  /* Save captured vector to [TrampolinePhys + 0x0314] */
+  *e++ = 0xA3; *(UINT32 *)e = (UINT32)(TrampolinePhys + 0x0314); e += 4;
 
-  /* Calculate IP = EAX & 0x0F, CS = EAX >> 4, combine into (CS << 16) | IP */
+  /* Calculate IP = EAX & 0x0F, CS = EAX >> 4, EAX = (CS << 16) | IP */
   *e++ = 0x89; *e++ = 0xC3;             /* mov ebx, eax */
   *e++ = 0x83; *e++ = 0xE3; *e++ = 0x0F; /* and ebx, 0x0F */
   *e++ = 0xC1; *e++ = 0xE8; *e++ = 0x04; /* shr eax, 4 */
   *e++ = 0xC1; *e++ = 0xE0; *e++ = 0x10; /* shl eax, 16 */
   *e++ = 0x09; *e++ = 0xD8;             /* or eax, ebx */
+  *e++ = 0xA3; *(UINT32 *)e = (UINT32)(TrampolinePhys + 0x0318); e += 4; /* Telemetry at +0x0318 */
 
-  /* Telemetry: store Target Offset [0x0318] and Segment [0x031A] as dword */
-  *e++ = 0x89; *e++ = 0x05;
-  UINT8 *tgt318_disp = e; e += 4;
-  *(INT32 *)tgt318_disp = (INT32)(0x0318 - (e - Buffer));
+  /* Directly patch the real-mode tail's far jump target */
+  *e++ = 0xA3;
+  UINT8 *rm16_patch_dest32 = e; e += 4; /* mov [rm16_tail_patch], eax */
 
-  /* Directly patch 4 target bytes of jmp far at the end of real-mode tail */
-  *e++ = 0x89; *e++ = 0x05;
-  UINT8 *far_jump_patch_dest = e; e += 4; /* mov [rip + disp32], eax */
-
-  /* Load GDTR64 (10-byte packed descriptor at GU_TRAMP_GDTR_OFF 0x01A8) */
+  /* Load GDTR from [TrampolinePhys + GU_TRAMP_GDTR_OFF] (loads 6-byte GDTR in 32-bit mode) */
   *e++ = 0x0F; *e++ = 0x01; *e++ = 0x15;
-  UINT8 *lgdt_disp = e; e += 4;
-  *(INT32 *)lgdt_disp = (INT32)(GU_TRAMP_GDTR_OFF - (e - Buffer));
+  *(UINT32 *)e = (UINT32)(TrampolinePhys + GU_TRAMP_GDTR_OFF); e += 4;
+
+  /* Direct Far Jump to 16-bit Protected Mode: jmp far 0x0018:pm16_rel_off */
+  *e++ = 0xEA;
+  UINT8 *pm16_jmp_offset32 = e; e += 4;
+  *e++ = 0x18; *e++ = 0x00; /* selector 0x0018 (16-bit Code Segment) */
+
+  /* =========================================================================
+   * SECTION 2: 64-BIT LONG MODE PATH (BITS 64, stack-free)
+   * Entered when firmware jumps in 64-bit Long Mode.
+   * Drops from 64-bit Long Mode into 32-bit Compatibility Mode, disables paging,
+   * and branches directly to .sec1_common to execute native flat 32-bit recon & resume.
+   * ========================================================================= */
+  *(INT32 *)jz_64bit_disp = (INT32)(e - (jz_64bit_disp + 4));
+
+  /* Checkpoint 1 (64-bit entry): mov dword ptr [rip + disp32], 0x00006401 */
+  *e++ = 0xC7; *e++ = 0x05;
+  UINT8 *chk64_disp = e; e += 4;
+  *e++ = 0x01; *e++ = 0x64; *e++ = 0x00; *e++ = 0x00;
+  *(INT32 *)chk64_disp = (INT32)(0x0310 - (e - Buffer));
+
+  /* Magic: mov dword ptr [rip + disp32], 0x53335F54 ('S3_T') */
+  *e++ = 0xC7; *e++ = 0x05;
+  UINT8 *magic64_disp = e; e += 4;
+  *e++ = 0x54; *e++ = 0x5F; *e++ = 0x33; *e++ = 0x53;
+  *(INT32 *)magic64_disp = (INT32)(0x031C - (e - Buffer));
+
+  /* Load GDTR64 (10-byte descriptor at GU_TRAMP_GDTR_OFF 0x01A8) */
+  *e++ = 0x0F; *e++ = 0x01; *e++ = 0x15;
+  UINT8 *lgdt64_disp = e; e += 4;
+  *(INT32 *)lgdt64_disp = (INT32)(GU_TRAMP_GDTR_OFF - (e - Buffer));
 
   /* Indirect Far Jump into 32-bit Compatibility Mode: jmp fword ptr [rip + disp32] (FF 2D) */
   *e++ = 0xFF; *e++ = 0x2D;
   UINT8 *far_jmp32_disp = e; e += 4;
   *(INT32 *)far_jmp32_disp = (INT32)(GU_TRAMP_FARPTR32_OFF - (e - Buffer));
 
-  /*
-   * =========================================================================
-   * SECTION 2: 32-BIT COMPATIBILITY MODE (BITS 32, stack-free)
-   * Entered via indirect far jump from Section 1 (CS = Selector 0x0008).
-   * CPU State: CS=0x0008 (Compat Mode L=0, D=1), CR0.PG=1, EFER.LMA=1.
-   * =========================================================================
-   */
-  UINT8 *pm32_start = e;
-  UINT32 pm32_rel = (UINT32)(pm32_start - Buffer);
+  /* .pm32_compat: In 32-bit Compatibility Mode (CS=0x0008, L=0, D=1): Disable paging */
+  UINT8 *pm32_compat_start = e;
+  UINT32 pm32_rel = (UINT32)(pm32_compat_start - Buffer);
 
-  /* Load 32-bit Flat Data selector 0x0010 into DS, ES, FS, GS, SS */
+  /* Load 32-bit Flat Data selector 0x0010 into DS, ES, SS */
   *e++ = 0x66; *e++ = 0xB8; *e++ = 0x10; *e++ = 0x00; /* mov ax, 0x0010 */
   *e++ = 0x8E; *e++ = 0xD8;                         /* mov ds, ax */
   *e++ = 0x8E; *e++ = 0xC0;                         /* mov es, ax */
-  *e++ = 0x8E; *e++ = 0xE0;                         /* mov fs, ax */
-  *e++ = 0x8E; *e++ = 0xE8;                         /* mov gs, ax */
   *e++ = 0x8E; *e++ = 0xD0;                         /* mov ss, ax */
 
-  /* Disable Paging: mov eax, cr0; and eax, 0x7FFFFFFF; mov cr0, eax */
-  *e++ = 0x0F; *e++ = 0x20; *e++ = 0xC0;             /* mov eax, cr0 */
+  /* Disable Paging: mov eax, cr0; and eax, 0x7FFFFFFF; mov cr0, eax (deactivates IA-32e mode!) */
+  *e++ = 0x0F; *e++ = 0x20; *e++ = 0xC0;                             /* mov eax, cr0 */
   *e++ = 0x25; *e++ = 0xFF; *e++ = 0xFF; *e++ = 0xFF; *e++ = 0x7F; /* and eax, 0x7FFFFFFF */
-  *e++ = 0x0F; *e++ = 0x22; *e++ = 0xC0;             /* mov cr0, eax */
+  *e++ = 0x0F; *e++ = 0x22; *e++ = 0xC0;                             /* mov cr0, eax (deactivates IA-32e mode!) */
 
-  /* Disable Long Mode in IA32_EFER MSR (0xC0000080): rdmsr; and eax, 0xFFFFF6FF; wrmsr */
-  *e++ = 0xB9; *e++ = 0x80; *e++ = 0x00; *e++ = 0x00; *e++ = 0xC0; /* mov ecx, 0xC0000080 */
-  *e++ = 0x0F; *e++ = 0x32;                         /* rdmsr */
-  *e++ = 0x25; *e++ = 0xFF; *e++ = 0xF6; *e++ = 0xFF; *e++ = 0xFF; /* and eax, 0xFFFFF6FF */
-  *e++ = 0x0F; *e++ = 0x30;                         /* wrmsr */
+  /* Jump to common 32-bit reconnaissance & resume path */
+  *e++ = 0xE9;
+  UINT8 *jmp_sec1_disp = e; e += 4;
+  *(INT32 *)jmp_sec1_disp = (INT32)(sec1_common_start - (jmp_sec1_disp + 4));
 
-  /* Clear CR3: xor eax, eax; mov cr3, eax */
-  *e++ = 0x31; *e++ = 0xC0;                         /* xor eax, eax */
-  *e++ = 0x0F; *e++ = 0x22; *e++ = 0xD8;             /* mov cr3, eax */
-
-  /* Disable PAE in CR4: mov eax, cr4; and eax, 0xFFFFFFDF; mov cr4, eax */
-  *e++ = 0x0F; *e++ = 0x20; *e++ = 0xE0;             /* mov eax, cr4 */
-  *e++ = 0x25; *e++ = 0xDF; *e++ = 0xFF; *e++ = 0xFF; *e++ = 0xFF; /* and eax, 0xFFFFFFDF */
-  *e++ = 0x0F; *e++ = 0x22; *e++ = 0xE0;             /* mov cr4, eax */
-
-  /* Direct Far Jump to 16-bit Protected Mode: jmp far 0x0018:pm16_rel_off */
-  *e++ = 0xEA;
-  UINT8 *pm16_jmp_offset = e; e += 4;               /* 32-bit offset placeholder */
-  *e++ = 0x18; *e++ = 0x00;                         /* selector 0x0018 (16-bit Code Segment) */
-
-  /*
-   * =========================================================================
+  /* =========================================================================
    * SECTION 3: 16-BIT PROTECTED MODE (BITS 16, stack-free)
-   * Entered via direct far jump from Section 2 (CS = Selector 0x0018).
+   * Entered via direct far jump from Section 1 (CS = Selector 0x0018).
    * Base of Selector 0x0018 is TrampolinePhys (<1MB).
-   * =========================================================================
-   */
+   * ========================================================================= */
   UINT8 *pm16_start = e;
   UINT32 pm16_rel = (UINT32)(pm16_start - Buffer);
-  *(UINT32 *)pm16_jmp_offset = pm16_rel;
+  *(UINT32 *)pm16_jmp_offset32 = pm16_rel;
 
   /* Load data segment registers with 16-bit data selector 0x0020 (Base = TrampolinePhys) */
   *e++ = 0xB8; *e++ = 0x20; *e++ = 0x00;             /* mov ax, 0x0020 */
@@ -653,12 +641,10 @@ UINT32 GuAcpiBuildTrampolineCode(
   *e++ = (UINT8)(rm_cs & 0xFF);
   *e++ = (UINT8)((rm_cs >> 8) & 0xFF);
 
-  /*
-   * =========================================================================
+  /* =========================================================================
    * SECTION 4: 16-BIT REAL MODE (BITS 16, stack-free)
    * Entered via direct far jump from Section 3 (CS = TrampolinePhys >> 4).
-   * =========================================================================
-   */
+   * ========================================================================= */
   UINT8 *rm16_start = e;
   UINT16 rm16_rel = (UINT16)(rm16_start - Buffer);
   *(UINT16 *)rm16_jmp_offset = rm16_rel;
@@ -692,8 +678,8 @@ UINT32 GuAcpiBuildTrampolineCode(
   *e++ = 0x00; *e++ = 0x00;                         /* ip placeholder */
   *e++ = 0x00; *e++ = 0x01;                         /* cs placeholder (0x0100) */
 
-  /* Fix up far_jump_patch_dest displacement */
-  *(INT32 *)far_jump_patch_dest = (INT32)((far_jump_inst + 1) - (far_jump_patch_dest + 4));
+  /* Fix up patch displacements from Section 1 */
+  *(UINT32 *)rm16_patch_dest32 = (UINT32)(TrampolinePhys + (far_jump_inst + 1 - Buffer));
 
   /*
    * =========================================================================
@@ -890,7 +876,7 @@ EFI_STATUS GuAcpiInstallShadowFacs(
 
   if (*(UINT32 *)(low_base + GU_TRAMP_MAGIC_OFF) == GU_TRAMP_TELEMETRY_MAGIC) {
     UINT16 entry_chk = *(UINT16 *)(low_base + GU_TRAMP_ENTRY_STATUS_OFF);
-    if (entry_chk == 0xAA01 || entry_chk == 0xDEAD) {
+    if (entry_chk == 0x3201 || entry_chk == 0x6401 || entry_chk == 0xAA01 || entry_chk == 0xDEAD) {
       telemetry_page = low_base;
       telemetry_phys = LowTrampPhys;
     }
@@ -902,7 +888,7 @@ EFI_STATUS GuAcpiInstallShadowFacs(
       UINT8 *candidate = (UINT8 *)(UINTN)page_addr;
       if (*(UINT32 *)(candidate + GU_TRAMP_MAGIC_OFF) == GU_TRAMP_TELEMETRY_MAGIC) {
         UINT16 entry_chk = *(UINT16 *)(candidate + GU_TRAMP_ENTRY_STATUS_OFF);
-        if (entry_chk == 0xAA01 || entry_chk == 0xDEAD) {
+        if (entry_chk == 0x3201 || entry_chk == 0x6401 || entry_chk == 0xAA01 || entry_chk == 0xDEAD) {
           telemetry_page = candidate;
           telemetry_phys = page_addr;
           break;
@@ -917,8 +903,12 @@ EFI_STATUS GuAcpiInstallShadowFacs(
     UINT32 full_vec     = *(UINT32 *)(telemetry_page + GU_TRAMP_CAPTURED_VEC_OFF);
     UINT16 tgt_off      = *(UINT16 *)(telemetry_page + GU_TRAMP_TARGET_PTR_OFF);
     UINT16 tgt_seg      = *(UINT16 *)(telemetry_page + GU_TRAMP_TARGET_PTR_OFF + 2);
-    GuLog("S3 Prior Wake Telemetry (Page %#llx): Magic=S3_T Entry=%#04x Vector=%#08x Target=%04x:%04x Exit=%#04x\n",
-          (unsigned long long)telemetry_phys,
+    const char *mode_str = "Unknown";
+    if (entry_status == 0x3201) mode_str = "32-Bit Flat PM";
+    else if (entry_status == 0x6401) mode_str = "64-Bit Long Mode";
+    else if (entry_status == 0xAA01) mode_str = "Legacy PM/LM";
+    GuLog("S3 Prior Wake Telemetry (Page %#llx): Magic=S3_T Mode=%a Entry=%#04x Vector=%#08x Target=%04x:%04x Exit=%#04x\n",
+          (unsigned long long)telemetry_phys, mode_str,
           (unsigned)entry_status, (unsigned)full_vec, (unsigned)tgt_seg, (unsigned)tgt_off, (unsigned)exit_status);
 
     UINT32 br_id   = *(UINT32 *)(telemetry_page + GU_TRAMP_PCI_PROBE_RAW_OFF + 0x00);
@@ -983,18 +973,18 @@ EFI_STATUS GuAcpiInstallShadowFacs(
   if (shadow_facs->Version < 2) shadow_facs->Version = 2;
   if (Info->real_facs->Version < 2) Info->real_facs->Version = 2;
 
-  shadow_facs->FirmwareWakingVector = 0;
+  shadow_facs->FirmwareWakingVector = (UINT32)trampoline_phys;
   shadow_facs->XFirmwareWakingVector = (UINT64)trampoline_phys;
   shadow_facs->Flags |= 0x00000002U; /* 64-bit wake supported */
-  *(UINT32 *)((UINT8 *)shadow_facs + 0x24) |= 0x00000001U; /* OspmFlags: 64-bit wake enabled */
+  *(UINT32 *)((UINT8 *)shadow_facs + 0x24) = 0x00000000U; /* OspmFlags: 0 (Windows default, Flat 32-bit PM wake) */
 
   /* Tag Shadow FACS with signature and real FACS address at +0x28 / +0x2C (Reserved1) for warm reset recovery */
   *(UINT32 *)((UINT8 *)shadow_facs + 0x28) = GU_SHADOW_FACS_SIGNATURE;
   memcpy((UINT8 *)shadow_facs + 0x2C, &Info->real_facs_phys, sizeof(UINT64));
 
-  /* Set 64-bit wake in Real FACS as well so EDK2 S3Resume2Pei enters via XFirmwareWakingVector */
+  /* Set wake vectors in Real FACS as well so EDK2 S3Resume2Pei enters via waking vector */
   Info->real_facs->Flags |= 0x00000002U;
-  *(UINT32 *)((UINT8 *)Info->real_facs + 0x24) |= 0x00000001U;
+  *(UINT32 *)((UINT8 *)Info->real_facs + 0x24) = 0x00000000U;
   Info->real_facs->XFirmwareWakingVector = (UINT64)trampoline_phys;
   Info->real_facs->FirmwareWakingVector = (UINT32)trampoline_phys;
 
@@ -1177,7 +1167,7 @@ EFI_STATUS GuAcpiInstallShadowFacs(
    */
   if (Info->real_facs->Version < 2) Info->real_facs->Version = 2;
   Info->real_facs->Flags |= 0x00000002U;
-  *(UINT32 *)((UINT8 *)Info->real_facs + 0x24) |= 0x00000001U;
+  *(UINT32 *)((UINT8 *)Info->real_facs + 0x24) = 0x00000000U; /* OspmFlags: 0 (Windows default, Flat 32-bit PM wake) */
   Info->real_facs->FirmwareWakingVector = (UINT32)trampoline_phys;
   Info->real_facs->XFirmwareWakingVector = (UINT64)trampoline_phys;
 

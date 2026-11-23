@@ -384,8 +384,8 @@ static void TestGuAcpiFacsDiscoveryAndPatching(void) {
 
   /* Verify Real FACS was hooked to point to Low Trampoline (<1MB) for AMI Aptio V */
   CHECK(mock_facs.FirmwareWakingVector == (UINT32)mock_low_tramp_phys, "Real FACS FirmwareWakingVector must point to Low Trampoline");
-  CHECK(mock_facs.XFirmwareWakingVector == (UINT64)mock_low_tramp_phys, "Real FACS XFirmwareWakingVector must point to Low Trampoline (64-bit Long Mode Wake)");
-  CHECK((*(UINT32 *)((UINT8 *)&mock_facs + 0x24) & 1U) != 0, "Real FACS OspmFlags must have bit 0 set (64-bit wake)");
+  CHECK(mock_facs.XFirmwareWakingVector == (UINT64)mock_low_tramp_phys, "Real FACS XFirmwareWakingVector must point to Low Trampoline (Universal Wake)");
+  CHECK((*(UINT32 *)((UINT8 *)&mock_facs + 0x24)) == 0, "Real FACS OspmFlags must be 0 (Windows Flat 32-bit PM wake)");
   CHECK((mock_facs.Flags & 2U) != 0, "Real FACS 64-bit wake flag must be set");
   CHECK(mock_facs.Version >= 2, "Real FACS Version must be >= 2");
 
@@ -394,9 +394,9 @@ static void TestGuAcpiFacsDiscoveryAndPatching(void) {
       (EFI_ACPI_2_0_FIRMWARE_ACPI_CONTROL_STRUCTURE *)(mock_low_tramp + 0x00200);
   CHECK(shadow_facs->Signature == GU_ACPI_FACS_SIGNATURE, "Shadow FACS signature must be 'FACS'");
   CHECK(shadow_facs->HardwareSignature == 0x12345678U, "Shadow FACS hardware signature must match original");
-  CHECK(shadow_facs->FirmwareWakingVector == 0, "Shadow FACS FirmwareWakingVector initialized to 0");
+  CHECK(shadow_facs->FirmwareWakingVector == (UINT32)mock_low_tramp_phys, "Shadow FACS FirmwareWakingVector must point to Low Trampoline");
   CHECK(shadow_facs->XFirmwareWakingVector == (UINT64)mock_low_tramp_phys, "Shadow FACS XFirmwareWakingVector must point to Low Trampoline");
-  CHECK((*(UINT32 *)((UINT8 *)shadow_facs + 0x24) & 1U) != 0, "Shadow FACS OspmFlags must have bit 0 set (64-bit wake)");
+  CHECK((*(UINT32 *)((UINT8 *)shadow_facs + 0x24)) == 0, "Shadow FACS OspmFlags must be 0 (Windows Flat 32-bit PM wake)");
   CHECK((shadow_facs->Flags & 2U) != 0, "Shadow FACS 64-bit wake flag must be set");
   CHECK(shadow_facs->Version >= 2, "Shadow FACS Version must be >= 2");
 
@@ -506,19 +506,22 @@ static void TestGuAcpiBuildTrampolineCode(void) {
   CHECK(bytes > 0, "Trampoline builder must generate non-zero bytes");
   CHECK(bytes <= GU_TRAMP_GDT_OFF, "Trampoline machine code must fit before GDT at +0x0180");
 
-  /* 1. Check Preamble: cli, cld */
+  /* 1. Check Polyglot Preamble: cli, cld, xor eax, eax, inc eax (32) / REX (64), jz rel32 */
   CHECK(buffer[0] == 0xFA, "Preamble must start with CLI (0xFA)");
   CHECK(buffer[1] == 0xFC, "Preamble must have CLD (0xFC)");
+  CHECK(buffer[2] == 0x31 && buffer[3] == 0xC0, "Preamble must have xor eax, eax (31 C0)");
+  CHECK(buffer[4] == 0x40, "Preamble must have inc eax (32-bit) / REX (64-bit)");
+  CHECK(buffer[5] == 0x0F && buffer[6] == 0x84, "Preamble must have jz rel32 to 64-bit path (0F 84)");
 
-  /* 2. Check 64-bit Checkpoint 1: mov dword ptr [rip + disp32], 0x0000AA01 (C7 05 <disp32> 01 AA 00 00) */
-  CHECK(buffer[2] == 0xC7 && buffer[3] == 0x05, "mov dword ptr [rip + disp32], imm32 opcode");
-  CHECK(*(INT32 *)(buffer + 4) == (INT32)(0x0310 - 12), "Entry Checkpoint RIP displacement to [0x9E310]");
-  CHECK(*(UINT32 *)(buffer + 8) == 0x0000AA01U, "Entry Checkpoint value 0xAA01");
+  /* 2. Check 32-bit Checkpoint 1: mov dword ptr [imm32], 0x00003201 (C7 05 <addr32> 01 32 00 00) */
+  CHECK(buffer[11] == 0xC7 && buffer[12] == 0x05, "mov dword ptr [imm32], imm32 opcode");
+  CHECK(*(UINT32 *)(buffer + 13) == (UINT32)(tramp_phys + 0x0310), "Entry Checkpoint address [0x9E310]");
+  CHECK(*(UINT32 *)(buffer + 17) == 0x00003201U, "Entry Checkpoint 32-bit value 0x3201");
 
-  /* 3. Check 64-bit Telemetry Magic: mov dword ptr [rip + disp32], 0x53335F54 (C7 05 <disp32> 54 5F 33 53) */
-  CHECK(buffer[12] == 0xC7 && buffer[13] == 0x05, "mov dword ptr [rip + disp32], imm32 opcode");
-  CHECK(*(INT32 *)(buffer + 14) == (INT32)(0x031C - 22), "Telemetry Magic RIP displacement to [0x9E31C]");
-  CHECK(*(UINT32 *)(buffer + 18) == 0x53335F54U, "Telemetry Magic 'S3_T'");
+  /* 3. Check 32-bit Telemetry Magic: mov dword ptr [imm32], 0x53335F54 (C7 05 <addr32> 54 5F 33 53) */
+  CHECK(buffer[21] == 0xC7 && buffer[22] == 0x05, "mov dword ptr [imm32], imm32 opcode");
+  CHECK(*(UINT32 *)(buffer + 23) == (UINT32)(tramp_phys + 0x031C), "Telemetry Magic address [0x9E31C]");
+  CHECK(*(UINT32 *)(buffer + 27) == 0x53335F54U, "Telemetry Magic 'S3_T'");
 
   /* 4. Check native 32-bit I/O Opcodes (EF, ED without 0x66 prefix) */
   UINT32 num_outs = 0, num_ins = 0;
@@ -544,13 +547,15 @@ static void TestGuAcpiBuildTrampolineCode(void) {
       found_stack_op = TRUE;
       break;
     }
-    if (op == 0xFA || op == 0xFC || op == 0xEF || op == 0xED || op == 0xF4) {
+    if (op == 0xFA || op == 0xFC || op == 0xEF || op == 0xED || op == 0xF4 || op == 0x40) {
       idx += 1;
+    } else if (op == 0xA1 || op == 0xA3) {
+      idx += 5; /* mov eax, [imm32] / mov [imm32], eax */
     } else if (op == 0x8B || op == 0x89) {
       if (buffer[idx + 1] == 0x05) idx += 6; /* mov reg, [rip+disp32] */
       else idx += 2; /* mov reg, [rsi] / mov [rdi], eax / mov ecx, eax */
     } else if (op == 0xC7) {
-      if (buffer[idx + 1] == 0x05) idx += 10; /* mov [rip+disp32], imm32 */
+      if (buffer[idx + 1] == 0x05) idx += 10; /* mov [rip+disp32], imm32 OR mov [imm32], imm32 */
       else if (buffer[idx + 1] == 0x06) idx += 6; /* mov word [disp16], imm16 */
       else idx += 2;
     } else if (op == 0x66) {
@@ -561,6 +566,7 @@ static void TestGuAcpiBuildTrampolineCode(void) {
       else if (next == 0x3D) idx += 4; /* cmp ax, imm16 */
       else if (next == 0xC7 && buffer[idx + 2] == 0x05) idx += 9; /* mov word [rip+disp32], imm16 */
       else if (next == 0x31) idx += 3; /* xor reg32, reg32 */
+      else if (next == 0xA1) idx += 6; /* mov ax, [imm32] */
       else idx += 2;
     } else if (op == 0xBE || op == 0xBF || op == 0xB9 || op == 0xB8) {
       idx += 5; /* mov r32, imm32 */
@@ -568,8 +574,8 @@ static void TestGuAcpiBuildTrampolineCode(void) {
       idx += 3; /* add/sub dl, 4 */
     } else if (op == 0x83) {
       idx += 3; /* add esi/edi, 4 / and ebx, 0x0F */
-    } else if (op == 0xE2 || op == 0x75) {
-      idx += 2; /* loop / jne short */
+    } else if (op == 0xE2 || op == 0x75 || op == 0x74) {
+      idx += 2; /* loop / jne short / jz short */
     } else if (op == 0x25 || op == 0x0D) {
       idx += 5; /* and/or eax, imm32 */
     } else if (op == 0x85 || op == 0x31 || op == 0x8E || op == 0x8C || op == 0x09) {
@@ -578,8 +584,10 @@ static void TestGuAcpiBuildTrampolineCode(void) {
       idx += 3; /* shr/shl reg, imm8 */
     } else if (op == 0x0F) {
       UINT8 next = buffer[idx + 1];
-      if (next == 0x01) {
-        if (buffer[idx + 2] == 0x15) idx += 7; /* lgdt [rip+disp32] */
+      if (next == 0x84) {
+        idx += 6; /* jz rel32 (0F 84 disp32) */
+      } else if (next == 0x01) {
+        if (buffer[idx + 2] == 0x15) idx += 7; /* lgdt [rip+disp32] / lgdt [addr32] */
         else if (buffer[idx + 2] == 0x1E) idx += 5; /* lidt [disp16] */
         else idx += 3;
       } else if (next == 0x20 || next == 0x22) {
@@ -598,6 +606,8 @@ static void TestGuAcpiBuildTrampolineCode(void) {
       else idx += 5;
     } else if (op == 0x24) {
       idx += 2; /* and al, imm8 */
+    } else if (op == 0xE9) {
+      idx += 5; /* jmp rel32 */
     } else {
       idx += 1;
     }
@@ -673,40 +683,16 @@ static void TestGuAcpiBuildTrampolineCode(void) {
   }
   CHECK(found_cr0_pg_clear, "Must contain CR0.PG clear sequence (and eax, 0x7FFFFFFF)");
 
-  /* EFER MSR: rdmsr; and eax, 0xFFFFF6FF; wrmsr */
-  BOOLEAN found_efer = FALSE;
-  for (UINT32 i = 0; i < bytes - 13; i++) {
-    if (buffer[i] == 0x0F && buffer[i+1] == 0x32 &&
-        buffer[i+2] == 0x25 && buffer[i+3] == 0xFF && buffer[i+4] == 0xF6 && buffer[i+5] == 0xFF && buffer[i+6] == 0xFF &&
-        buffer[i+7] == 0x0F && buffer[i+8] == 0x30) {
-      found_efer = TRUE;
+  /* Checkpoint 1 (64-bit entry): C7 05 <disp32> 01 64 00 00 */
+  BOOLEAN found_chk64 = FALSE;
+  for (UINT32 i = 0; i < bytes - 9; i++) {
+    if (buffer[i] == 0xC7 && buffer[i+1] == 0x05 &&
+        buffer[i+6] == 0x01 && buffer[i+7] == 0x64 && buffer[i+8] == 0x00 && buffer[i+9] == 0x00) {
+      found_chk64 = TRUE;
       break;
     }
   }
-  CHECK(found_efer, "Must contain EFER LME/NXE clear sequence (rdmsr; and eax, 0xFFFFF6FF; wrmsr)");
-
-  /* CR3 clear: xor eax, eax; mov cr3, eax */
-  BOOLEAN found_cr3 = FALSE;
-  for (UINT32 i = 0; i < bytes - 4; i++) {
-    if (buffer[i] == 0x31 && buffer[i+1] == 0xC0 &&
-        buffer[i+2] == 0x0F && buffer[i+3] == 0x22 && buffer[i+4] == 0xD8) {
-      found_cr3 = TRUE;
-      break;
-    }
-  }
-  CHECK(found_cr3, "Must contain CR3 clear sequence (xor eax, eax; mov cr3, eax)");
-
-  /* CR4 PAE clear: mov eax, cr4; and eax, 0xFFFFFFDF; mov cr4, eax */
-  BOOLEAN found_cr4 = FALSE;
-  for (UINT32 i = 0; i < bytes - 10; i++) {
-    if (buffer[i] == 0x0F && buffer[i+1] == 0x20 && buffer[i+2] == 0xE0 &&
-        buffer[i+3] == 0x25 && buffer[i+4] == 0xDF && buffer[i+5] == 0xFF && buffer[i+6] == 0xFF && buffer[i+7] == 0xFF &&
-        buffer[i+8] == 0x0F && buffer[i+9] == 0x22 && buffer[i+10] == 0xE0) {
-      found_cr4 = TRUE;
-      break;
-    }
-  }
-  CHECK(found_cr4, "Must contain CR4.PAE clear sequence (and eax, 0xFFFFFFDF)");
+  CHECK(found_chk64, "Must contain 64-bit Checkpoint 1 (0x6401)");
 
   /* jmp far 0x0018:pm16_rel_off */
   BOOLEAN found_jmp_pm16 = FALSE;
