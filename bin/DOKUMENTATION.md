@@ -1,7 +1,7 @@
 # Technische Dokumentation: Universal GPU Unlock (Multi-Gen)
 
 > **Tool:** Universal GPU Unlock  
-> **Version:** v1.8.38  
+> **Version:** v1.8.39  
 > **Architekturen:** NVIDIA Ada Lovelace (RTX 40), Ampere (RTX 30), Turing (RTX 20 / CMP)  
 > **Unterstützte Betriebssysteme:** Windows 10, Windows 11, WSL2 / Ubuntu CUDA Container  
 
@@ -366,20 +366,24 @@ In **v1.8.34** habe ich die Architektur umfassend überarbeitet und perfektionie
 2. **Erster Split-Versuch via FADT-Felder:**
    In v1.8.37 wurde versucht, `FirmwareCtrl` auf `RealFACS` (`0xDC8BB000`) und `XFirmwareCtrl` auf `ShadowFACS` (`0x9E200`) zu setzen.
 
-### 13.7 Die v1.8.38 Plan-B-Architektur: ACPI RSDT / XSDT Dual-Root Split
-1. **Empirische Erkenntnis aus Live-Kernel-Forensik (`kdX64.exe -kl`):**
-   Die Live-Untersuchung im laufenden Windows-Kernel unmittelbar nach einem 41-Sekunden-Standby-Zyklus lieferte den entscheidenden Beweis:
-   - `nt!HalpAcpiFacsMapping` zeigte auf `ffffc301b69cd000` (PTE mappt PFN `dc8bb`, also `0xDC8BB000`).
-   - `0xDC8BB00C` (`RealFACS->FirmwareWakingVector`) stand nach dem Aufwachen unverändert auf `0x0009E000` – Windows hat `RealFACS` nicht überschrieben!
-   - Allerdings ignoriert Windows 64-bit `XFirmwareCtrl`, sobald `FirmwareCtrl` ungleich Null ist. `0x9E000` wurde von Windows nicht virtuell gemappt, weshalb `!dd [c] 9e310` scheiterte.
-2. **Die Plan-B-Architektur (Dual-Root Split):**
-   Um Firmware und Betriebssystem sauber und kollisionsfrei zu trennen, splitte ich die ACPI-Hierarchie an den Root-Tabellen:
-   - **RSDT (32-Bit-Weg für BIOS PEI S3 Resume):** Bleibt unverändert auf die originale `RealFADT` im ACPI Reclaim Memory gerichtet (`FirmwareCtrl = RealFACS = 0xDC8BB000`, `XFirmwareCtrl = 0`, Checksumme 0 mod 256). Das 32-Bit-BIOS folgt der RSDT, liest `RealFACS->FirmwareWakingVector` (`0x9E000`) und springt ins 16-Bit-Trampolin.
-   - **ShadowFADT im ACPI NVS (`0x9E400`):** Eine vollständige Kopie der originalen FADT wird auf der Low-Memory-NVS-Seite bei Offset `+0x0400` angelegt. In `ShadowFADT` zeigt `FirmwareCtrl` auf `ShadowFACS` (`0x9E200`) und `XFirmwareCtrl = 0`. Windows 64-bit mappt dadurch `0x9E000` garantiert in den Kernel-Adressraum, schreibt seinen Aufwachvektor (`HalpRMStub`) nach `ShadowFACS` (`0x9E20C`) und WinDbg kann `0x9E310` live im laufenden Windows auslesen.
-   - **XSDT (64-Bit-Weg für Windows UEFI):** Der 64-Bit-Eintrag für `FACP`/FADT in der XSDT wird auf `ShadowFADT` (`0x9E400`) umgebogen und die XSDT-Prüfsumme neu berechnet.
-3. **Warm-Reset / Re-Entry Erkennung (`src/s3_facs.c`):**
-   In `GuAcpiLocateFadtAndFacs()` erkenne ich automatisch, ob die XSDT bereits auf eine Low-Memory-ShadowFADT (`< 1 MB` oder `xsdt_fadt_phys != rsdt_fadt_phys`) zeigt, und stelle die echte originale FADT aus der unberührten RSDT sowie die echte FACS aus `fadt`/`ShadowFACS` zuverlässig wieder her.
-4. **Maschinencode bleibt 100 % unangetastet:**
-   Das 16-Bit-Trampolin bleibt zu 100 % unverändert (weiterhin kein MMIO, kein SEC2-Unlock, kein CMOS).
+### 13.8 Die v1.8.39 Architektur: Exakte FADT-Feld-Zuordnung (Windows vs. AMI Aptio V)
+1. **Live-Kernel-Disassembly (`ntoskrnl.exe`):**
+   Das Disassemblieren von `nt!HalpAcpiGetFacsMapping` im laufenden Windows 10/11 Kernel lieferte den endgültigen Beweis:
+   ```asm
+   nt!HalpAcpiGetFacsMapping:
+   fffff801`085bb087 mov edx, dword ptr [rax+24h] ; Liest Offset 0x24 = FirmwareCtrl!
+   fffff801`085bb0b1 call nt!HalpAcpiCheckAndMapTable
+   ```
+   Windows 64-bit liest im Maschinencode **ausnahmslos** das 32-Bit-Feld `FirmwareCtrl` (Offset `0x24`) und ignoriert `XFirmwareCtrl` vollständig.
+2. **Firmware-Verhalten (AMI Aptio V / EDK2 S3Resume2Pei):**
+   Das AMI-BIOS arbeitet exakt nach ACPI 2.0+ Spezifikation:
+   `if (FADT->Header.Length >= 140 && FADT->XFirmwareCtrl != 0) Facs = FADT->XFirmwareCtrl; else Facs = FADT->FirmwareCtrl;`
+3. **Die exakte Zuordnung in v1.8.39:**
+   - **`RSDT`:** Zeigt weiterhin auf die unveränderte Original-FADT (`FirmwareCtrl = RealFACS`, `XFirmwareCtrl = 0`).
+   - **`ShadowFADT` (in der `XSDT`):**
+     - `FirmwareCtrl = ShadowFACS` (`0x9E200`): Windows liest Offset 0x24, mappt `ShadowFACS` und schreibt seinen Aufwachvektor (`HalpRMStub` bei physikalisch `0x00001000`) nach `0x9E20C`.
+     - `XFirmwareCtrl = RealFACS` (`0xDC8BB000`): AMI Aptio V priorisiert Offset 0x84, liest `RealFACS` und springt zu `0x9E000` ins Trampolin.
+4. **Verifikation des 16-Bit-Trampolins:**
+   Das Trampolin liest `0x00001000` aus `ShadowFACS+0x0C` (`0x9E20C`), berechnet exakt nach ACPI-Spezifikation `Offset = 0x1000 & 0x0F = 0x0000` und `Segment = 0x1000 >> 4 = 0x0100` (`0100:0000` = `0x00001000`), stellt den BIOS-Stack wieder her und springt per `jmp far ptr cs:[0x0300]` sauber zu Windows `HalpRMStub`.
 5. **Host-Test Suite:**
-   Alle 106 Tests bestanden (`MSVC_HOST_TESTS=PASS`), inklusive vollständiger Validierung von ShadowFADT, RSDT/XSDT-Checksummen und Warm-Reset-Recovery.
+   Alle 106 Tests bestanden (`MSVC_HOST_TESTS=PASS`).

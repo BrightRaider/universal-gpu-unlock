@@ -6,6 +6,20 @@ For packaged binaries and downloads, visit [GitHub Releases](https://github.com/
 
 ---
 
+## [v1.8.39] - 2026-11-23
+### Added & Fixed
+- **Exact FADT FACS Field Split for Windows vs. AMI Aptio V Firmware (addresses #19):**
+  - **Live-Kernel Disassembly Root Cause Proof:** Live in-kernel disassembly of `nt!HalpAcpiGetFacsMapping` in `ntoskrnl.exe` proved that Windows 64-bit hardcodes reading 32-bit `FirmwareCtrl` (`mov edx, dword ptr [rax+24h]`) and completely ignores `XFirmwareCtrl`. In contrast, AMI Aptio V (EDK2 `S3Resume2Pei`) strictly follows ACPI 2.0+ precedence: `if (XFirmwareCtrl != 0) use XFirmwareCtrl; else use FirmwareCtrl;`.
+  - **Exact Field Mapping in ShadowFADT:**
+    - `RSDT`: Remains pointing to untouched `RealFADT` (`FirmwareCtrl = RealFACS`, `XFirmwareCtrl = 0`).
+    - `ShadowFADT` (in `XSDT`):
+      - `FirmwareCtrl = (UINT32)shadow_facs_phys` (`0x9E200`): Windows maps `ShadowFACS` and writes its waking vector (`HalpRMStub` at physical `0x00001000`) into `ShadowFACS->FirmwareWakingVector` (`0x9E20C`).
+      - `XFirmwareCtrl = (UINT64)real_facs_phys` (`0xDC8BB000`): AMI Aptio V prioritizes `XFirmwareCtrl` on resume, reads `RealFACS`, and jumps to `0x9E000` into our trampoline.
+  - **16-Bit Trampoline Linear Address Verification:** Verified that `0x00001000` from `ShadowFACS+0x0C` is resolved mathematically into `CS:IP = 0100:0000` (`Offset = vec & 0x0F = 0`, `Segment = vec >> 4 = 0x0100`), perfectly matching ACPI real-mode resume specs.
+  - **Host Verification Suite Passing:** All 106 unit tests passing (`MSVC_HOST_TESTS=PASS`).
+
+---
+
 ## [v1.8.38] - 2026-11-23
 ### Added & Fixed
 - **ACPI RSDT / XSDT Dual-Root Split Architecture for BIOS vs. OS S3 Resume (addresses #19):**

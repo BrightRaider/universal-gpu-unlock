@@ -733,14 +733,14 @@ EFI_STATUS GuAcpiInstallShadowFacs(
   memcpy(shadow_fadt, Info->fadt, fadt_len);
 
   /*
-   * 3. In ShadowFADT (for XSDT / Windows):
-   *    - FirmwareCtrl = (UINT32)shadow_facs_phys (0x9E200)
-   *    - XFirmwareCtrl = 0 (exact original FADT layout so Windows maps 0x9E000 into virtual memory)
+   * 3. In ShadowFADT (for XSDT / Windows & BIOS):
+   *    - FirmwareCtrl = (UINT32)shadow_facs_phys (0x9E200) -> Windows exclusively reads offset 0x24 (FirmwareCtrl)
+   *    - XFirmwareCtrl = (UINT64)Info->real_facs_phys (0xDC8BB000) -> AMI Aptio V PEI prioritizes offset 0x84 (XFirmwareCtrl)
    *    - Recalculate ShadowFADT->Header.Checksum
    */
   shadow_fadt->FirmwareCtrl = (UINT32)shadow_facs_phys;
   if (shadow_fadt->Header.Length >= 140) {
-    shadow_fadt->XFirmwareCtrl = 0;
+    shadow_fadt->XFirmwareCtrl = (UINT64)Info->real_facs_phys;
   }
   shadow_fadt->Header.Checksum = 0;
   UINT8 sf_sum = 0;

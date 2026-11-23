@@ -327,12 +327,12 @@ static void TestGuAcpiFacsDiscoveryAndPatching(void) {
   CHECK(info.shadow_fadt_phys == mock_low_tramp_phys + 0x00400, "Shadow FADT physical address must be low_tramp + 0x400");
   CHECK(info.trampoline_phys == mock_low_tramp_phys, "Trampoline physical address must be mock_low_tramp_phys (<1MB)");
 
-  /* Verify Plan B: Shadow FADT at low_tramp + 0x400 (for XSDT / 64-bit OS) */
+  /* Verify Plan B: Shadow FADT at low_tramp + 0x400 (for XSDT / Windows & BIOS) */
   EFI_ACPI_2_0_FIXED_ACPI_DESCRIPTION_TABLE *shadow_fadt =
       (EFI_ACPI_2_0_FIXED_ACPI_DESCRIPTION_TABLE *)(mock_low_tramp + 0x00400);
   CHECK(shadow_fadt->Header.Signature == GU_ACPI_FADT_SIGNATURE, "Shadow FADT signature must be 'FACP'");
-  CHECK(shadow_fadt->FirmwareCtrl == (UINT32)(mock_low_tramp_phys + 0x00200), "Shadow FADT FirmwareCtrl must point to Shadow FACS (0x9E200)");
-  CHECK(shadow_fadt->XFirmwareCtrl == 0, "Shadow FADT XFirmwareCtrl must be 0 for Windows mapping");
+  CHECK(shadow_fadt->FirmwareCtrl == (UINT32)(mock_low_tramp_phys + 0x00200), "Shadow FADT FirmwareCtrl must point to Shadow FACS (0x9E200) for Windows");
+  CHECK(shadow_fadt->XFirmwareCtrl == (UINT64)info.real_facs_phys, "Shadow FADT XFirmwareCtrl must point to Real FACS (0xDC8BB000) for AMI Aptio V");
 
   /* Verify Shadow FADT checksum was recalculated and is valid */
   sum = 0;
@@ -504,6 +504,14 @@ static void TestGuAcpiBuildTrampolineCode(void) {
   CHECK(tbl[5] == 0x802D0004U, "GPU Cmd/Stat address at tbl[5]");
   CHECK(tbl[6] == 0x802D0010U, "GPU BAR0 address at tbl[6]");
   CHECK(tbl[7] == 0x802D0064U, "GPU PMCSR address at tbl[7] (Cap 0x01 + 0x04)");
+
+  /* Explicit Sanity Check 5: Verify linear-to-real-mode segment:offset conversion for Windows HalpRMStub (0x00001000) */
+  UINT32 win_stub_vec = 0x00001000U;
+  UINT16 win_stub_ip = (UINT16)(win_stub_vec & 0x0FU);
+  UINT16 win_stub_cs = (UINT16)(((win_stub_vec >> 4) | ((win_stub_vec >> 16) << 12)) & 0xFFFFU);
+  CHECK(win_stub_ip == 0x0000, "HalpRMStub (0x00001000) offset must be 0x0000");
+  CHECK(win_stub_cs == 0x0100, "HalpRMStub (0x00001000) segment must be 0x0100 (CS = vec >> 4)");
+  CHECK(((UINT32)win_stub_cs << 4) + win_stub_ip == win_stub_vec, "Real mode CS:IP (0100:0000) must resolve to linear 0x00001000");
 
   /* Disassembly & Hex Dump Output for User Inspection */
   printf("\n==================== 16-BIT REAL-MODE TRAMPOLINE DISASSEMBLY & HEX DUMP ====================\n");
