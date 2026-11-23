@@ -1,7 +1,7 @@
 # Technische Dokumentation: Universal GPU Unlock (Multi-Gen)
 
 > **Tool:** Universal GPU Unlock  
-> **Version:** v1.8.40b  
+> **Version:** v1.8.41  
 > **Architekturen:** NVIDIA Ada Lovelace (RTX 40), Ampere (RTX 30), Turing (RTX 20 / CMP)  
 > **Unterstützte Betriebssysteme:** Windows 10, Windows 11, WSL2 / Ubuntu CUDA Container  
 
@@ -449,4 +449,40 @@ In **v1.8.34** habe ich die Architektur umfassend überarbeitet und perfektionie
 
 5. **Host-Test Suite:**
    - Alle 145 Tests in 10 Test-Suites bestanden (`MSVC_HOST_TESTS=PASS`).
+
+---
+
+### 13.11 Die v1.8.41 Architektur: 32-Bit Flat Protected Mode Trampolin via FACS XFirmwareWakingVector (+0x18)
+1. **Ursachenanalyse des LockBox-Bypasses in v1.8.40b:**
+   - In v1.8.40b restaurierte der EBS-Sandwich-Hook zwar `RealRSDP` bei `EFI_SUCCESS`, jedoch hatte `AcpiS3SaveDxe` von AMI Aptio V bereits zuvor während der DXE-Bootphase `ShadowFACS` (`0x9E200`) in den hardware-geschützten SMRAM-LockBox gesichert.
+   - Beim S3-Aufwachen stellte `S3Resume2Pei` `ShadowFACS` aus dem LockBox wieder her, las dort `0x00001000` (von Windows vor dem Schlaf eingetragen) und sprang direkt zu Windows `HalpRMStub`, wodurch `RealFACS` und das 16-Bit-Trampolin bei `0x9E000` umgangen wurden.
+
+2. **ACPI 2.0+ Vektor-Priorität & EDK2 `S3Resume.c` Einstieg:**
+   - Laut ACPI 2.0+ Spezifikation und EDK2 `S3Resume.c` hat `XFirmwareWakingVector` (+0x18) Vorrang vor dem 32-Bit-Vektor `FirmwareWakingVector` (+0x0C):
+     Wenn `Facs->XFirmwareWakingVector != 0`, springt die Firmware die Aufwachadresse im **32-Bit Flat Protected Mode** (`AsmTransferControl32`) an (sofern Bit 0 in `OspmFlags` 0 ist).
+   - Windows 64-Bit fasst `FACS + 0x18` (`XFirmwareWakingVector`) weder vor noch nach dem Schlaf an (in WinDbg live via `HalpAcpiPostSleep` und `HalpSetupRealModeResume` nachgewiesen).
+   - Indem `XFirmwareWakingVector` (+0x18) in **beiden** FACS-Tabellen (`RealFACS` und `ShadowFACS`) auf `LowTrampoline` (`0x9E000`) gesetzt wird und `OspmFlags` (+0x24) = 0 bleibt, springt AMI Aptio V beim S3-Resume garantiert in unser Trampolin im 32-Bit Flat Protected Mode ein!
+
+3. **32-Bit Flat Protected Mode Trampolin (`0x9E000`):**
+   - **Stack-frei & register-rein:** `cli; cld`, sofortiger Checkpoint 1 `0xAA01` bei `[0x9E310]` und Magic `'S3_T'` (`0x53335F54`) bei `[0x9E31C]`.
+   - **32-Bit PCI-Recon-Sonde:** Native 32-Bit CF8/CFC I/O-Schleife (8 Dwords) für Root Port 0:3:1 und GPU 45:0:0 inkl. temporärem Bridge-Routing und zwingendem Bridge-Restore auf Originalwerte.
+   - **Vektor-Erfassung & Atomares Patching:** Liest den Windows-Wake-Vektor aus `[ShadowFACS + 0x0C]` (Fallback `[RealFACS + 0x0C]` und Low-Mirror), zerlegt ihn in CS:IP und patcht atomar die 4 Zielbytes des Far Jumps am Ende des Real-Mode-Stubs.
+
+4. **Sicherer 32-Bit PM -> 16-Bit PM -> 16-Bit Real Mode Übergang (EDK2 `AsmTransferControl`):**
+   - **Eingebettete dynamische GDT bei `LowTrampoline + 0x0180`:**
+     - Deskriptor 0 (`0x0000`): Null-Deskriptor
+     - Deskriptor 1 (`0x0008`): 16-Bit Code mit **dynamischer Basis `Base = LowTrampoline`** (`0x9E000`), Limit `0xFFFF`, Access `0x9A`, Flags `0x00`.
+     - Deskriptor 2 (`0x0010`): 16-Bit Data mit **dynamischer Basis `Base = LowTrampoline`** (`0x9E000`), Limit `0xFFFF`, Access `0x92`, Flags `0x00`.
+     - *Verhindert zuverlässig General Protection Faults (`#GP(0)`), da 16-Bit PM Segmente ein 64-KB-Limit haben und Segment-Basis 0 bei Adressen > 64 KB sofort abstürzen würde.*
+   - **GDTR (`+0x0198`) & Real-Mode IDTR (`+0x01A0`):** Eingebettet auf derselben Seite.
+   - **Umschaltsequenz:**
+     1. `lgdt [TrampolinePhys + 0x0198]`
+     2. `jmp far 0x0008:pm16_rel_off` (32-Bit Far Jump in 16-Bit PM)
+     3. In `pm16`: Segmentregister mit `0x0010` neu laden, `lidt [0x01A0]`.
+     4. `CR0.PE` löschen (`mov eax, cr0; and al, 0xFE; mov cr0, eax`) -> Real Mode aktiv.
+     5. `jmp far (LowTrampoline >> 4):rm16_rel_off` (Pipeline leeren, Real-Mode CS setzen).
+     6. In `rm16`: Checkpoint 2 `0xAA02` bei `[0x0312]` setzen, Segmente und Register nullen, und per direkt gepatchtem `jmp far cs:ip` sauber in Windows `HalpRMStub` (`0100:0000`) einspringen.
+
+5. **Host-Test Suite:**
+   - Alle 164 Tests in 10 Test-Suites erfolgreich bestanden (`MSVC_HOST_TESTS=PASS`).
 

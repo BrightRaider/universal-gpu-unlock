@@ -6,6 +6,27 @@ For packaged binaries and downloads, visit [GitHub Releases](https://github.com/
 
 ---
 
+## [v1.8.41] - 2026-11-23
+### Added & Fixed
+- **32-Bit Flat Protected Mode Trampoline via `FACS->XFirmwareWakingVector` (+0x18) (addresses #19):**
+  - **Empirical Hardware Discovery & ACPI 2.0+ Specification Implementation:**
+    - Live in-kernel WinDbg forensics (`kdX64.exe -kl`) confirmed that 64-bit Windows (`ntoskrnl.exe`) never touches, writes, or clears `FACS+0x18` (`XFirmwareWakingVector`), leaving it untouched while writing `0x00001000` to `FACS+0x0C` (`FirmwareWakingVector`).
+    - In EDK2 `S3Resume.c` / AMI Aptio V, if `Facs->XFirmwareWakingVector != 0`, the firmware bypasses the 16-bit real-mode waking path and enters the waking vector in **32-bit flat protected mode** (`AsmTransferControl32`) if 64-bit wake flags in `OspmFlags` are zero.
+    - By populating `XFirmwareWakingVector` (+0x18) in both `ShadowFACS` and `RealFACS` with `LowTrampoline` (`0x9E000`) and ensuring `OspmFlags` (+0x24) = 0, AMI Aptio V unconditionally enters our trampoline at `0x9E000` in 32-bit flat protected mode upon S3 resume.
+  - **32-Bit Flat Protected Mode S3 Resume Trampoline Machine Code:**
+    - Preamble: `cli; cld` with immediate entry checkpoint `0xAA01` at `[0x9E310]` and telemetry magic `'S3_T'` (`0x53335F54`) at `[0x9E31C]`.
+    - Stack-free native 32-bit PCI CF8/CFC recon probe loop querying 8 dwords (Root Port 0:3:1 and GPU 45:0:0).
+    - Temporary bridge bus number arming with mandatory original value restoration.
+    - Vector capture from `ShadowFACS + 0x0C` (with fallback to `RealFACS + 0x0C` and low-memory mirror), CS:IP extraction, and atomic direct patching into the far jump target bytes at the tail of the real-mode return stub.
+  - **Safe 32-Bit PM -> 16-Bit PM -> 16-Bit Real Mode Transition (Mirroring EDK2 `AsmTransferControl`):**
+    - Embedded 3-entry GDT at `LowTrampoline + 0x0180` (8-byte aligned) with dynamic base `Base = LowTrampoline` for 16-bit Code (`0x0008`) and 16-bit Data (`0x0010`) descriptors, preventing `#GP(0)` / Triple Faults when segment limits are 64 KB.
+    - Embedded GDTR at `+0x0198` (`limit = 0x0017`, `base = LowTrampoline + 0x0180`) and Real-Mode IDTR at `+0x01A0` (`limit = 0x03FF`, `base = 0`).
+    - Flushes pipeline via 32-bit far jump `jmp far 0x0008:pm16_rel_off`, reloads data segments (`DS, ES, FS, GS, SS = 0x10`), executes `lidt [0x01A0]`, clears `CR0.PE` to return to real mode, flushes pipeline via 16-bit far jump `jmp far (LowTrampoline >> 4):rm16_rel_off`.
+    - In Real Mode: logs Checkpoint 2 (`0xAA02`) at `[0x0312]`, zeros all data segment registers and general-purpose registers, and performs pre-patched `jmp far cs:ip` directly to Windows `HalpRMStub` (`0100:0000`).
+  - **Host Verification Suite Passing:** All 164 checks passing across 10 test suites (`MSVC_HOST_TESTS=PASS`).
+
+---
+
 ## [v1.8.40b] - 2026-11-23
 ### Added & Fixed
 - **Plan C EBS Conditional Retry & Low-Trampoline Diagnostic Counters (addresses #19):**

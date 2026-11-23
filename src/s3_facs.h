@@ -40,6 +40,9 @@
 #define GU_TRAMP_PCI_PROBE_ADDRS_OFF   0x0320U
 #define GU_TRAMP_PCI_PROBE_RAW_OFF     0x0340U
 #define GU_TRAMP_PCI_PROBE_POST_OFF    0x0360U
+#define GU_TRAMP_GDT_OFF               0x0180U
+#define GU_TRAMP_GDTR_OFF              0x0198U
+#define GU_TRAMP_RM_IDTR_OFF           0x01A0U
 #define GU_TRAMP_SHADOW_FACS_OFF       0x0200U
 #define GU_TRAMP_REAL_FACS_MIRROR_OFF  0x0280U
 #define GU_TRAMP_SHADOW_FADT_OFF       0x0400U
@@ -122,13 +125,14 @@ VOID GuAcpiRestoreConfigTable(VOID);
 
 /*
  * Assembles the S3 Resume Trampoline machine code into the designated buffer.
+ * In v1.8.41: 32-bit Flat Protected Mode Trampoline with exact PM16->RM16 mode transition.
  * Returns the size in bytes of the generated trampoline code.
  */
 UINT32 GuAcpiBuildTrampolineCode(
     OUT UINT8 *Buffer,
     IN UINT32 BufferSize,
     IN EFI_PHYSICAL_ADDRESS TrampolinePhys,
-    IN EFI_PHYSICAL_ADDRESS ContextPhys,
+    IN EFI_PHYSICAL_ADDRESS RealFacsPhys,
     IN EFI_PHYSICAL_ADDRESS ShadowFacsPhys,
     IN UINT32 RootPortLinkReg,
     IN UINT32 GpuPmcsrReg
