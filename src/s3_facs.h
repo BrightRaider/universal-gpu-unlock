@@ -40,10 +40,10 @@
 #define GU_TRAMP_PCI_PROBE_ADDRS_OFF   0x0320U
 #define GU_TRAMP_PCI_PROBE_RAW_OFF     0x0340U
 #define GU_TRAMP_PCI_PROBE_POST_OFF    0x0360U
-#define GU_TRAMP_GDT_OFF               0x0180U
-#define GU_TRAMP_GDTR_OFF              0x01A8U
 #define GU_TRAMP_RM_IDTR_OFF           0x01B4U
-#define GU_TRAMP_FARPTR32_OFF          0x01C0U
+#define GU_TRAMP_GDT_OFF               0x01C0U
+#define GU_TRAMP_GDTR_OFF              0x01E8U
+#define GU_TRAMP_FARPTR32_OFF          0x01F2U
 #define GU_TRAMP_SHADOW_FACS_OFF       0x0200U
 #define GU_TRAMP_REAL_FACS_MIRROR_OFF  0x0280U
 #define GU_TRAMP_SHADOW_FADT_OFF       0x0400U

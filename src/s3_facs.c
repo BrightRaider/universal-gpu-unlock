@@ -593,18 +593,35 @@ UINT32 GuAcpiBuildTrampolineCode(
   UINT8 *pm32_compat_start = e;
   UINT32 pm32_rel = (UINT32)(pm32_compat_start - Buffer);
 
-  /* Load 32-bit Flat Data selector 0x0010 into DS, ES, SS */
+  /* Load 32-bit Flat Data selector 0x0010 into DS, ES, FS, GS, SS */
   *e++ = 0x66; *e++ = 0xB8; *e++ = 0x10; *e++ = 0x00; /* mov ax, 0x0010 */
   *e++ = 0x8E; *e++ = 0xD8;                         /* mov ds, ax */
   *e++ = 0x8E; *e++ = 0xC0;                         /* mov es, ax */
+  *e++ = 0x8E; *e++ = 0xE0;                         /* mov fs, ax */
+  *e++ = 0x8E; *e++ = 0xE8;                         /* mov gs, ax */
   *e++ = 0x8E; *e++ = 0xD0;                         /* mov ss, ax */
 
   /* Disable Paging: mov eax, cr0; and eax, 0x7FFFFFFF; mov cr0, eax (deactivates IA-32e mode!) */
   *e++ = 0x0F; *e++ = 0x20; *e++ = 0xC0;                             /* mov eax, cr0 */
   *e++ = 0x25; *e++ = 0xFF; *e++ = 0xFF; *e++ = 0xFF; *e++ = 0x7F; /* and eax, 0x7FFFFFFF */
-  *e++ = 0x0F; *e++ = 0x22; *e++ = 0xC0;                             /* mov cr0, eax (deactivates IA-32e mode!) */
+  *e++ = 0x0F; *e++ = 0x22; *e++ = 0xC0;                             /* mov cr0, eax */
 
-  /* Jump to common 32-bit reconnaissance & resume path */
+  /* Disable Long Mode in IA32_EFER MSR (0xC0000080): rdmsr; and eax, 0xFFFFF6FF; wrmsr */
+  *e++ = 0xB9; *e++ = 0x80; *e++ = 0x00; *e++ = 0x00; *e++ = 0xC0; /* mov ecx, 0xC0000080 */
+  *e++ = 0x0F; *e++ = 0x32;                                         /* rdmsr */
+  *e++ = 0x25; *e++ = 0xFF; *e++ = 0xF6; *e++ = 0xFF; *e++ = 0xFF; /* and eax, 0xFFFFF6FF (clears LME bit 8, NXE bit 11) */
+  *e++ = 0x0F; *e++ = 0x30;                                         /* wrmsr */
+
+  /* Clear CR3: xor eax, eax; mov cr3, eax */
+  *e++ = 0x31; *e++ = 0xC0;                                         /* xor eax, eax */
+  *e++ = 0x0F; *e++ = 0x22; *e++ = 0xD8;                             /* mov cr3, eax */
+
+  /* Disable PAE in CR4: mov eax, cr4; and eax, 0xFFFFFFDF; mov cr4, eax */
+  *e++ = 0x0F; *e++ = 0x20; *e++ = 0xE0;                             /* mov eax, cr4 */
+  *e++ = 0x25; *e++ = 0xDF; *e++ = 0xFF; *e++ = 0xFF; *e++ = 0xFF; /* and eax, 0xFFFFFFDF (clears PAE bit 5) */
+  *e++ = 0x0F; *e++ = 0x22; *e++ = 0xE0;                             /* mov cr4, eax */
+
+  /* Jump to common 32-bit reconnaissance & resume path: jmp rel32 .sec1_common */
   *e++ = 0xE9;
   UINT8 *jmp_sec1_disp = e; e += 4;
   *(INT32 *)jmp_sec1_disp = (INT32)(sec1_common_start - (jmp_sec1_disp + 4));
@@ -976,15 +993,15 @@ EFI_STATUS GuAcpiInstallShadowFacs(
   shadow_facs->FirmwareWakingVector = (UINT32)trampoline_phys;
   shadow_facs->XFirmwareWakingVector = (UINT64)trampoline_phys;
   shadow_facs->Flags |= 0x00000002U; /* 64-bit wake supported */
-  *(UINT32 *)((UINT8 *)shadow_facs + 0x24) = 0x00000000U; /* OspmFlags: 0 (Windows default, Flat 32-bit PM wake) */
+  *(UINT32 *)((UINT8 *)shadow_facs + 0x24) |= 0x00000001U; /* OspmFlags: 64-bit wake enabled */
 
   /* Tag Shadow FACS with signature and real FACS address at +0x28 / +0x2C (Reserved1) for warm reset recovery */
   *(UINT32 *)((UINT8 *)shadow_facs + 0x28) = GU_SHADOW_FACS_SIGNATURE;
   memcpy((UINT8 *)shadow_facs + 0x2C, &Info->real_facs_phys, sizeof(UINT64));
 
-  /* Set wake vectors in Real FACS as well so EDK2 S3Resume2Pei enters via waking vector */
+  /* Set 64-bit wake in Real FACS as well so EDK2 S3Resume2Pei enters via XFirmwareWakingVector */
   Info->real_facs->Flags |= 0x00000002U;
-  *(UINT32 *)((UINT8 *)Info->real_facs + 0x24) = 0x00000000U;
+  *(UINT32 *)((UINT8 *)Info->real_facs + 0x24) |= 0x00000001U;
   Info->real_facs->XFirmwareWakingVector = (UINT64)trampoline_phys;
   Info->real_facs->FirmwareWakingVector = (UINT32)trampoline_phys;
 
@@ -1167,7 +1184,7 @@ EFI_STATUS GuAcpiInstallShadowFacs(
    */
   if (Info->real_facs->Version < 2) Info->real_facs->Version = 2;
   Info->real_facs->Flags |= 0x00000002U;
-  *(UINT32 *)((UINT8 *)Info->real_facs + 0x24) = 0x00000000U; /* OspmFlags: 0 (Windows default, Flat 32-bit PM wake) */
+  *(UINT32 *)((UINT8 *)Info->real_facs + 0x24) |= 0x00000001U; /* OspmFlags: 64-bit wake enabled */
   Info->real_facs->FirmwareWakingVector = (UINT32)trampoline_phys;
   Info->real_facs->XFirmwareWakingVector = (UINT64)trampoline_phys;
 

@@ -385,7 +385,7 @@ static void TestGuAcpiFacsDiscoveryAndPatching(void) {
   /* Verify Real FACS was hooked to point to Low Trampoline (<1MB) for AMI Aptio V */
   CHECK(mock_facs.FirmwareWakingVector == (UINT32)mock_low_tramp_phys, "Real FACS FirmwareWakingVector must point to Low Trampoline");
   CHECK(mock_facs.XFirmwareWakingVector == (UINT64)mock_low_tramp_phys, "Real FACS XFirmwareWakingVector must point to Low Trampoline (Universal Wake)");
-  CHECK((*(UINT32 *)((UINT8 *)&mock_facs + 0x24)) == 0, "Real FACS OspmFlags must be 0 (Windows Flat 32-bit PM wake)");
+  CHECK((*(UINT32 *)((UINT8 *)&mock_facs + 0x24) & 1U) != 0, "Real FACS OspmFlags must have bit 0 set (64-bit wake enabled)");
   CHECK((mock_facs.Flags & 2U) != 0, "Real FACS 64-bit wake flag must be set");
   CHECK(mock_facs.Version >= 2, "Real FACS Version must be >= 2");
 
@@ -396,7 +396,7 @@ static void TestGuAcpiFacsDiscoveryAndPatching(void) {
   CHECK(shadow_facs->HardwareSignature == 0x12345678U, "Shadow FACS hardware signature must match original");
   CHECK(shadow_facs->FirmwareWakingVector == (UINT32)mock_low_tramp_phys, "Shadow FACS FirmwareWakingVector must point to Low Trampoline");
   CHECK(shadow_facs->XFirmwareWakingVector == (UINT64)mock_low_tramp_phys, "Shadow FACS XFirmwareWakingVector must point to Low Trampoline");
-  CHECK((*(UINT32 *)((UINT8 *)shadow_facs + 0x24)) == 0, "Shadow FACS OspmFlags must be 0 (Windows Flat 32-bit PM wake)");
+  CHECK((*(UINT32 *)((UINT8 *)shadow_facs + 0x24) & 1U) != 0, "Shadow FACS OspmFlags must have bit 0 set (64-bit wake enabled)");
   CHECK((shadow_facs->Flags & 2U) != 0, "Shadow FACS 64-bit wake flag must be set");
   CHECK(shadow_facs->Version >= 2, "Shadow FACS Version must be >= 2");
 
@@ -504,7 +504,8 @@ static void TestGuAcpiBuildTrampolineCode(void) {
 
   UINT32 bytes = GuAcpiBuildTrampolineCode(buffer, sizeof(buffer), tramp_phys, real_facs_phys, shadow_facs_phys, 0x80001960U, 0x802D0064U);
   CHECK(bytes > 0, "Trampoline builder must generate non-zero bytes");
-  CHECK(bytes <= GU_TRAMP_GDT_OFF, "Trampoline machine code must fit before GDT at +0x0180");
+  CHECK(bytes <= GU_TRAMP_RM_IDTR_OFF, "Trampoline machine code must fit before RM_IDTR at +0x01B4");
+  CHECK(bytes <= GU_TRAMP_GDT_OFF, "Trampoline machine code must fit before GDT at +0x01C0");
 
   /* 1. Check Polyglot Preamble: cli, cld, xor eax, eax, inc eax (32) / REX (64), jz rel32 */
   CHECK(buffer[0] == 0xFA, "Preamble must start with CLI (0xFA)");
@@ -615,7 +616,7 @@ static void TestGuAcpiBuildTrampolineCode(void) {
   CHECK(!found_stack_op, "Trampoline must be 100% stack-free (no push, no pop)");
   CHECK(idx == bytes, "Instruction stepper must decode exact trampoline size");
 
-  /* 6. Check 5-entry GDT at +0x0180 with dynamic Base = 0x0009E000 */
+  /* 6. Check 5-entry GDT at +0x01C0 with dynamic Base = 0x0009E000 */
   UINT8 *gdt = buffer + GU_TRAMP_GDT_OFF;
   UINT8 expected_null[8] = { 0 };
   CHECK(memcmp(gdt, expected_null, 8) == 0, "GDT Entry 0 must be Null Descriptor");
@@ -641,36 +642,87 @@ static void TestGuAcpiBuildTrampolineCode(void) {
   UINT8 expected_data_8c[8] = { 0xFF, 0xFF, 0x00, 0xC0, 0x08, 0x92, 0x00, 0x00 };
   CHECK(memcmp(buffer2 + GU_TRAMP_GDT_OFF + 32, expected_data_8c, 8) == 0, "GDT Data Descriptor must dynamically reflect Base=0x8C000");
 
-  /* 7. Check GDTR at +0x01A8, Real-Mode IDTR at +0x01B4, and FARPTR32 at +0x01C0 */
+  /* 7. Check GDTR at +0x01E8, Real-Mode IDTR at +0x01B4, and FARPTR32 at +0x01F2 */
   CHECK(*(UINT16 *)(buffer + GU_TRAMP_GDTR_OFF) == 0x0027, "GDTR Limit must be 0x0027 (39 bytes, 5 descriptors)");
-  CHECK(*(UINT64 *)(buffer + GU_TRAMP_GDTR_OFF + 2) == (UINT64)(tramp_phys + GU_TRAMP_GDT_OFF), "GDTR Base must point to LowTrampoline + 0x180");
+  CHECK(*(UINT64 *)(buffer + GU_TRAMP_GDTR_OFF + 2) == (UINT64)(tramp_phys + GU_TRAMP_GDT_OFF), "GDTR Base must point to LowTrampoline + 0x1C0");
 
   CHECK(*(UINT16 *)(buffer + GU_TRAMP_RM_IDTR_OFF) == 0x03FF, "Real-Mode IDTR Limit must be 0x03FF (1023 bytes)");
   CHECK(*(UINT32 *)(buffer + GU_TRAMP_RM_IDTR_OFF + 2) == 0x00000000U, "Real-Mode IDTR Base must be 0x00000000");
 
+  /* Locate .pm32_compat start in Section 2 (starts with mov ax, 0x0010: 66 B8 10 00 8E D8) */
+  UINT32 pm32_compat_off = 0;
+  for (UINT32 i = 0; i < bytes - 6; i++) {
+    if (buffer[i] == 0x66 && buffer[i+1] == 0xB8 && buffer[i+2] == 0x10 && buffer[i+3] == 0x00 &&
+        buffer[i+4] == 0x8E && buffer[i+5] == 0xD8) {
+      pm32_compat_off = i;
+      break;
+    }
+  }
+  CHECK(pm32_compat_off > 0, "Must locate .pm32_compat start in Section 2");
+  CHECK(*(UINT32 *)(buffer + GU_TRAMP_FARPTR32_OFF) == (UINT32)(tramp_phys + pm32_compat_off),
+        "FARPTR32 Offset must dynamically point to .pm32_compat");
   CHECK(*(UINT16 *)(buffer + GU_TRAMP_FARPTR32_OFF + 4) == 0x0008, "FARPTR32 Selector must be 0x0008 (Compat Code)");
 
-  /* 8. Check Transition Sequence opcodes */
-  /* lgdt [rip + disp32]: 0F 01 15 */
+  /* 8. Check Section 2 RIP-Relative Displacements */
+  /* Calculate Section 2 start offset from Section 0's jz near .is_64bit (0F 84 disp32 at offset 5..10) */
+  UINT32 sec2_start = 11 + (UINT32)(*(INT32 *)(buffer + 7));
+  CHECK(sec2_start < bytes, "Section 2 start must be within generated machine code");
+
+  /* a) Checkpoint 1: C7 05 <disp32> 01 64 00 00 (target 0x0310) */
+  BOOLEAN found_chk64 = FALSE;
+  for (UINT32 i = sec2_start; i < bytes - 10; i++) {
+    if (buffer[i] == 0xC7 && buffer[i+1] == 0x05 &&
+        buffer[i+6] == 0x01 && buffer[i+7] == 0x64 && buffer[i+8] == 0x00 && buffer[i+9] == 0x00) {
+      found_chk64 = TRUE;
+      INT32 disp = *(INT32 *)(buffer + i + 2);
+      UINT32 target = (i + 10) + (UINT32)disp;
+      CHECK(target == 0x0310, "chk64 RIP displacement must target linear offset 0x0310 exactly");
+      break;
+    }
+  }
+  CHECK(found_chk64, "Must contain 64-bit Checkpoint 1 (0x6401)");
+
+  /* b) Magic: C7 05 <disp32> 54 5F 33 53 (target 0x031C) */
+  BOOLEAN found_magic64 = FALSE;
+  for (UINT32 i = sec2_start; i < bytes - 10; i++) {
+    if (buffer[i] == 0xC7 && buffer[i+1] == 0x05 &&
+        buffer[i+6] == 0x54 && buffer[i+7] == 0x5F && buffer[i+8] == 0x33 && buffer[i+9] == 0x53) {
+      found_magic64 = TRUE;
+      INT32 disp = *(INT32 *)(buffer + i + 2);
+      UINT32 target = (i + 10) + (UINT32)disp;
+      CHECK(target == 0x031C, "magic64 RIP displacement must target linear offset 0x031C exactly");
+      break;
+    }
+  }
+  CHECK(found_magic64, "Must contain 64-bit Telemetry Magic 'S3_T'");
+
+  /* c) lgdt [rip + disp32]: 0F 01 15 <disp32> (target GU_TRAMP_GDTR_OFF 0x01E8) */
   BOOLEAN found_lgdt = FALSE;
-  for (UINT32 i = 0; i < bytes - 6; i++) {
+  for (UINT32 i = sec2_start; i < bytes - 7; i++) {
     if (buffer[i] == 0x0F && buffer[i+1] == 0x01 && buffer[i+2] == 0x15) {
       found_lgdt = TRUE;
+      INT32 disp = *(INT32 *)(buffer + i + 3);
+      UINT32 target = (i + 7) + (UINT32)disp;
+      CHECK(target == GU_TRAMP_GDTR_OFF, "lgdt64 RIP displacement must target GU_TRAMP_GDTR_OFF (0x01E8) exactly");
       break;
     }
   }
   CHECK(found_lgdt, "Must contain lgdt [rip + disp32] (0F 01 15)");
 
-  /* Indirect far jump: FF 2D (or FF 25) */
+  /* d) Indirect far jump: FF 2D <disp32> (target GU_TRAMP_FARPTR32_OFF 0x01F2) */
   BOOLEAN found_jmp_pm32 = FALSE;
-  for (UINT32 i = 0; i < bytes - 5; i++) {
-    if (buffer[i] == 0xFF && (buffer[i+1] == 0x2D || buffer[i+1] == 0x25)) {
+  for (UINT32 i = sec2_start; i < bytes - 6; i++) {
+    if (buffer[i] == 0xFF && buffer[i+1] == 0x2D) {
       found_jmp_pm32 = TRUE;
+      INT32 disp = *(INT32 *)(buffer + i + 2);
+      UINT32 target = (i + 6) + (UINT32)disp;
+      CHECK(target == GU_TRAMP_FARPTR32_OFF, "far_jmp32 RIP displacement must target GU_TRAMP_FARPTR32_OFF (0x01F2) exactly");
       break;
     }
   }
   CHECK(found_jmp_pm32, "Must contain indirect far jump to 32-bit Compat Mode (FF 2D)");
 
+  /* 9. Check Section 2 Long Mode Teardown Sequence */
   /* CR0 Paging clear: mov eax, cr0; and eax, 0x7FFFFFFF; mov cr0, eax */
   BOOLEAN found_cr0_pg_clear = FALSE;
   for (UINT32 i = 0; i < bytes - 10; i++) {
@@ -683,28 +735,70 @@ static void TestGuAcpiBuildTrampolineCode(void) {
   }
   CHECK(found_cr0_pg_clear, "Must contain CR0.PG clear sequence (and eax, 0x7FFFFFFF)");
 
-  /* Checkpoint 1 (64-bit entry): C7 05 <disp32> 01 64 00 00 */
-  BOOLEAN found_chk64 = FALSE;
-  for (UINT32 i = 0; i < bytes - 9; i++) {
-    if (buffer[i] == 0xC7 && buffer[i+1] == 0x05 &&
-        buffer[i+6] == 0x01 && buffer[i+7] == 0x64 && buffer[i+8] == 0x00 && buffer[i+9] == 0x00) {
-      found_chk64 = TRUE;
+  /* IA32_EFER MSR (0xC0000080) clear: mov ecx, 0xC0000080; rdmsr; and eax, 0xFFFFF6FF; wrmsr */
+  BOOLEAN found_efer = FALSE;
+  for (UINT32 i = 0; i < bytes - 14; i++) {
+    if (buffer[i] == 0xB9 && buffer[i+1] == 0x80 && buffer[i+2] == 0x00 && buffer[i+3] == 0x00 && buffer[i+4] == 0xC0 &&
+        buffer[i+5] == 0x0F && buffer[i+6] == 0x32 &&
+        buffer[i+7] == 0x25 && buffer[i+8] == 0xFF && buffer[i+9] == 0xF6 && buffer[i+10] == 0xFF && buffer[i+11] == 0xFF &&
+        buffer[i+12] == 0x0F && buffer[i+13] == 0x30) {
+      found_efer = TRUE;
       break;
     }
   }
-  CHECK(found_chk64, "Must contain 64-bit Checkpoint 1 (0x6401)");
+  CHECK(found_efer, "Must contain IA32_EFER clear sequence (rdmsr; and eax, 0xFFFFF6FF; wrmsr)");
 
+  /* CR3 clear: xor eax, eax; mov cr3, eax */
+  BOOLEAN found_cr3 = FALSE;
+  for (UINT32 i = 0; i < bytes - 5; i++) {
+    if (buffer[i] == 0x31 && buffer[i+1] == 0xC0 &&
+        buffer[i+2] == 0x0F && buffer[i+3] == 0x22 && buffer[i+4] == 0xD8) {
+      found_cr3 = TRUE;
+      break;
+    }
+  }
+  CHECK(found_cr3, "Must contain CR3 clear sequence (xor eax, eax; mov cr3, eax)");
+
+  /* CR4 PAE clear: mov eax, cr4; and eax, 0xFFFFFFDF; mov cr4, eax */
+  BOOLEAN found_cr4 = FALSE;
+  for (UINT32 i = 0; i < bytes - 11; i++) {
+    if (buffer[i] == 0x0F && buffer[i+1] == 0x20 && buffer[i+2] == 0xE0 &&
+        buffer[i+3] == 0x25 && buffer[i+4] == 0xDF && buffer[i+5] == 0xFF && buffer[i+6] == 0xFF && buffer[i+7] == 0xFF &&
+        buffer[i+8] == 0x0F && buffer[i+9] == 0x22 && buffer[i+10] == 0xE0) {
+      found_cr4 = TRUE;
+      break;
+    }
+  }
+  CHECK(found_cr4, "Must contain CR4 PAE clear sequence (and eax, 0xFFFFFFDF)");
+
+  /* Branch to common 32-bit path: jmp rel32 .sec1_common */
+  BOOLEAN found_jmp_sec1 = FALSE;
+  for (UINT32 i = 0; i < bytes - 5; i++) {
+    if (buffer[i] == 0xE9) {
+      INT32 disp = *(INT32 *)(buffer + i + 1);
+      UINT32 target = (i + 5) + (UINT32)disp;
+      if (target < bytes && buffer[target] == 0xBE && *(UINT32 *)(buffer + target + 1) == (UINT32)(tramp_phys + 0x0320)) {
+        found_jmp_sec1 = TRUE;
+        break;
+      }
+    }
+  }
+  CHECK(found_jmp_sec1, "Must contain jmp rel32 .sec1_common targeting common 32-bit reconnaissance path");
+
+  /* 10. Check Section 3 & Section 4 Transitions */
   /* jmp far 0x0018:pm16_rel_off */
   BOOLEAN found_jmp_pm16 = FALSE;
   for (UINT32 i = 0; i < bytes - 6; i++) {
     if (buffer[i] == 0xEA && buffer[i+5] == 0x18 && buffer[i+6] == 0x00) {
       found_jmp_pm16 = TRUE;
+      UINT32 pm16_target = *(UINT32 *)(buffer + i + 1);
+      CHECK(pm16_target < bytes, "pm16 far jump target must be within machine code");
       break;
     }
   }
   CHECK(found_jmp_pm16, "Must contain jmp far 0x0018:pm16_rel_off");
 
-  /* lidt [0x01B4] */
+  /* lidt [0x01B4]: 0F 01 1E B4 01 */
   BOOLEAN found_lidt = FALSE;
   for (UINT32 i = 0; i < bytes - 5; i++) {
     if (buffer[i] == 0x0F && buffer[i+1] == 0x01 && buffer[i+2] == 0x1E &&
@@ -713,7 +807,7 @@ static void TestGuAcpiBuildTrampolineCode(void) {
       break;
     }
   }
-  CHECK(found_lidt, "Must contain lidt [0x01B4]");
+  CHECK(found_lidt, "Must contain lidt [0x01B4] (0F 01 1E B4 01)");
 
   /* CR0.PE clear: mov eax, cr0; and al, 0xFE; mov cr0, eax */
   BOOLEAN found_cr0_clear = FALSE;
@@ -726,6 +820,22 @@ static void TestGuAcpiBuildTrampolineCode(void) {
     }
   }
   CHECK(found_cr0_clear, "Must contain CR0.PE clear sequence (mov eax, cr0; and al, 0xFE; mov cr0, eax)");
+
+  /* Far jump from Section 3 into Section 4 Real Mode: jmp far (tramp_phys >> 4):rm16_rel */
+  BOOLEAN found_rm_jmp = FALSE;
+  for (UINT32 i = 0; i < bytes - 5; i++) {
+    if (buffer[i] == 0xEA) {
+      UINT16 cs = *(UINT16 *)(buffer + i + 3);
+      if (cs == (UINT16)(tramp_phys >> 4)) {
+        found_rm_jmp = TRUE;
+        UINT16 rm16_rel = *(UINT16 *)(buffer + i + 1);
+        CHECK(rm16_rel < 0x1000, "rm16_rel offset must be < 0x1000 (relative to page base, NOT 0x9E1xx)");
+        CHECK((UINT32)rm16_rel < bytes, "rm16_rel must point into real-mode code section");
+        break;
+      }
+    }
+  }
+  CHECK(found_rm_jmp, "Must contain far jump to Real Mode (CS = TrampolinePhys >> 4)");
 
   /* Checkpoint 2: mov word [0x0312], 0xAA02 (C7 06 12 03 02 AA) */
   BOOLEAN found_chk2 = FALSE;
@@ -760,6 +870,18 @@ static void TestGuAcpiBuildTrampolineCode(void) {
   CHECK(win_stub_ip == 0x0000, "HalpRMStub (0x00001000) offset must be 0x0000");
   CHECK(win_stub_cs == 0x0100, "HalpRMStub (0x00001000) segment must be 0x0100 (CS = vec >> 4)");
   CHECK(((UINT32)win_stub_cs << 4) + win_stub_ip == win_stub_vec, "Real mode CS:IP (0100:0000) must resolve to linear 0x00001000");
+
+  printf("  -> Trampoline total machine code: %u bytes (0x%04X), fits before RM_IDTR (0x%04X)\n",
+         bytes, bytes, GU_TRAMP_RM_IDTR_OFF);
+  printf("  -> Real Mode IDTR at +0x%04X (6 bytes: 0x%04X..0x%04X)\n",
+         GU_TRAMP_RM_IDTR_OFF, GU_TRAMP_RM_IDTR_OFF, GU_TRAMP_RM_IDTR_OFF + 5);
+  printf("  -> 5-Entry GDT at +0x%04X (40 bytes: 0x%04X..0x%04X, 8-byte aligned)\n",
+         GU_TRAMP_GDT_OFF, GU_TRAMP_GDT_OFF, GU_TRAMP_GDT_OFF + 39);
+  printf("  -> 10-Byte GDTR64 at +0x%04X (10 bytes: 0x%04X..0x%04X)\n",
+         GU_TRAMP_GDTR_OFF, GU_TRAMP_GDTR_OFF, GU_TRAMP_GDTR_OFF + 9);
+  printf("  -> 6-Byte FARPTR32 at +0x%04X (6 bytes: 0x%04X..0x%04X)\n",
+         GU_TRAMP_FARPTR32_OFF, GU_TRAMP_FARPTR32_OFF, GU_TRAMP_FARPTR32_OFF + 5);
+  printf("  -> Shadow FACS at +0x0200 (64 bytes, 512-byte aligned)\n");
 
   printf("[7] 64-bit Long Mode Trampoline, 5-Entry GDT & Mode Transitions: OK!\n");
   fflush(stdout);

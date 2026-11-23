@@ -1,7 +1,7 @@
 # Technische Dokumentation: Universal GPU Unlock (Multi-Gen)
 
 > **Tool:** Universal GPU Unlock  
-> **Version:** v1.8.43  
+> **Version:** v1.8.43b  
 > **Architekturen:** NVIDIA Ada Lovelace (RTX 40), Ampere (RTX 30), Turing (RTX 20 / CMP)  
 > **Unterstützte Betriebssysteme:** Windows 10, Windows 11, WSL2 / Ubuntu CUDA Container  
 
@@ -543,42 +543,44 @@ In **v1.8.34** habe ich die Architektur umfassend überarbeitet und perfektionie
    - Alle 169 Tests in 10 Test-Suites erfolgreich bestanden (`MSVC_HOST_TESTS=PASS`).
    - Der integrierte Opcode-Stepper prüft das kompilierte Trampolin Byte für Byte auf 100 % stack-freie Ausführung, gültige RIP-relative Displacements, korrekte GDT-Deskriptoren und saubere Modus-Übergänge.
 
-### 13.13 Die v1.8.43 Architektur: Universelles Polyglot Dual-Mode S3 Resume Trampolin (32-Bit Flat PM + 64-Bit Long Mode)
+### 13.13 Die v1.8.43b Architektur: Vollständiger Long-Mode-Teardown (EFER/CR3/CR4), GDT-Shift auf 0x01C0 und Re-Aktivierung von OspmFlags |= 0x01
 
-1. **Ursachenanalyse des S3-Wake-Hangs in v1.8.42:**
-   - Auf AMD AM4 (MSI MEG X570 ACE, AMD Ryzen 9 5950X, AMI Aptio V) läuft die PEI-Phase (Pre-EFI Initialization) als 32-Bit IA32-Code.
-   - Wenn `OspmFlags |= 0x01` gesetzt wird, ruft EDK2 `S3Resume2Pei` die Routine `AsmEnablePaging64` nur dann auf, wenn das Feature-PCD `PcdDxeIplSwitchToLongMode` im PEI-Image aktiviert ist. Auf Desktop-Motherboards ist dieses Flag häufig deaktiviert oder unvollständig verdrahtet, was beim S3-Wake zu einem sofortigen Hängenbleiben oder Firmware-Drop führt.
-   - Wenn `OspmFlags == 0` belassen wird (Standardverhalten von Windows), springt EDK2 `S3Resume2Pei` stattdessen via `SwitchStack` im **32-Bit Flat Protected Mode ohne Paging** (`CR0.PG=0`) zum `XFirmwareWakingVector`!
-   - In v1.8.42 war das Trampolin jedoch rein für `BITS 64` mit RIP-relativer Adressierung (`C7 05 disp32`, `FF 2D disp32`) kompiliert: Im 32-Bit Protected Mode dekodierten diese Befehle als absolute Adressen unterhalb von `0x400` und überschrieben die Real-Mode-Interruptvektortabelle (IVT), gefolgt von einem ungültigen Sprung ins BIOS-RAM.
+1. **Re-Aktivierung der ACPI-Wake-Flags (`OspmFlags |= 0x01`):**
+   - Wie der Hardware-Beweis in RUN0051.TXT (v1.8.41) zeigte, ignoriert AMI Aptio V den `XFirmwareWakingVector` (+0x18) vollständig, wenn `OspmFlags == 0` ist (`0x9E310 = 00000000`). Das BIOS fällt dann auf den Real-Mode-Vektor oder den Windows-Default-Pfad zurück.
+   - Nur wenn `Version >= 2`, `Flags |= 0x02` (`EFI_ACPI_4_0_64BIT_WAKE_SUPPORTED_F`) und `OspmFlags |= 0x01` (`EFI_ACPI_4_0_OSPM_64BIT_WAKE__F`) synchron in `ShadowFACS` und `RealFACS` gesetzt sind, biegt die Firmware zuverlässig in unsere waking vector Adresse ab.
 
 2. **Die Polyglot Dual-Mode Preamble (`FA FC 31 C0 40 0F 84 <disp32>`):**
-   - Ich habe ein binäres Polyglot-Präambel entwickelt, das sowohl im 32-Bit Flat Protected Mode als auch im 64-Bit Long Mode ohne Stack 100 % sicher ausführt:
+   - Ich habe eine binäre Polyglot-Präambel entwickelt, die sowohl im 32-Bit Flat Protected Mode als auch im 64-Bit Long Mode ohne Stack 100 % sicher ausführt:
      - `FA` (`cli`), `FC` (`cld`)
      - `31 C0` (`xor eax, eax`): Setzt `EAX = 0`, setzt das Zero-Flag `ZF = 1`.
      - `40`: Im **32-Bit-Modus** ist `0x40` der Opcode für `inc eax`. `EAX` wird von 0 auf 1 erhöht, was das Zero-Flag löscht (`ZF = 0`). Im **64-Bit-Modus** dient `0x40` als REX-Präfix für die folgende Instruktion; es modifiziert kein Register und lässt `ZF = 1` unverändert!
-     - `0F 84 <disp32>` (`jz rel32 .is_64bit`): Im 32-Bit-Modus ist `ZF = 0` $\rightarrow$ der Sprung wird **nicht** genommen und die Ausführung fällt linear in Section 1 (32-Bit Flat PM Pfad). Im 64-Bit-Modus ist `ZF = 1` $\rightarrow$ der Sprung wird genommen und verzweigt nach Section 2 (64-Bit Bridge).
+     - `0F 84 <disp32>` (`jz rel32 .is_64bit`): Im 32-Bit-Modus ist `ZF = 0` $\rightarrow$ der Sprung wird **nicht** genommen und die Ausführung fällt linear in Section 1 (32-Bit Flat PM Pfad, Checkpoint `0x3201`). Im 64-Bit-Modus ist `ZF = 1` $\rightarrow$ der Sprung wird genommen und verzweigt nach Section 2 (64-Bit Bridge, Checkpoint `0x6401`).
 
-3. **Standardisierung auf `OspmFlags = 0` (Windows-Default):**
-   - Sowohl in `ShadowFACS` als auch in `RealFACS` wird `OspmFlags = 0` gesetzt. AMI Aptio V übergibt dadurch standardmäßig im unkomplizierten, unpaged 32-Bit Flat Protected Mode.
-   - Gleichzeitig sind beide Vektoren (`FirmwareWakingVector` und `XFirmwareWakingVector`) auf `LowTrampoline` (`0x9E000`) gesetzt, sodass jede Firmware-Variante denselben Einstiegspunkt nutzt.
+3. **Vollständiger Long-Mode-Teardown in Section 2 (.pm32_compat):**
+   - Das bloße Löschen von `CR0.PG = 0` deaktiviert zwar die IA-32e Aktivierung (`EFER.LMA = 0`), belässt jedoch `IA32_EFER.LME` und `CR4.PAE` aktiv in der CPU-Hardware. Wenn Windows `HalpRMStub` später das Paging reaktiviert, stürzt das System mit einem Triple Fault ab.
+   - In Section 2 wird daher nach dem Far-Jump in den 32-Bit Compatibility Mode (`CS=0x0008`) und dem Laden der Datensegmente (`0x0010`) der vollständige, architektonisch definierte Hardware-Rückbau vollzogen:
+     - `CR0.PG = 0`: `mov eax, cr0; and eax, 0x7FFFFFFF; mov cr0, eax`
+     - `IA32_EFER` MSR `0xC0000080`: `mov ecx, 0xC0000080; rdmsr; and eax, 0xFFFFF6FF; wrmsr` (löscht gezielt `LME` Bit 8 und `NXE` Bit 11, `EDX` bleibt unverändert)
+     - `CR3 = 0`: `xor eax, eax; mov cr3, eax`
+     - `CR4.PAE = 0`: `mov eax, cr4; and eax, 0xFFFFFFDF; mov cr4, eax` (löscht `PAE` Bit 5)
+     - `jmp rel32 .sec1_common`: Springt direkt in die gemeinsame flache 32-Bit Recon- und Resume-Engine.
 
-4. **Kompakte Bridge & Vereinheitlichte 32-Bit Recon-Engine:**
-   - **Section 1: 32-Bit Flat Protected Mode Engine (`0x3201`):**
-     - Schreibt Checkpoint `0x3201` und Magic `'S3_T'` über flache 32-Bit-Adressen.
-     - Führt die bewährte 8-Dword PCIe CF8/CFC Recon-Sonde stack-frei aus (inkl. temporärem Bridge-Arming und sicherem Restore).
-     - Liest den Windows-Wake-Vektor aus `ShadowFACS + 0x0C`, extrahiert `CS = vec >> 4` / `IP = vec & 0x0F` und patcht den Far-Jump im Real-Mode-Tail.
-     - Lädt die 6-Byte GDTR und springt via `jmp far 0x0018:pm16` in den 16-Bit Protected Mode.
-   - **Section 2: 64-Bit Long Mode Bridge (`0x6401`):**
-     - Schreibt Checkpoint `0x6401` und Magic `'S3_T'`.
-     - Lädt 10-Byte GDTR64, springt via `jmp fword ptr [rip + disp32]` (`FF 2D`) in den 32-Bit Compatibility Mode (`0x0008:pm32_compat`).
-     - Deaktiviert dort Paging (`CR0.PG = 0`, deaktiviert IA-32e Modus per Intel SDM 9.8.5.4) und springt via `jmp rel32` (`E9 <disp32>`) direkt in den gemeinsamen 32-Bit Recon-Pfad (`.sec1_common`).
-   - **Section 3 & 4: 16-Bit Protected Mode & Real Mode:**
-     - Lädt 16-Bit Datensegmente (`0x0020`), setzt RM-IDTR (`lidt [0x01B4]`), schaltet `CR0.PE` ab und springt per Far-Jump in den Real Mode (`rm16`).
-     - Setzt Checkpoint 2 `0xAA02` bei `[0x0312]`, nullt alle Universal- und Segmentregister und springt direkt in Windows `HalpRMStub` (`0100:0000`).
+4. **GDT-Shift auf 0x01C0 (Kollisionsschutz):**
+   - Durch die vollständigen MSR-, CR3- und CR4-Rückbauinstruktionen umfasst der Maschinencode nun 399 Bytes (`0x018F`). Er hätte mit der alten GDT-Position bei `0x0180` kollidiert.
+   - Ich habe die Tabellenstrukturen sicher vor `ShadowFACS` (`0x0200`) verschoben:
+     - `0x0000..0x018F`: Polyglot Machine Code (399 Bytes)
+     - `0x0190..0x01B3`: Zero-Padding (36 Bytes)
+     - `0x01B4..0x01B9`: `RM_IDTR` (6 Bytes: Limit 0x03FF, Base 0x00000000, `lidt [0x01B4]` = `0F 01 1E B4 01`)
+     - `0x01BA..0x01BF`: Zero-Padding (6 Bytes)
+     - `0x01C0..0x01E7`: 5-Entry GDT (40 Bytes, exakt 8-Byte aligned)
+     - `0x01E8..0x01F1`: 10-Byte GDTR64 (Limit 0x0027, Base `TrampolinePhys + 0x01C0`)
+     - `0x01F2..0x01F7`: 6-Byte FARPTR32 (Offset `TrampolinePhys + pm32_rel`, Selector `0x0008`)
+     - `0x01F8..0x01FF`: Zero-Padding (8 Bytes)
+     - `0x0200`: `ShadowFACS` (64 Bytes, 512-Byte aligned)
 
 5. **Host-Test Suite & Instruktions-Level Opcode-Stepper:**
-   - Alle 170 Tests in 10 Test-Suites erfolgreich bestanden (`MSVC_HOST_TESTS=PASS`).
-   - Maschinencode-Größe liegt mit 355 Bytes deutlich unterhalb des GDT-Offsets `0x0180` (384 Bytes).
+   - Alle 187 Checks in 10 Test-Suites erfolgreich bestanden (`MSVC_HOST_TESTS=PASS`).
+   - Der Opcode-Stepper prüft jeden RIP-relativen Offset in Section 2, die MSR/CR-Befehle, `lidt [0x01B4]`, `rm16_rel < 0x1000` und die GDT-Alignments.
    - Reines PCI Config Space Recon (CF8/CFC), KEIN BAR0-MMIO, KEIN SEC2-Unlock, KEINE CMOS/RTC-Mutation.
 
 

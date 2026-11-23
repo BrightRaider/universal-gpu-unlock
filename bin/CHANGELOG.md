@@ -6,6 +6,37 @@ For packaged binaries and downloads, visit [GitHub Releases](https://github.com/
 
 ---
 
+## [v1.8.43b] - 2026-11-23
+### Added & Fixed
+- **Universal Polyglot Dual-Mode S3 Trampoline: Full Long Mode Teardown (EFER/CR3/CR4), GDT-Shift, & ACPI Flags Restoration (addresses #19):**
+  - **Empirical Hardware Discovery & AMI Aptio V Wake Routing:**
+    - Live hardware proof in `RUN0051.TXT` (v1.8.41) showed that when `OspmFlags == 0`, AMI Aptio V ignores `XFirmwareWakingVector` (+0x18) entirely and bypasses the waking vector (`0x9E310 = 00000000`), routing directly to Windows' default `0x1000` path.
+    - Only with `Version >= 2`, `Flags |= 0x02` (`EFI_ACPI_4_0_64BIT_WAKE_SUPPORTED_F`), and `OspmFlags |= 0x01` (`EFI_ACPI_4_0_OSPM_64BIT_WAKE__F`) does AMI Aptio V branch to `XFirmwareWakingVector` (+0x18). Both flags are now restored in `ShadowFACS` and `RealFACS`.
+  - **Complete Architectural Long Mode Teardown in Section 2 (`.pm32_compat`):**
+    - Clearing only `CR0.PG = 0` leaves `IA32_EFER.LME` and `CR4.PAE` active in CPU hardware, causing Windows `HalpRMStub` to crash when Windows later re-enables paging.
+    - Section 2 now performs the complete, clean hardware teardown from 32-bit Compatibility Mode before jumping to the common 32-bit engine (`.sec1_common`):
+      1. Loads 32-bit flat data selector `0x0010` into DS, ES, FS, GS, SS.
+      2. Clears Paging in CR0: `mov eax, cr0; and eax, 0x7FFFFFFF; mov cr0, eax` (deactivates IA-32e mode).
+      3. Clears LME & NXE in `IA32_EFER` MSR `0xC0000080`: `rdmsr; and eax, 0xFFFFF6FF; wrmsr` (EDX untouched).
+      4. Clears CR3: `xor eax, eax; mov cr3, eax`.
+      5. Clears PAE in CR4: `mov eax, cr4; and eax, 0xFFFFFFDF; mov cr4, eax`.
+      6. Executes `jmp rel32 .sec1_common` into the unified 32-bit reconnaissance and resume engine.
+  - **GDT Table Shift to `0x01C0` (Collision Prevention):**
+    - The addition of MSR, CR3, and CR4 teardown instructions increased machine code size to 399 bytes (`0x018F`), safely passing the old `0x0180` boundary.
+    - GDT structures shifted forward while staying well below Shadow FACS (`0x0200`):
+      - Machine code: `0x0000..0x018F` (399 bytes)
+      - `RM_IDTR`: `0x01B4..0x01B9` (6 bytes: limit=0x03FF, base=0x00000000, `lidt [0x01B4]` = `0F 01 1E B4 01`)
+      - `GDT`: `0x01C0..0x01E7` (40 bytes, 5 descriptors, 8-byte aligned)
+      - `GDTR64`: `0x01E8..0x01F1` (10 bytes packed)
+      - `FARPTR32`: `0x01F2..0x01F7` (6 bytes packed)
+      - `Shadow FACS`: `0x0200` (512-byte aligned)
+  - **Comprehensive Opcode Verification & Tests:**
+    - Opcode stepper validates all Section 2 RIP-relative displacements (`chk64` $\rightarrow$ `0x0310`, `magic64` $\rightarrow$ `0x031C`, `lgdt` $\rightarrow$ `0x01E8`, `far_jmp32` $\rightarrow$ `0x01F2`), MSR teardown sequence, `lidt [0x01B4]`, and `rm16_rel < 0x1000`.
+    - All 187 checks across 10 test suites passed (`MSVC_HOST_TESTS=PASS`).
+    - Strictly adheres to safety constraints: pure PCI config space (CF8/CFC), zero MMIO writes, zero SEC2 unlock, zero CMOS/RTC mutation.
+
+---
+
 ## [v1.8.43] - 2026-11-23
 ### Added & Fixed
 - **Universal Polyglot Dual-Mode S3 Resume Trampoline (32-Bit Flat PM + 64-Bit Long Mode) via FACS Waking Vector (addresses #19):**
