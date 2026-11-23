@@ -73,6 +73,7 @@
 #define GU_TELEM_SEC2_HWCFG2_OFF       0x00C8U /* SEC2_HWCFG2 (BAR0 + 0x008400F4) (v1.8.51) */
 #define GU_TELEM_FALCON2_BCR_OFF       0x00CCU /* FALCON2_BCR (BAR0 + 0x00841668) (v1.8.51) */
 #define GU_TELEM_SEC2_CPUCTL_POST_OFF  0x00D0U /* SEC2_CPUCTL after reset cycle (BAR0 + 0x00840100) (v1.8.51) */
+#define GU_TELEM_FALCON2_BCR_POST_OFF  0x00D4U /* FALCON2_BCR after switch out of Boot-ROM (BAR0 + 0x00841668) (v1.8.52) */
 
 /* Dedicated High (>1MB, <4GB) ACPI NVS Page Offsets for Shadow Tables */
 #define GU_HIGH_SHADOW_RSDP_OFF        0x0000U

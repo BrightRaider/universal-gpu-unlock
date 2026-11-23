@@ -6,6 +6,30 @@ For packaged binaries and downloads, visit [GitHub Releases](https://github.com/
 
 ---
 
+## [v1.8.52] - 2026-11-24
+### Added & Fixed
+- **SEC2 Falcon BCR Switch & Boot-ROM Unmasking im 32-Bit Flat Mode bei S3-Wake (addresses #19):**
+  - **Forensische Durchbruch-Erkenntnis aus der v1.8.51 Telemetrie:**
+    - Die Live-Kernel-Telemetrie (`kdX64.exe -kl`) bei `0xd8261000` lieferte die entscheidende Hardware-Diagnose:
+      - `+0xC0` (`PMC_ENABLE`): `0x40000000` (Device Enable aktiv).
+      - `+0xC4` (`SEC2_RESET`): `0x00000000` (Engine nicht im Reset).
+      - `+0xC8` (`SEC2_HWCFG2`): `0x000067B7`. Bit 12 ist `0` (Memory Scrubbing inaktiv / Hardware bereit); Bit 10 ist `1` (`0x0400`, Hardware fordert BCR-Switching).
+      - `+0xCC` (`FALCON2_BCR`): `0x00000110`. Bit 4 (`1 << 4 = 0x10`) ist gesetzt!
+    - **Hardware-Kausalität:** Wenn Bit 4 im Boot Control Register (`0x00841668`) gesetzt ist, wird der Falcon im Boot-ROM-Modus festgehalten. Sämtliche Zugriffe auf Falcon-CPU-Register wie `0x00840100` (`CPUCTL`) werden durch die PRI maskiert und quittieren mit `0xBADF5620` (`SYS_PRI_ERROR_CODE`).
+  - **Resource Manager konforme Freischaltung (`src/vendor/unlock_610.c:487-496`):**
+    - Nach Reset-Release und Scrubbing-Check (`0x008400F4` Bit 12 == 0) schreibt das Trampolin `0` nach `0x00841668` (`FALCON2_BCR`), um den Boot-ROM-Modus zu beenden.
+    - Bounded Polling auf `[ebx + 0x00841668] & 0x11 == 1` mit maximal 50.000 Iterationen (deterministischer Abbruch, kein Endlos-Loop).
+    - Speicherung des `FALCON2_BCR`-Rücklesewerts in der Telemetrie bei `+0xD4` (`GU_TELEM_FALCON2_BCR_POST_OFF`).
+    - Registrierung der GPU-Chip-ID (`0x192000a1`) an `0x00840084`.
+    - Auslesen von `0x00840100` (`CPUCTL`) nach `+0xD0` (`GU_TELEM_SEC2_CPUCTL_POST_OFF`) zur Verifikation der Falcon-CPU-Entsperrung.
+  - **Code Envelope & Host-Tests:**
+    - Maschinencode-Größe: **1016 Bytes** (strikter Envelope `< 0x0400`, 8 Bytes Reserve vor GDT / `RM_IDTR` bei `+0x0400`).
+    - Alle 8.700 Checks in 10 Test-Suites grün (`MSVC_HOST_TESTS=PASS`).
+    - Vollständiger 4-Stufen-PCIe-Teardown (GPU Cmd, GPU BAR0, Root Port Window, Root Port Cmd) garantiert saubere Übergabe an den Windows-Kernel.
+    - Strikte Sicherheitsgrenzen: 0 CMOS/RTC-Mutation, `OspmFlags = 0`.
+
+---
+
 ## [v1.8.51] - 2026-11-24
 ### Added & Fixed
 - **SEC2 Falcon Hardware-Diagnostics & Deterministischer Reset-Zyklus im 32-Bit Flat Mode bei S3-Wake (addresses #19):**

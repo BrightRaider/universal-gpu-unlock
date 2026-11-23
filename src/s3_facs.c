@@ -826,11 +826,32 @@ UINT32 GuAcpiBuildTrampolineCode(
   *e++ = (UINT8)(scrub_poll_start - (e + 1));
   *scrub_break = (UINT8)(e - (scrub_break + 1));
 
+  /* 3. Switch Falcon out of Boot-ROM mode: write 0 to FALCON2_BCR (BAR0 + 0x00841668) (v1.8.52) */
+  *e++ = 0x31; *e++ = 0xC0;                                     /* xor eax, eax */
+  *e++ = 0x89; *e++ = 0x83; *(UINT32 *)e = 0x00841668U; e += 4; /* mov [ebx + 0x00841668], eax */
+
+  /* Poll [ebx + 0x00841668] & 0x11 == 1 with bounded timeout (50,000 iterations) (v1.8.52) */
+  *e++ = 0xB9; *e++ = 0x50; *e++ = 0xC3; *e++ = 0x00; *e++ = 0x00; /* mov ecx, 50000 */
+  UINT8 *bcr_poll_start = e;
+  *e++ = 0x8B; *e++ = 0x83; *(UINT32 *)e = 0x00841668U; e += 4; /* mov eax, [ebx + 0x00841668] */
+  *e++ = 0x89; *e++ = 0xC2;                                     /* mov edx, eax */
+  *e++ = 0x80; *e++ = 0xE2; *e++ = 0x11;                         /* and dl, 0x11 */
+  *e++ = 0x80; *e++ = 0xFA; *e++ = 0x01;                         /* cmp dl, 0x01 */
+  *e++ = 0x74;                                                 /* jz .bcr_done */
+  UINT8 *bcr_break = e++;
+  *e++ = 0x49;                                                 /* dec ecx */
+  *e++ = 0x75;                                                 /* jnz bcr_poll_start */
+  *e++ = (UINT8)(bcr_poll_start - (e + 1));
+  *bcr_break = (UINT8)(e - (bcr_break + 1));
+
+  /* Save post-switch FALCON2_BCR readback value to +0xD4 (v1.8.52) */
+  *e++ = 0xA3; *(UINT32 *)e = (UINT32)(high_telem_dest + 0xD4); e += 4; /* mov [dest+0xD4], eax */
+
   /* Write Chip-ID to 0x00840084 */
   *e++ = 0x8B; *e++ = 0x03;                                     /* mov eax, [ebx] */
   *e++ = 0x89; *e++ = 0x83; *(UINT32 *)e = 0x00840084U; e += 4; /* mov [ebx + 0x00840084], eax */
 
-  /* Read 0x00840100 (CPUCTL) after reset cycle and save to +0xD0 */
+  /* Read 0x00840100 (CPUCTL) after BCR switch & reset cycle and save to +0xD0 */
   *e++ = 0x8B; *e++ = 0x83; *(UINT32 *)e = 0x00840100U; e += 4; /* mov eax, [ebx + 0x00840100] */
   *e++ = 0xA3; *(UINT32 *)e = (UINT32)(high_telem_dest + 0xD0); e += 4; /* mov [dest+0xD0], eax */
 
@@ -1265,16 +1286,20 @@ EFI_STATUS GuAcpiInstallShadowFacs(
       UINT32 unlk_status = *(UINT32 *)(telemetry_page + GU_TELEM_UNLOCK_STATUS_OFF);
       UINT32 unlk_chip   = *(UINT32 *)(telemetry_page + GU_TELEM_CHIP_ID_OFF);
       UINT32 unlk_bar0   = *(UINT32 *)(telemetry_page + GU_TELEM_BAR0_ASSIGNED_OFF);
+      UINT32 bcr_post    = *(UINT32 *)(telemetry_page + GU_TELEM_FALCON2_BCR_POST_OFF);
+      UINT32 cpuctl_post = *(UINT32 *)(telemetry_page + GU_TELEM_SEC2_CPUCTL_POST_OFF);
       UINT32 ss0_before  = *(UINT32 *)(telemetry_page + GU_TELEM_SS0_BEFORE_OFF);
       UINT32 ss1_before  = *(UINT32 *)(telemetry_page + GU_TELEM_SS1_BEFORE_OFF);
       UINT32 ss0_after   = *(UINT32 *)(telemetry_page + GU_TELEM_SS0_AFTER_OFF);
       UINT32 ss1_after   = *(UINT32 *)(telemetry_page + GU_TELEM_SS1_AFTER_OFF);
       UINT32 ro_after    = *(UINT32 *)(telemetry_page + GU_TELEM_READOUT_AFTER_OFF);
       GuLog("S3 Wake Hardware Unlock Telemetry: Magic=UNLK Status=%u Chip=%#08x AssignedBAR0=%#08x\n"
+            "  BCR_Post: %#08x CPUCTL_Post: %#08x\n"
             "  SS0: %#08x -> %#08x (Target 0x88888888)\n"
             "  SS1: %#08x -> %#08x (Target 0x00000008)\n"
             "  Readout1: %#08x (Full-Rate = 0x00000000)\n",
             (unsigned)unlk_status, (unsigned)unlk_chip, (unsigned)unlk_bar0,
+            (unsigned)bcr_post, (unsigned)cpuctl_post,
             (unsigned)ss0_before, (unsigned)ss0_after,
             (unsigned)ss1_before, (unsigned)ss1_after,
             (unsigned)ro_after);

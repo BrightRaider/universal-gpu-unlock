@@ -1,7 +1,7 @@
 # Technische Dokumentation: Universal GPU Unlock (Multi-Gen)
 
 > **Tool:** Universal GPU Unlock  
-> **Version:** v1.8.51  
+> **Version:** v1.8.52  
 > **Architekturen:** NVIDIA Ada Lovelace (RTX 40), Ampere (RTX 30), Turing (RTX 20 / CMP)  
 > **Unterstützte Betriebssysteme:** Windows 10, Windows 11, WSL2 / Ubuntu CUDA Container  
 
@@ -968,6 +968,42 @@ In **v1.8.34** habe ich die Architektur umfassend überarbeitet und perfektionie
 4. **Code Envelope, Test-Verifikation & Sicherheit:**
    - Maschinencode-Größe: **979 Bytes** (Envelope: 1024 Bytes, 45 Bytes Puffer vor `RM_IDTR` bei `+0x0400`).
    - Alle 8.697 Checks in 10 Test-Suites grün (`MSVC_HOST_TESTS=PASS`).
+   - Vollständiger 4-Stufen-PCIe-Teardown (GPU Cmd, GPU BAR0, Root Port Window, Root Port Cmd) garantiert saubere Übergabe an den Windows-Kernel.
+   - Strikte Sicherheitsgrenzen: 0 CMOS/RTC-Mutation, `OspmFlags = 0`.
+
+---
+
+### 13.24 Die v1.8.52 Architektur: SEC2 Falcon BCR Mode-Switch & Boot-ROM Freischaltung im 32-Bit Flat Mode bei S3-Wake
+
+1. **Forensische Durchbruch-Erkenntnis aus dem v1.8.51 S3-Wake-Test:**
+   - Die Live-Kernel-Telemetrie (`kdX64.exe -kl`) bei `0xd8261000` lieferte die entscheidende Hardware-Diagnose des AD102-Zustands beim Aufwachen aus S3 Standby:
+     ```text
+     +0xC0: 40000000 (PMC_ENABLE, BAR0 + 0x00000200) -> Device Enable aktiv
+     +0xC4: 00000000 (SEC2_RESET, BAR0 + 0x008403C0) -> Engine nicht im Reset
+     +0xC8: 000067B7 (SEC2_HWCFG2, BAR0 + 0x008400F4) -> Bit 12 = 0 (Scrubbing inaktiv), Bit 10 = 1 (BCR gefordert)
+     +0xCC: 00000110 (FALCON2_BCR, BAR0 + 0x00841668) -> Bit 4 gesetzt (Boot-ROM Modus aktiv!)
+     +0xD0: BADF5620 (SEC2_CPUCTL, BAR0 + 0x00840100) -> SYS_PRI_ERROR_CODE
+     ```
+   - **Hardware-Kausalität:** Bit 4 (`1 << 4 = 0x10`) in `FALCON2_BCR` hält die Falcon-CPU im internen Boot-ROM-Modus fest. Solange Bit 4 gesetzt ist, blockiert die Hardware-PRI jeglichen Zugriff auf CPU-Register (`CPUCTL`) mit dem Fehlercode `0xBADF5620`.
+
+2. **Resource Manager konforme Freischaltung (`src/vendor/unlock_610.c:487-496`):**
+   - Gemäß dem NVIDIA RM-Treiber erfordert ein gesetztes Bit 4 im `FALCON2_BCR` folgendes Verfahren:
+     ```c
+     if (bcr & (1u << 4)) {
+         write_bar(work, eng->falcon2 + 0x668, 0);
+         ret = poll_us(work, eng->falcon2 + 0x668, 0x11, 1, 1000000, true);
+     }
+     ```
+   - **Realisierung im 32-Bit Flat Mode Trampolin:**
+     1. Direkt nach Abschluss des Reset-Release und Memory-Scrubbing-Checks (`0x008400F4` Bit 12 == 0) schreibt das Trampolin `0` nach `0x00841668` (`FALCON2_BCR`).
+     2. Bounded Polling auf `[ebx + 0x00841668] & 0x11 == 1` mit maximal 50.000 Iterationen (deterministischer Timeout, kein Hängenbleiben).
+     3. Sicherung des post-switch `FALCON2_BCR`-Rücklesewerts in der Telemetrie bei `+0xD4` (`GU_TELEM_FALCON2_BCR_POST_OFF`).
+     4. Registrierung der GPU-Chip-ID (`0x192000a1`) an `0x00840084`.
+     5. Auslesen von `0x00840100` (`CPUCTL`) nach `+0xD0` (`GU_TELEM_SEC2_CPUCTL_POST_OFF`) zur Verifikation, ob die Falcon-CPU freigeschaltet wurde.
+
+3. **Code Envelope, Test-Verifikation & Sicherheit:**
+   - Maschinencode-Größe: **1016 Bytes** (Envelope: 1024 Bytes, 8 Bytes Puffer vor `RM_IDTR` / GDT bei `+0x0400`).
+   - Alle 8.700 Checks in 10 Test-Suites grün (`MSVC_HOST_TESTS=PASS`).
    - Vollständiger 4-Stufen-PCIe-Teardown (GPU Cmd, GPU BAR0, Root Port Window, Root Port Cmd) garantiert saubere Übergabe an den Windows-Kernel.
    - Strikte Sicherheitsgrenzen: 0 CMOS/RTC-Mutation, `OspmFlags = 0`.
 

@@ -841,9 +841,13 @@ static void TestGuAcpiBuildTrampolineCode(void) {
     else if (buffer[i] == 0x0C && buffer[i+1] == 0x01) { instr_len = 2; desc = "or al, 0x01                         ; Assert SEC2 reset (or al, 1)"; }
     else if (buffer[i] == 0x89 && buffer[i+1] == 0x83 && buffer[i+2] == 0xC0 && buffer[i+3] == 0x03 && buffer[i+4] == 0x84 && buffer[i+5] == 0x00) { instr_len = 6; desc = "mov [ebx+0x8403C0], eax             ; Write SEC2_RESET (BAR0 + 0x8403C0)"; }
     else if (buffer[i] == 0xB9 && buffer[i+1] == 0x0A && buffer[i+2] == 0x00 && buffer[i+3] == 0x00 && buffer[i+4] == 0x00) { instr_len = 5; desc = "mov ecx, 10                        ; 10 dummy read cycle counter"; }
-    else if (buffer[i] == 0xB9 && buffer[i+1] == 0x50 && buffer[i+2] == 0xC3 && buffer[i+3] == 0x00 && buffer[i+4] == 0x00) { instr_len = 5; desc = "mov ecx, 50000                     ; 50k scrub poll timeout"; }
+    else if (buffer[i] == 0xB9 && buffer[i+1] == 0x50 && buffer[i+2] == 0xC3 && buffer[i+3] == 0x00 && buffer[i+4] == 0x00) { instr_len = 5; desc = "mov ecx, 50000                     ; 50k scrub/BCR poll timeout"; }
     else if (buffer[i] == 0xA9 && buffer[i+1] == 0x00 && buffer[i+2] == 0x10 && buffer[i+3] == 0x00 && buffer[i+4] == 0x00) { instr_len = 5; desc = "test eax, 0x00001000               ; Test HWCFG2 Bit 12 (Memory Scrubbing)"; }
-    else if (buffer[i] == 0x74 && buffer[i+1] == 0x03) { instr_len = 2; desc = "jz .scrub_done                     ; Jump if scrubbing finished"; }
+    else if (buffer[i] == 0x74 && buffer[i+1] == 0x03) { instr_len = 2; desc = "jz <rel8>                         ; Jump if condition met (scrub/BCR done)"; }
+    else if (buffer[i] == 0x31 && buffer[i+1] == 0xC0) { instr_len = 2; desc = "xor eax, eax                     ; Clear EAX (write 0 to BCR)"; }
+    else if (buffer[i] == 0x89 && buffer[i+1] == 0x83 && buffer[i+2] == 0x68 && buffer[i+3] == 0x16 && buffer[i+4] == 0x84 && buffer[i+5] == 0x00) { instr_len = 6; desc = "mov [ebx+0x841668], eax             ; Write 0 to FALCON2_BCR (exit Boot-ROM)"; }
+    else if (buffer[i] == 0x80 && buffer[i+1] == 0xE2 && buffer[i+2] == 0x11) { instr_len = 3; desc = "and dl, 0x11                     ; Mask BCR mode bits (0x11)"; }
+    else if (buffer[i] == 0x80 && buffer[i+1] == 0xFA && buffer[i+2] == 0x01) { instr_len = 3; desc = "cmp dl, 0x01                     ; Check BCR unmasked (BCR & 0x11 == 1)"; }
     else if (buffer[i] == 0x89 && buffer[i+1] == 0x83 && buffer[i+2] == 0x84 && buffer[i+3] == 0x00 && buffer[i+4] == 0x84 && buffer[i+5] == 0x00) { instr_len = 6; desc = "mov [ebx+0x840084], eax             ; Write Chip-ID to SEC2 (BAR0 + 0x840084)"; }
     else if (buffer[i] == 0x8B && buffer[i+1] == 0x83 && buffer[i+2] == 0x00 && buffer[i+3] == 0x01 && buffer[i+4] == 0x84 && buffer[i+5] == 0x00) { instr_len = 6; desc = "mov eax, [ebx+0x840100]             ; Read SEC2 Falcon CPUCTL"; }
     else if (buffer[i] == 0x49) { instr_len = 1; desc = "dec ecx                             ; Decrement loop/poll timeout"; }
@@ -978,7 +982,7 @@ static void TestGuAcpiBuildTrampolineCode(void) {
   }
   CHECK(found_bar0_target, "Trampoline must program temporary BAR0 to 0xFB000000");
 
-  /* Verify SEC2 Diagnostics & Reset Cycle (v1.8.51) */
+  /* Verify SEC2 Diagnostics & Reset Cycle (v1.8.51 / v1.8.52) */
   BOOLEAN found_telem_pmc_enable = FALSE;
   BOOLEAN found_telem_sec2_reset = FALSE;
   BOOLEAN found_telem_sec2_hwcfg2 = FALSE;
@@ -986,6 +990,9 @@ static void TestGuAcpiBuildTrampolineCode(void) {
   BOOLEAN found_reset_assert = FALSE;
   BOOLEAN found_reset_deassert = FALSE;
   BOOLEAN found_poll_scrub = FALSE;
+  BOOLEAN found_bcr_write_zero = FALSE;
+  BOOLEAN found_poll_bcr = FALSE;
+  BOOLEAN found_telem_bcr_post = FALSE;
   BOOLEAN found_chip_id_write = FALSE;
   BOOLEAN found_telem_cpuctl_post = FALSE;
   for (UINT32 i = pm32_offset; i < pm16_offset - 9; i++) {
@@ -1010,6 +1017,15 @@ static void TestGuAcpiBuildTrampolineCode(void) {
     if (buffer[i] == 0xA9 && buffer[i+1] == 0x00 && buffer[i+2] == 0x10 && buffer[i+3] == 0x00 && buffer[i+4] == 0x00) {
       found_poll_scrub = TRUE;
     }
+    if (buffer[i] == 0x89 && buffer[i+1] == 0x83 && *(UINT32 *)(buffer + i + 2) == 0x00841668U) {
+      found_bcr_write_zero = TRUE;
+    }
+    if (buffer[i] == 0x80 && buffer[i+1] == 0xE2 && buffer[i+2] == 0x11) {
+      found_poll_bcr = TRUE;
+    }
+    if (buffer[i] == 0xA3 && *(UINT32 *)(buffer + i + 1) == (UINT32)(telem_phys + 0xD4)) {
+      found_telem_bcr_post = TRUE;
+    }
     if (buffer[i] == 0x89 && buffer[i+1] == 0x83 && *(UINT32 *)(buffer + i + 2) == 0x00840084U) {
       found_chip_id_write = TRUE;
     }
@@ -1024,6 +1040,9 @@ static void TestGuAcpiBuildTrampolineCode(void) {
   CHECK(found_reset_assert, "Trampoline must assert SEC2 reset (or al, 0x01)");
   CHECK(found_reset_deassert, "Trampoline must release SEC2 reset (and al, 0xFE)");
   CHECK(found_poll_scrub, "Trampoline must poll HWCFG2 Bit 12 (Memory Scrubbing)");
+  CHECK(found_bcr_write_zero, "Trampoline must write 0 to FALCON2_BCR (BAR0 + 0x841668) to exit Boot-ROM mode");
+  CHECK(found_poll_bcr, "Trampoline must poll FALCON2_BCR & 0x11 == 1");
+  CHECK(found_telem_bcr_post, "Trampoline must save post-switch FALCON2_BCR to Telemetry +0xD4");
   CHECK(found_chip_id_write, "Trampoline must write Chip-ID to SEC2 (BAR0 + 0x840084)");
   CHECK(found_telem_cpuctl_post, "Trampoline must save post-reset CPUCTL to Telemetry +0xD0");
 
