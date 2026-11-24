@@ -784,6 +784,16 @@ static void free_coherent(struct unlock_transaction_work *work)
 {
 	u32 i;
 
+	if (Gu.s3_persist_armed) {
+		/* S3 Persistence Mode (v1.8.60): Preserve the Radix page tables and GSP firmware
+		 * image in EfiReservedMemoryType. Windows never reclaims or overwrites EfiReservedMemoryType,
+		 * and nt!HalpSaveNvsArea is NOT endangered because this is strictly not in ACPI NVS.
+		 */
+		dev_info(&work->pdev->dev, "S3 persistence armed: preserving %u radix/image pages (%zu MB) in EfiReservedMemoryType\n",
+			 work->pages_allocated, (size_t)(work->pages_allocated * GU_RADIX_PAGE >> 20));
+		return;
+	}
+
 	for (i = 0; i < work->pages_allocated; i++) {
 		dma_free_coherent(&work->pdev->dev, GU_RADIX_PAGE,
 				  work->pages[i].cpu, work->pages[i].dma);
@@ -856,7 +866,7 @@ static int unlock_transaction_unwind(struct unlock_transaction_work *work)
 		work->enabled = false;
 	}
 	free_coherent(work);
-	if (Gu.retained || Gu.allocations) {
+	if (Gu.retained || (Gu.allocations && !Gu.s3_persist_armed)) {
 		work->retained=true;return GU_RESULT(-EBUSY);
 	}
 	if (work->booter_fw) {

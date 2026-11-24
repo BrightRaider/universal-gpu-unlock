@@ -27,6 +27,9 @@ EFI_STATUS GuUnlockAllGpus(EFI_SYSTEM_TABLE *t, EFI_HANDLE image,
   if (!log_prefix) log_prefix = "";
   *unlocked = 0;
   *failed = 0;
+  if (options & GU_UNLOCK_REGISTER_S3) {
+    Gu.s3_persist_armed = TRUE;
+  }
 
   for (g = 0; g < count; g++) {
     const GU_DISCOVERED_DEVICE *dev = &devices[g];

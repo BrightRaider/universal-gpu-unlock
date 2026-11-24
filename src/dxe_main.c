@@ -79,6 +79,7 @@ static VOID EFIAPI AdaUnlockOnReadyToBoot(EFI_EVENT event, VOID *context) {
 
   (VOID) GuSetSafeguardFlag();
 
+  Gu.s3_persist_armed = TRUE;
   s = GuUnlockAllGpus(mDxeTable, mDxeImage, devices, device_count, GU_UNLOCK_REGISTER_S3,
                       "DXE-DRIVER: ", &stage, &unlocked_count, &failed);
   if (s != EFI_SUCCESS) {

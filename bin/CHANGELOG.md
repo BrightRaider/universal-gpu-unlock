@@ -6,6 +6,30 @@ For packaged binaries and downloads, visit [GitHub Releases](https://github.com/
 
 ---
 
+## [v1.8.60] - 2026-11-24
+### Added & Fixed
+- **EfiReservedMemoryType Radix-Table- & GSP-Firmware-Retention über S3 Sleep (addresses #19):**
+  - **Diagnose der Ursache von Booter-Fehlercode 0x91 in v1.8.59:**
+    - In v1.8.59 führte das S3-Trampolin erstmals den Falcon SEC2 Booter aus, woraufhin Mailbox 0 (`0x00840040`) mit Status `0x00000091` antwortete.
+    - Per WinDbg-Speicherdump (`!dd d81a3000 L10`) und Code-Analyse habe ich nachgewiesen, dass die 3-stufige Radix-Page-Table (`radix_dma` = `0xd81a3000`) nach dem Kaltstart-Unlock durch `free_coherent()` freigegeben und als `EfiBootServicesData` von Windows bei `ExitBootServices()` rekrutiert und genullt wurde.
+    - Fehlercode `0x00000091` im Falcon Booter signalisiert den Fehlschlag beim Radix-PTE-Walk (`RADIX_TABLE_INVALID` / `PTE_LOOKUP_FAILED`).
+  - **Speicherallokation & Retention in `EfiReservedMemoryType` (`src/port.c`, `src/vendor/unlock_610.c`):**
+    - Umstellung des DMA-Speichertyps für Radix-Tables und das ~84-MB-GSP-Firmware-Image (20.604 Pages = 84.393.984 Bytes) auf `EfiReservedMemoryType`.
+    - Strikt KEINE Allokation von 85 MB in `EfiACPIMemoryNVS`, um ein Überlaufen des Windows-HAL-Save-Buffers (`nt!HalpSaveNvsArea`) zu verhindern.
+    - Fallback auf `gBS->AllocatePages(AllocateMaxAddress, EfiReservedMemoryType)` mit Address-Limit `< 4GB`, falls UEFI-Firmware-Implementierungen `EfiReservedMemoryType` in `PciIo->AllocateBuffer` ablehnen.
+    - `free_coherent()` in `unlock_610.c` und `GuDmaFree()` in `port.c` geben die 20.604 Pages bei aktivem S3-Modus (`Gu.s3_persist_armed`) nicht an die Firmware oder das Betriebssystem zurück, sondern belassen sie dauerhaft im DRAM.
+    - `GuSafeToReturn()` erkennt die persistenten `EfiReservedMemoryType`-Puffer als sicheren Zustand für die OS-Übergabe an.
+  - **Prüfung und Schutz aller Host-RAM-Pointer in `wpr_meta` (`src/s3_resume.c`):**
+    - Kein einziger Host-RAM-Pointer im 256-Byte `wpr_meta`-Paket verweist mehr auf flüchtigen `EfiBootServicesData`-Speicher:
+      - `radix_dma` (+0x10): Zeigt auf die persistente 3-stufige Radix-Page-Table in `EfiReservedMemoryType`.
+      - `boot_dma` (+0x20): Zeigt auf den persistenten Boot-Deskriptor in ACPI NVS (`nvs_phys + 0x21000`).
+      - `signature_dma` (+0x48): Zeigt auf die persistente V67-Signatur in ACPI NVS (`nvs_phys + 0x11000`).
+  - **Erhalt des stabilen Trampolins aus v1.8.59:**
+    - Das bewährte 1424-Byte-Trampolin, der 4-Stufen-Teardown (unter Beibehaltung des aktiven Bus-Routings `0x002D2D00` an Root Port 0x18) und der PCIe-FLR mit Port-0x80-Stall bleiben unverändert erhalten.
+  - **Test-Suite & Regressionsschutz (`tests/test_s3_resume.c`):**
+    - Neuer Test `[9]` `TestGuS3PersistentMemoryRetention` verifiziert die `EfiReservedMemoryType`-Retention, `GuSafeToReturn()`-Logik und die Validität aller Host-RAM-Pointer im `wpr_meta`-Paket.
+    - Alle 8.743 Checks laufen grün (`MSVC_HOST_TESTS=PASS`).
+
 ## [v1.8.59] - 2026-11-24
 ### Added & Fixed
 - **Echter PCIe-FLR (Function-Level Reset) 1:1 nach `src/vendor/unlock_610.c:1750-1860`, Erhalt des Bridge-Bus-Routings & 2KB Code-Envelope (addresses #19):**

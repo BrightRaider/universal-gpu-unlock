@@ -234,6 +234,17 @@ EFI_STATUS GuS3PrepareAndRegister(EFI_SYSTEM_TABLE *t) {
     memcpy(meta_pkt + 32, &boot_dma_val, sizeof(UINT64));
     memcpy(meta_pkt + 72, &sig_dma_val, sizeof(UINT64));
     memcpy(meta_pkt + 80, &sig_size_val, sizeof(UINT64));
+
+    UINT64 radix_dma_val = 0;
+    memcpy(&radix_dma_val, meta_pkt + 16, sizeof(UINT64));
+    UINT64 img_size_val = 0;
+    memcpy(&img_size_val, meta_pkt + 24, sizeof(UINT64));
+    GuLog("GuS3PrepareAndRegister: Persistent WPR Meta: radix_dma=%#llx (%s) img_sz=%#llx boot_dma=%#llx sig_dma=%#llx\n",
+          (unsigned long long)radix_dma_val,
+          Gu.s3_persist_armed ? "EfiReservedMemoryType" : "EfiBootServicesData",
+          (unsigned long long)img_size_val,
+          (unsigned long long)boot_dma_val,
+          (unsigned long long)sig_dma_val);
   } else if (GuAssets[4].firmware.data && GuAssets[4].firmware.size) {
     ctx->meta_size = (UINT32)GuAssets[4].firmware.size;
     memcpy(nvs_base + 0x2A000, GuAssets[4].firmware.data, ctx->meta_size);

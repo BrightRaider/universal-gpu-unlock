@@ -1294,6 +1294,37 @@ In Version `v1.8.59` habe ich die beiden verbliebenen Ursachen für den Black Sc
    - Alle 8.729 Checks in 10 MSVC Host Test Suites erfolgreich (`MSVC_HOST_TESTS=PASS`).
    - Keine CMOS-Eingriffe, `OspmFlags = 0`, strikt deterministischer Ablauf.
 
+### 13.33 Die v1.8.60 Architektur: Radix-Table- & GSP-Firmware-Retention in EfiReservedMemoryType über S3 Sleep
+In Version `v1.8.60` habe ich die Ursache für den Booter-Fehlercode `0x00000091` im S3-Wake vollständig gelöst und eine persistente Speicherarchitektur implementiert:
+
+1. **Doppelte Verifikation der Ursache von Booter-Code 0x91 in v1.8.59:**
+   - **WinDbg-Befund:** Unmittelbar nach dem S3-Wake ergab `!dd d81a3000 L10` im Host-RAM:
+     `00000000 00000000 00000000 00000000 ...`
+     Die gesamte 3-stufige Radix-Page-Table (`radix_dma` = `0xd81a3000`) war vollständig genullt!
+   - **Ursache:** In v1.8.59 wurden die Radix-Tabellen und das GSP-Firmware-Image über `GuDmaAllocate()` als `EfiBootServicesData` allokiert. Nach dem Kaltstart-Unlock gab `free_coherent()` diese Pages über `dma_free_coherent()` wieder frei. Windows rekrutiert allen Speicher vom Typ `EfiBootServicesData` bei `ExitBootServices()` und überschreibt ihn während des Betriebssystems.
+   - **Bedeutung von Fehlercode 0x91:** Der Falcon SEC2 Booter liest bei Start `meta_dma` aus Mailbox 0/1 (`0x00840040` / `0x00840044`), greift auf `radix_dma` zu und führt einen Page-Table-Walk durch. Beim Antreffen von Nullen (ungültiger PTE) bricht der Booter sofort mit Status `0x00000091` (`RADIX_TABLE_INVALID` / `PTE_LOOKUP_FAILED`) ab.
+
+2. **Speicherallokation in `EfiReservedMemoryType` (strikt NICHT `EfiACPIMemoryNVS`):**
+   - Das gesamte ~84-MB-GSP-Firmware-Image (`0x05053000` Bytes) sowie die 41 Seiten der 3-stufigen Radix-Page-Table (zusammen 20.604 Pages = 84.393.984 Bytes) werden nun als `EfiReservedMemoryType` allokiert.
+   - **Schutz von `nt!HalpSaveNvsArea`:** Ein 85-MB-Block darf NIEMALS als `EfiACPIMemoryNVS` allokiert werden, da der Windows-HAL (`hal.dll`) versucht, den gesamten ACPI-NVS-Bereich bei Schlafzuständen und Hibernation in einen internen Puffer zu spiegeln. Dies würde den HAL-Puffer überlaufen lassen und zu Systemabstürzen führen. `EfiReservedMemoryType` hingegen wird von Windows nicht in NVS-Puffer kopiert, sondern im DRAM unberührt belassen.
+   - **UEFI-Fallback-Mechanismus:** Sollte `PciIo->AllocateBuffer` den Typ `EfiReservedMemoryType` ablehnen (in manchen EDK2-Spezifikationen erlaubt `PciIo` nur BootServicesData/RuntimeServicesData), fällt `GuDmaAllocate()` automatisch auf `gBS->AllocatePages(AllocateMaxAddress, EfiReservedMemoryType)` mit `MaxAddress = 0xFFFFFFFFULL` (<4GB) zurück.
+
+3. **Retention ohne FreePages im S3-Persistenz-Modus:**
+   - In `src/vendor/unlock_610.c` prüft `free_coherent()`, ob `Gu.s3_persist_armed` aktiv ist. Falls ja, werden die 20.604 Pages NICHT freigegeben, sondern dauerhaft im physikalischen Speicher gehalten.
+   - In `src/port.c` gibt `GuDmaFree()` bei gesetztem `Gu.s3_persist_armed` sofort `EFI_SUCCESS` zurück, ohne die Puffer zu unmappen oder freizugeben.
+   - `GuSafeToReturn()` erkennt den Zustand `Gu.allocations != NULL && Gu.s3_persist_armed` als regulären und sicheren Zustand für die Betriebssystem-Übergabe an.
+
+4. **Audit aller Host-RAM-Pointer in `wpr_meta` (`0xdc642000`):**
+   - `radix_dma` (+0x10): Zeigt auf die persistente Radix-Root-Table in `EfiReservedMemoryType`.
+   - `boot_dma` (+0x20): Zeigt auf den Boot-Deskriptor im persistenten ACPI-NVS-Puffer (`nvs_phys + 0x21000`).
+   - `signature_dma` (+0x48): Zeigt auf die V67-Signatur im persistenten ACPI-NVS-Puffer (`nvs_phys + 0x11000`).
+   - Kein einziger Host-RAM-Pointer zeigt auf flüchtigen oder freigegebenen Speicher.
+
+5. **Stabilität des Trampolins:**
+   - Das bewährte 1424-Byte-Trampolin aus v1.8.59, der 4-Stufen-Teardown mit aktivem Root Port 0x18 Bus-Routing (`0x002D2D00`) und der PCIe-FLR mit Port-0x80-Stall bleiben 1:1 erhalten.
+   - Alle 8.743 Checks in den MSVC Host Tests laufen fehlerfrei (`MSVC_HOST_TESTS=PASS`).
+
+
 
 
 

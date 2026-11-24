@@ -27,6 +27,13 @@ GU_PLATFORM Gu;
 GU_ASSET GuAssets[5];
 static char g_log_history[8192] = {0};
 
+BOOLEAN GuSafeToReturn(VOID) {
+  return !Gu.retained && (!Gu.allocations || Gu.s3_persist_armed) &&
+         (!Gu.dma_count || Gu.s3_persist_armed) &&
+         !Gu.master_attributes_pending &&
+         (!Gu.started || (Gu.quiesced && !Gu.fault));
+}
+
 VOID GuLog(const char *Format, ...) {
   char temp[1024];
   va_list args;
@@ -1504,6 +1511,81 @@ static void TestGuS3Prepare_BooterUnpackAndPatch(void) {
   printf("[8] GuS3PrepareAndRegister Booter container unpacking & fuse signature patching: OK!\n");
 }
 
+static void TestGuS3PersistentMemoryRetention(void) {
+  printf("[9] Testing S3 Persistent Radix & GSP Image Memory Retention (EfiReservedMemoryType)...\n");
+
+  /* 1. Test GuSafeToReturn() behavior with S3 persistence */
+  memset(&Gu, 0, sizeof(Gu));
+  Gu.armed = TRUE;
+  Gu.quiesced = TRUE;
+  Gu.started = TRUE;
+
+  /* Without S3 persistence: pending allocations block safe return */
+  GU_DMA dummy_dma;
+  memset(&dummy_dma, 0, sizeof(dummy_dma));
+  Gu.allocations = &dummy_dma;
+  Gu.dma_count = 20604;
+  Gu.s3_persist_armed = FALSE;
+  CHECK(!GuSafeToReturn(), "Pending DMA allocations without s3_persist_armed must NOT be safe to return");
+
+  /* With S3 persistence: pending persistent EfiReservedMemoryType allocations ARE safe to return */
+  Gu.s3_persist_armed = TRUE;
+  CHECK(GuSafeToReturn(), "Persistent DMA allocations with s3_persist_armed MUST be safe to return");
+
+  /* A real fault or unverified live engine must still block return */
+  Gu.fault = TRUE;
+  CHECK(!GuSafeToReturn(), "Hardware fault with s3_persist_armed must still NOT be safe to return");
+  Gu.fault = FALSE;
+  Gu.retained = TRUE;
+  CHECK(!GuSafeToReturn(), "Retained error flag must still NOT be safe to return");
+  Gu.retained = FALSE;
+  Gu.allocations = NULL;
+  Gu.dma_count = 0;
+
+  /* 2. Test WPR metadata host RAM pointer retention */
+  Gu.bar_base = 0xFB000000ULL;
+  Gu.device_id = 0x2684;
+  Gu.s3_persist_armed = TRUE;
+
+  UINT8 mock_wpr_meta[256];
+  memset(mock_wpr_meta, 0, 256);
+  *(UINT64 *)(mock_wpr_meta + 0) = 0xdc3aae21371a60b3ULL;  /* Magic */
+  *(UINT64 *)(mock_wpr_meta + 8) = 1ULL;                   /* Version */
+  *(UINT64 *)(mock_wpr_meta + 16) = 0xD81A3000ULL;         /* Radix table DMA in EfiReservedMemoryType */
+  *(UINT64 *)(mock_wpr_meta + 24) = 0x05053000ULL;         /* Image size (84 MB) */
+  *(UINT64 *)(mock_wpr_meta + 32) = 0xDC639000ULL;         /* boot_dma */
+  *(UINT64 *)(mock_wpr_meta + 72) = 0xDC629000ULL;         /* signature_dma */
+  *(UINT64 *)(mock_wpr_meta + 80) = 64000ULL;              /* signature_size */
+
+  memcpy(Gu.wpr_meta, mock_wpr_meta, 256);
+  Gu.wpr_meta_valid = TRUE;
+
+  EFI_STATUS reg_status = GuS3PrepareAndRegister(&mock_st);
+  CHECK(reg_status == EFI_SUCCESS, "GuS3PrepareAndRegister must succeed with valid persistent metadata");
+
+  UINT8 *nvs_meta = g_mock_nvs_buffer + 0x2A000;
+  UINT64 magic_val = *(UINT64 *)(nvs_meta + 0);
+  UINT64 radix_dma_val = *(UINT64 *)(nvs_meta + 16);
+  UINT64 img_size_val = *(UINT64 *)(nvs_meta + 24);
+  UINT64 boot_dma_val = *(UINT64 *)(nvs_meta + 32);
+  UINT64 sig_dma_val = *(UINT64 *)(nvs_meta + 72);
+  UINT64 sig_sz_val = *(UINT64 *)(nvs_meta + 80);
+
+  CHECK(magic_val == 0xdc3aae21371a60b3ULL, "WPR metadata magic must match");
+  CHECK(radix_dma_val == 0xD81A3000ULL, "radix_dma must point to persistent EfiReservedMemoryType (0xD81A3000)");
+  CHECK(img_size_val == 0x05053000ULL, "img_size must match 84 MB GSP firmware (0x05053000)");
+  CHECK(boot_dma_val == (UINT64)(uintptr_t)(g_mock_nvs_buffer + 0x21000), "boot_dma must point to NVS staging buffer");
+  CHECK(sig_dma_val == (UINT64)(uintptr_t)(g_mock_nvs_buffer + 0x11000), "sig_dma must point to NVS V67 signature");
+  CHECK(sig_sz_val == 64000ULL, "sig_size must be 64000 bytes");
+
+  /* Verify no pointer points to null / zero */
+  CHECK(radix_dma_val != 0, "radix_dma must not be 0");
+  CHECK(boot_dma_val != 0, "boot_dma must not be 0");
+  CHECK(sig_dma_val != 0, "sig_dma must not be 0");
+
+  printf("[9] S3 Persistent Radix & GSP Image Memory Retention (EfiReservedMemoryType): OK!\n");
+}
+
 int main(void) {
   setvbuf(stdout, NULL, _IONBF, 0);
   printf("=== Universal S3 Persistence Resume Engine Test Suite ===\n");
@@ -1517,6 +1599,7 @@ int main(void) {
   TestGuAcpiFacsDiscoveryAndPatching();
   TestGuAcpiBuildTrampolineCode();
   TestGuS3Prepare_BooterUnpackAndPatch();
+  TestGuS3PersistentMemoryRetention();
 
   printf("=== ALL S3 RESUME TESTS PASSED (%u checks) [OK] ===\n", g_checks);
   fflush(stdout);

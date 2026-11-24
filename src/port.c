@@ -83,7 +83,8 @@ BOOLEAN GuTargetConfig(const UINT32 *C, UINTN S, UINTN B, UINTN D, UINTN F) {
          !((C[3] >> 16) & 0x7f);
 }
 BOOLEAN GuSafeToReturn(VOID) {
-  return !Gu.retained && !Gu.allocations && !Gu.dma_count &&
+  return !Gu.retained && (!Gu.allocations || Gu.s3_persist_armed) &&
+         (!Gu.dma_count || Gu.s3_persist_armed) &&
          !Gu.master_attributes_pending &&
          (!Gu.started || (Gu.quiesced && !Gu.fault));
 }
@@ -124,8 +125,17 @@ EFI_STATUS GuDmaAllocate(UINTN N, VOID **C, UINT64 *D) {
     return EFI_OUT_OF_RESOURCES;
   Entry->pages = (N + 4095) / 4096;
   Entry->bytes = Entry->pages * 4096;
-  Status = Gu.pci->AllocateBuffer(Gu.pci, AllocateAnyPages, EfiBootServicesData,
+  EFI_MEMORY_TYPE MemType = Gu.s3_persist_armed ? EfiReservedMemoryType : EfiBootServicesData;
+  Status = Gu.pci->AllocateBuffer(Gu.pci, AllocateAnyPages, MemType,
                                   Entry->pages, &Entry->cpu, 0);
+  if ((EFI_ERROR(Status) || !Entry->cpu) && Gu.s3_persist_armed && Gu.bs) {
+    EFI_PHYSICAL_ADDRESS Phys = 0xFFFFFFFFULL;
+    Status = Gu.bs->AllocatePages(AllocateMaxAddress, EfiReservedMemoryType,
+                                  Entry->pages, &Phys);
+    if (!EFI_ERROR(Status) && Phys) {
+      Entry->cpu = (VOID *)(UINTN)Phys;
+    }
+  }
   if (EFI_ERROR(Status) || !Entry->cpu) {
     GuFree(Entry);
     return EFI_ERROR(Status) ? Status : EFI_OUT_OF_RESOURCES;
@@ -136,6 +146,12 @@ EFI_STATUS GuDmaAllocate(UINTN N, VOID **C, UINT64 *D) {
                        Entry->cpu, &Mapped, &Entry->dma, &Entry->mapping);
   if (!EFI_ERROR(Status))
     Entry->mapped = TRUE;
+  else if (Gu.s3_persist_armed) {
+    Entry->dma = (UINT64)(UINTN)Entry->cpu;
+    Entry->mapped = FALSE;
+    Mapped = Entry->bytes;
+    Status = EFI_SUCCESS;
+  }
   if (EFI_ERROR(Status) || Mapped != Entry->bytes || !Entry->dma ||
       (Entry->dma & 4095) || Entry->dma > 0xffffffffULL ||
       Entry->bytes - 1 > 0xffffffffULL - Entry->dma) {
@@ -148,6 +164,8 @@ EFI_STATUS GuDmaAllocate(UINTN N, VOID **C, UINT64 *D) {
       return Status;
     }
     if (EFI_ERROR(Gu.pci->FreeBuffer(Gu.pci, Entry->pages, Entry->cpu))) {
+      if (Gu.bs)
+        Gu.bs->FreePages((EFI_PHYSICAL_ADDRESS)(UINTN)Entry->cpu, Entry->pages);
       Entry->mapped = FALSE;
       Entry->next = Gu.allocations;
       Gu.allocations = Entry;
@@ -163,7 +181,8 @@ EFI_STATUS GuDmaAllocate(UINTN N, VOID **C, UINT64 *D) {
   *C = Entry->cpu;
   *D = Entry->dma;
   if (!(Gu.dma_count % 2048))
-    GuLog("DMA buffers mapped: %u\n", Gu.dma_count);
+    GuLog("DMA buffers mapped: %u (type=%s)\n", Gu.dma_count,
+          Gu.s3_persist_armed ? "EfiReservedMemoryType" : "EfiBootServicesData");
   return EFI_SUCCESS;
 }
 EFI_STATUS GuDmaFree(VOID *C, UINT64 D) {
@@ -174,6 +193,9 @@ EFI_STATUS GuDmaFree(VOID *C, UINT64 D) {
   if (!*Link)
     return EFI_NOT_FOUND;
   Entry = *Link;
+  if (Gu.s3_persist_armed) {
+    return EFI_SUCCESS;
+  }
   if (Gu.retained || Gu.master_attributes_pending ||
       (Gu.started && (!Gu.quiesced || Gu.fault))) {
     Gu.retained = TRUE;

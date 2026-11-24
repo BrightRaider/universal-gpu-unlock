@@ -148,6 +148,9 @@ static EFI_STATUS RunStock(VOID) {
 static EFI_STATUS RunUnlock(EFI_SYSTEM_TABLE *t, EFI_HANDLE image,
                             const GU_DISCOVERED_DEVICE *gpu, UINTN device_count,
                             BOOLEAN enable_s3) {
+  if (enable_s3) {
+    Gu.s3_persist_armed = TRUE;
+  }
   const char *stage = "assets";
   EFI_STATUS s = GuBootLoadAssets();
   if (s != EFI_SUCCESS || Gu.fault)

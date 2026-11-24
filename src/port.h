@@ -121,6 +121,7 @@ typedef struct {
   GU_DMA *allocations;
   BOOLEAN (*display_check)(VOID);
   BOOLEAN s3_registered;
+  BOOLEAN s3_persist_armed;
   EFI_STATUS s3_status;
   UINT8 wpr_meta[256];
   BOOLEAN wpr_meta_valid;
