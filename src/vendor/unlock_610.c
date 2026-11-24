@@ -1535,6 +1535,8 @@ static int publish_v67(struct unlock_transaction_work *work)
 		return GU_RESULT(ret);
 	dma_wmb();
 	work->published = true;
+	memcpy(Gu.wpr_meta, work->meta_cpu, 256);
+	Gu.wpr_meta_valid = true;
 	return 0;
 }
 

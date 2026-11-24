@@ -185,9 +185,27 @@ EFI_STATUS GuS3PrepareAndRegister(EFI_SYSTEM_TABLE *t) {
     ctx->boot_size = (UINT32)GuAssets[3].firmware.size;
     memcpy(nvs_base + 0x21000, GuAssets[3].firmware.data, ctx->boot_size);
   }
-  if (GuAssets[4].firmware.data && GuAssets[4].firmware.size) {
+  if (Gu.wpr_meta_valid) {
+    ctx->meta_size = 256;
+    memcpy(nvs_base + 0x2A000, Gu.wpr_meta, 256);
+    /* Re-target internal DMA buffer pointers inside the persistent WPR metadata:
+     * +32: boot_dma (8 bytes) -> nvs_phys + 0x21000
+     * +72: signature_dma (8 bytes) -> nvs_phys + 0x11000
+     * +80: signature_size (8 bytes) -> 64000
+     */
+    UINT8 *meta_pkt = nvs_base + 0x2A000;
+    UINT64 boot_dma_val = (UINT64)(nvs_phys + 0x21000);
+    UINT64 sig_dma_val = (UINT64)(nvs_phys + 0x11000);
+    UINT64 sig_size_val = 64000ULL;
+    memcpy(meta_pkt + 32, &boot_dma_val, sizeof(UINT64));
+    memcpy(meta_pkt + 72, &sig_dma_val, sizeof(UINT64));
+    memcpy(meta_pkt + 80, &sig_size_val, sizeof(UINT64));
+  } else if (GuAssets[4].firmware.data && GuAssets[4].firmware.size) {
     ctx->meta_size = (UINT32)GuAssets[4].firmware.size;
     memcpy(nvs_base + 0x2A000, GuAssets[4].firmware.data, ctx->meta_size);
+    /* Ensure WPR magic is populated for AD102 even in fallback */
+    UINT64 wpr_magic = 0xdc3aae21371a60b3ULL;
+    memcpy(nvs_base + 0x2A000, &wpr_magic, sizeof(UINT64));
   }
 
   /* Copy the self-contained GuS3ResumeDispatch PIC machine code into the ACPI NVS buffer.

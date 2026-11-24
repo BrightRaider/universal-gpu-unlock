@@ -122,6 +122,8 @@ typedef struct {
   BOOLEAN (*display_check)(VOID);
   BOOLEAN s3_registered;
   EFI_STATUS s3_status;
+  UINT8 wpr_meta[256];
+  BOOLEAN wpr_meta_valid;
 } GU_PLATFORM;
 extern GU_PLATFORM Gu;
 

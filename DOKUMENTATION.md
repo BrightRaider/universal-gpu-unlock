@@ -1103,20 +1103,37 @@ Mit `v1.8.54` habe ich den Durchbruch für den vollständigen AD102 Tensor Core 
    - Alle 8.714 Checks in 10 MSVC Host Test Suites erfolgreich (`MSVC_HOST_TESTS=PASS`).
    - Vollständiger 4-Stufen-PCIe-Teardown, 0 CMOS/RTC-Mutation, `OspmFlags = 0`.
 
-### 13.27 Die v1.8.55 Erweiterung: Desktop Ada Lovelace Whitelist (RTX 4060 Ti & RTX 4060)
-In Version `v1.8.55` habe ich die Hardware-Erkennung für die Desktop-Modelle der Ada-Lovelace-Mittelklasse vervollständigt:
-- **Hintergrund:** Die Firmware-Payloads in `AD102-ASSETS` (SEC2-Booter, RISC-V GSP-Firmware und die V67 PLM-Rate-Limiter-Bypass-Sequenz) sind architekturweit für alle Ada-Chips (AD102, AD103, AD104, AD106, AD107) identisch. Allerdings enthielt die C-Header-Whitelist `src/gpu_device_ids.h` für AD106 und AD107 bisher primär Mobile-IDs (`0x2860` und `0x2882`).
-- **Erweiterte Device-IDs in `GU_ADA_DEVICE_IDS`:**
-  - `0x2803`: NVIDIA GeForce RTX 4060 Ti 8GB Desktop (AD106)
-  - `0x2805`: NVIDIA GeForce RTX 4060 Ti 16GB Desktop (AD106)
-  - `0x2807`: NVIDIA GeForce RTX 4060 Ti OEM / Board-Partner-Variante (AD106)
-  - `0x2860`: NVIDIA GeForce RTX 4060 Ti Mobile (AD106)
-  - `0x2882`: NVIDIA GeForce RTX 4060 Desktop (AD107)
-  - `0x28a0`: NVIDIA GeForce RTX 4060 Laptop (AD107)
-- **Verifikation & Testbench:**
-  - Integration in `tests/test_turing_local.c` für PCI-ID-Matching (`GuIsSupportedPciId` für `0x280310de`, `0x280510de`, `0x288210de`).
-  - Re-Kompilierung von `BOOTX64.EFI` und `AdaUnlockDxe.efi` mit gültiger Authenticode-Signatur.
-  - Alle Host-Tests erfolgreich (`MSVC_HOST_TESTS=PASS`).
+### 13.27 Die v1.8.55 Architektur: WPR-Metadaten-Persistenz in ACPI NVS, SEC2 Falcon DMA-Präzisierung & Code-Envelope-Optimierung
+In Version `v1.8.55` habe ich die Hardware- und Firmware-Anforderungen des AD102 SEC2 Falcon-Booters beim S3-Wake vollständig adressiert und die S3-Resume-Architektur gehärtet:
+
+1. **WPR-Metadaten-Persistenz in ACPI NVS (`src/port.h`, `src/vendor/unlock_610.c`, `src/s3_resume.c`):**
+   - **Hintergrund:** Bei AD102 (Falcon 2 / RISC-V Architektur) benötigt der Booter an der in Mailbox 0 (`0x00840040`) übergebenen physischen Adresse (`meta_dma`) ein valides 256-Byte WPR-Metadatenpaket mit Magic `0xdc3aae21371a60b3` (`GU_WPR_META_MAGIC`).
+   - **Implementierung:**
+     - In `src/port.h` habe ich `UINT8 wpr_meta[256]` und `BOOLEAN wpr_meta_valid` in `GU_PLATFORM` integriert.
+     - In `src/vendor/unlock_610.c` (`publish_v67`) sichere ich das von `gpu_unlock_wpr_meta_pack` generierte 256-Byte-Paket vollständig nach `Gu.wpr_meta`.
+     - In `src/s3_resume.c` (`GuS3PrepareAndRegister`) wird das Metadatenpaket beim Cold-Boot persistent nach `nvs_base + 0x2A000` (`meta_dma`) geschrieben.
+     - Die internen Puffer-Pointer der Metadaten werden auf die persistenten ACPI NVS Allokationen umgebogen:
+       - `boot_dma` (`+32`) -> `nvs_phys + 0x21000`
+       - `signature_dma` (`+72`) -> `nvs_phys + 0x11000`
+       - `signature_size` (`+80`) -> `64000`
+
+2. **Präzisierung des 32-Bit Flat-Mode DMA-Interfaces (`src/s3_facs.c`):**
+   - **Analogie zu `falcon_dma` in `unlock_610.c`:**
+     - IMEM DMA: Basisadresse `[ebx + 0x00840110] = booter_dma >> 8`, 125 Chunks (32.000 Bytes Microcode) ab Offset 256, Cmd `0x0614`. Nach Abschluss des Transfers folgt ein zwingendes Bounded Completion-Polling auf `[ebx + 0x00840118] & 2 == 2`.
+     - DMEM DMA: Basisadresse `[ebx + 0x00840110] = (booter_dma + 32256) >> 8`, 96 Chunks (24.576 Bytes Daten) ab Offset 0, Cmd `0x0600`. Nach Abschluss folgt ebenfalls das Bounded Completion-Polling auf `[ebx + 0x00840118] & 2 == 2`.
+
+3. **Härtung der Falcon CPU Start- & Polling-Logik (`src/s3_facs.c`):**
+   - Startregister: `[ebx + 0x00840100] = 2` und Mailbox 1 `[ebx + 0x00840044] = 0`.
+   - Um einen vorzeitigen Abbruch der Polling-Schleife durch ein noch anliegendes Halt-Bit (`0x10`) im allerersten Takt zu verhindern, prüft die Schleife primär auf den Marker `0x67B00001` in Mailbox 0 (`0x00840040`). Erst wenn `Mailbox 0 != meta_dma` ist (die CPU also angelaufen ist und Mailbox 0 modifiziert hat), wird `CPUCTL & 0x10` als regulärer Abschluss gewertet.
+
+4. **Code-Envelope-Optimierung (< 1280 Bytes):**
+   - Durch Deduplizierung der 'UNLK'-Magic im Teardown, `cmp eax, -1` (`83 F8 FF`), Single-Byte Status-Dekrement (`dec eax`), Byte-Register-Zähler in den Dummy-Loops und optimierte Port-Umschaltung konnte ich den Trampolin-Code von 1288 Bytes auf **1257 Bytes** komprimieren.
+   - Der Code liegt damit 23 Bytes unter dem harten 1280-Byte-Limit (`< 0x0500`), wodurch die Telemetrie- und Vektordaten ab `0x0500` absolut unberührt bleiben.
+
+5. **Desktop Ada Lovelace Whitelist-Erweiterung (RTX 4060 Ti & RTX 4060):**
+   - Ergänzung der PCI-IDs `0x2803`, `0x2805`, `0x2807` (RTX 4060 Ti Desktop AD106) sowie `0x2882`, `0x28a0` (RTX 4060 AD107) in `src/gpu_device_ids.h`.
+   - Alle 8.714 Checks in 10 MSVC Host Test Suites erfolgreich (`MSVC_HOST_TESTS=PASS`).
+   - Authenticode-signierte Binaries `BOOTX64.EFI` und `AdaUnlockDxe.efi` erfolgreich gebaut, verifiziert und auf USB-Laufwerk `F:` synchronisiert.
 
 
 

@@ -8,17 +8,23 @@ For packaged binaries and downloads, visit [GitHub Releases](https://github.com/
 
 ## [v1.8.55] - 2026-11-24
 ### Added & Fixed
-- **Desktop Ada Lovelace AD106 & AD107 Whitelist & Verification (addresses #21):**
-  - Ergänzung der Desktop-PCI-IDs für die Ada-Lovelace-Mittelklasse in `src/gpu_device_ids.h`:
-    - `0x2803`: NVIDIA GeForce RTX 4060 Ti 8GB Desktop (AD106)
-    - `0x2805`: NVIDIA GeForce RTX 4060 Ti 16GB Desktop (AD106)
-    - `0x2807`: NVIDIA GeForce RTX 4060 Ti Variant / OEM (AD106)
-    - `0x2882`: NVIDIA GeForce RTX 4060 Desktop (AD107)
-    - `0x28a0`: NVIDIA GeForce RTX 4060 Laptop (AD107)
-  - Vollständige Kompatibilität mit dem bestehenden, einheitlichen Payload-Satz in `AD102-ASSETS/` (`booter_load_ad102.bin`, `gsp_boot_ad102.bin`, `v67-ad102-610.43.03-four-plm.bin`, `gsp_ga10x.bin`).
-  - Erweiterung der Unit-Tests in `tests/test_turing_local.c` für `GuIsSupportedPciId` auf die neuen Device-IDs.
-  - Re-Kompilierung und Authenticode-Signierung der EFI-Binaries `bin/BOOTX64.EFI` und `bin/AdaUnlockDxe.efi`.
-  - Aktualisierung der Hardware-Kompatibilitätsmatrix in `README.md` und `DOKUMENTATION.md`.
+- **WPR-Metadaten-Persistenz in ACPI NVS & Präzisierung des S3-Wake Falcon DMA-Interfaces (addresses #19):**
+  - **Forensische Analyse der S3-Resume Booter-Ausführung:**
+    - Nach dem erfolgreichen Falcon2 BCR-Switch (`FALCON2_BCR_Post = 0x00000001`) und CPU-Reset (`CPUCTL_Post = 0x10`) in v1.8.53/v1.8.54 benötigte der AD102 SEC2 RISC-V Booter valide WPR-Metadaten an `meta_dma` (`0x00840040`) sowie eine getrennte DMA-Programmierung für IMEM und DMEM mit zwingendem Completion-Polling.
+  - **Gepackte 256-Byte WPR-Metadaten in ACPI NVS (`src/port.h`, `src/vendor/unlock_610.c`, `src/s3_resume.c`):**
+    - Sicherung des kompletten von `gpu_unlock_wpr_meta_pack` erzeugten 256-Byte-Pakets (inkl. Magic `0xdc3aae21371a60b3`) in `Gu.wpr_meta`.
+    - Beim Cold-Boot Übertragung der Metadaten nach `nvs_base + 0x2A000` (`meta_dma`).
+    - Re-Targeting der internen Puffer-Pointer auf die persistenten ACPI NVS Allokationen (`boot_dma` -> `nvs_phys + 0x21000`, `signature_dma` -> `nvs_phys + 0x11000`, `signature_size` -> `64000`).
+  - **Präzisierung des 32-Bit Flat-Mode DMA-Interfaces (`src/s3_facs.c`):**
+    - IMEM: Basis `0x00840110 = booter_dma >> 8`, 125 Chunks (32.000 Bytes, Cmd `0x0614`) ab Offset 256, gefolgt von Bounded Completion-Poll auf `(0x00840118 & 2) == 2`.
+    - DMEM: Basis `0x00840110 = (booter_dma + 32256) >> 8`, 96 Chunks (24.576 Bytes, Cmd `0x0600`) ab Offset 0, gefolgt von Bounded Completion-Poll auf `(0x00840118 & 2) == 2`.
+  - **Härtung der Falcon CPU Start- und Bounded Polling-Logik:**
+    - Start via `[ebx + 0x00840100] = 2` und Mailbox 1 `[ebx + 0x00840044] = 0`.
+    - Verhinderung eines vorzeitigen Abbruchs durch ein noch anliegendes Halt-Bit (`0x10`) im Starttakt: Polling prüft primär auf Marker `0x67B00001` in Mailbox 0 (`0x00840040`); CPUCTL Halt wird erst ausgewertet, wenn `Mailbox 0 != meta_dma`.
+  - **Code Envelope & Effizienz:**
+    - Trampolin-Größe von 1288 Bytes durch Beseitigung redundanter Teardown-Magics, Register-Wiederverwendung und Instruction-Sizing auf **1257 Bytes** komprimiert (23 Bytes Sicherheitsmarge vor der Telemetrie-Grenze bei `0x0500`).
+    - Alle 8.714 Checks in 10 MSVC Host Test Suites erfolgreich (`MSVC_HOST_TESTS=PASS`).
+    - Vollständiger 4-Stufen-PCIe-Teardown, 0 CMOS/RTC-Mutation, `OspmFlags = 0`.
 
 ## [v1.8.54] - 2026-11-24
 ### Added & Fixed
