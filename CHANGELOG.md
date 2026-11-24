@@ -6,6 +6,40 @@ For packaged binaries and downloads, visit [GitHub Releases](https://github.com/
 
 ---
 
+## [v1.8.58] - 2026-11-24
+### Added & Fixed
+- **1:1 SEC2 Engine Reset Cycle (`src/vendor/unlock_610.c:1614-1674`), 5-Stufen-PCIe-Teardown & S3-Wake Crash-Dump Forensik (addresses #19):**
+  - **Forensische Crash-Dump-Analyse des S3-Wake Black Screens (`C:\Windows\MEMORY.DMP`):**
+    - BugCheck `0x0000007E` (`SYSTEM_THREAD_EXCEPTION_NOT_HANDLED`).
+    - Parameter 1: `0xFFFFFFFF80000003` (`STATUS_BREAKPOINT`).
+    - Parameter 2: `0xFFFFF801993BF4DE` (`nvlddmkm.sys + 0x25BF4DE`, Treiberversion 621.14 / 32.0.16.2114).
+    - Ursache: Im Desktop-S3 (D3cold) ist der GPU-VRAM nicht im Self-Refresh, sondern bis zum `nvlddmkm.sys`-Devinit uninitialisiert. Die Crash-Instruktion (`cmp byte ptr [rax], 0; je ...; int 3`) zeigte eine Fail-Fast-Assertion des Treibers beim Resume.
+  - **Exakter 1:1 SEC2 Reset-Zyklus (`hold_sec2_reset()`, `src/vendor/unlock_610.c:1614-1674`):**
+    - Subroutine `.sec2_reset_cycle` im 32-Bit-Trampolin (`src/s3_facs.c`):
+      1. Reset anlegen: `0x008403C0 |= 1`
+      2. 10 Dummy-Reads auf `0x008403C0`
+      3. Bounded-Poll bis Reset aktiv (`0x008403C0 & 1 == 1`)
+      4. Reset freigeben: `0x008403C0 &= ~1` (`RESET_FALSE`)
+      5. 10 Dummy-Reads auf `0x008403C0`
+      6. Bounded-Poll bis Reset gelöst (`0x008403C0 & 1 == 0`)
+      7. Bounded-Poll auf HWCFG2 Memory-Scrubbing-Ende: `(0x008400F4 & 0x1000) == 0` (Bit 12)
+    - Stackfreier Aufruf via `mov ebp, return_addr; jmp .sec2_reset_cycle; jmp ebp` vor dem Booter-Start und nach dem Selector-Write.
+    - SEC2 wird sauber im Zustand `RESET_FALSE` hinterlassen (kein Hängenbleiben des Treibers an `FECS_PRI_RESET` `0xbadf12`).
+    - Keine verfrühten oder ungültigen Writes auf BCR `0x00841668` oder `0x00840084` im Post-Unlock-Pfad.
+  - **Sauberer 5-Stufen-PCIe-Teardown mit Bridge-Routing-Erhalt (`src/s3_facs.c`):**
+    - Um die PCIe-Hierarchie während der gesamten 32-Bit-Ausführung stabil zu halten, wird das Root-Port-Bus-Routing erst ganz am Schluss restauriert:
+      - Stufe 1: GPU Command/Status Register (`0x802D0004`)
+      - Stufe 2: GPU BAR0 Basisadresse (`0x802D0010`)
+      - Stufe 3: Root Port Memory Base/Limit (`0x80001920`)
+      - Stufe 4: Root Port Command/Status Register (`0x80001904`)
+      - Stufe 5: Root Port Secondary/Subordinate Bus Numbers (`0x80001918`) als allerletzter Teardown-Schritt.
+  - **Telemetrie-Spiegelung & Speichergrenzen:**
+    - Telemetrie-Spiegelung (`rep movsd` von 24 DWORDs = 96 Bytes nach `TrampolinePhys + 0x0580`) explizit per Assert gegen `RM_IDTR` (`+0x0600`) abgesichert (`0x0580 + 0x60 = 0x05E0 < 0x0600`).
+    - Trampolin-Größe liegt bei exakt **1277 Bytes** und hält das 1280-Byte-Code-Envelope (`< 0x0500`) strikt ein.
+  - **Test-Suite & Regressionsschutz (`tests/test_s3_resume.c`):**
+    - Disassembler-Asserts für die 5 Teardown-Stufen, `.sec2_reset_cycle`-Subroutine und Speichergrenzen.
+    - Alle 10 Test-Suites PASS (8720 Checks).
+
 ## [v1.8.57] - 2026-11-24
 ### Added & Fixed
 - **Entpacken des Booter-Container-Headers & dynamisches Fuse-Signatur-Patching in ACPI NVS (addresses #19):**

@@ -1,4 +1,5 @@
 /* SPDX-License-Identifier: GPL-2.0-only */
+#define GU_S3_HOST_TEST 1
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -707,26 +708,25 @@ static void TestGuAcpiBuildTrampolineCode(void) {
       num_ins_16++;
     }
   }
-  CHECK(num_outs_16 >= 8, "16-bit trampoline must contain at least 8 32-bit OUT instructions (66 EF)");
-  CHECK(num_ins_16 >= 5, "16-bit trampoline must contain at least 5 32-bit IN instructions (66 ED)");
+  CHECK(num_outs_16 >= 4, "16-bit trampoline must contain at least 4 32-bit OUT instructions (66 EF)");
+  CHECK(num_ins_16 >= 2, "16-bit trampoline must contain at least 2 32-bit IN instructions (66 ED)");
 
-  /* Explicit Sanity Check 2: Verify exact contiguous bridge restore sequence (20 bytes) */
-  static const UINT8 kExpectedBridgeRestore[20] = {
-    0x66, 0xB8, 0x18, 0x19, 0x00, 0x80, /* mov eax, 0x80001918 */
-    0xBA, 0xF8, 0x0C,                   /* mov dx, 0x0CF8 */
-    0x66, 0xEF,                         /* out dx, eax */
-    0x66, 0xA1, 0x48, 0x05,             /* mov eax, [0x0548] */
-    0xBA, 0xFC, 0x0C,                   /* mov dx, 0x0CFC */
-    0x66, 0xEF                          /* out dx, eax */
+  /* Explicit Sanity Check 2: Verify exact contiguous bridge restore sequence in 32-bit PM teardown */
+  static const UINT8 kExpectedBridgeRestore[] = {
+    0xB2, 0xF8,                         /* mov dl, 0xF8 */
+    0xB8, 0x18, 0x19, 0x00, 0x80,       /* mov eax, 0x80001918 */
+    0xEF,                               /* out dx, eax */
+    0xB2, 0xFC,                         /* mov dl, 0xFC */
+    0xA1                                /* mov eax, [disp32] */
   };
   BOOLEAN found_exact_restore = FALSE;
-  for (UINT32 i = 0; i <= bytes - sizeof(kExpectedBridgeRestore); i++) {
+  for (UINT32 i = pm32_offset; i <= bytes - sizeof(kExpectedBridgeRestore); i++) {
     if (memcmp(buffer + i, kExpectedBridgeRestore, sizeof(kExpectedBridgeRestore)) == 0) {
       found_exact_restore = TRUE;
       break;
     }
   }
-  CHECK(found_exact_restore, "Trampoline must contain exact contiguous bridge restore sequence (66 B8 18 19 00 80 ...)");
+  CHECK(found_exact_restore, "Trampoline teardown must contain exact contiguous bridge restore sequence (B2 F8 B8 18 19 00 80 ...)");
 
   /* Explicit Sanity Check 2b: Verify 16-bit trampoline is 100% stack-free (no push eax 66 50 or pop eax 66 58) */
   BOOLEAN found_stack_op = FALSE;
@@ -803,8 +803,11 @@ static void TestGuAcpiBuildTrampolineCode(void) {
     else if (buffer[i] == 0xC7 && buffer[i+1] == 0x06 && buffer[i+2] == 0x10 && buffer[i+3] == 0x05 && buffer[i+4] == 0x01) { instr_len = 6; desc = "mov word [0x0510], 0xAA01        ; Checkpoint 1: Entry"; }
     else if (buffer[i] == 0xC7 && buffer[i+1] == 0x06 && buffer[i+2] == 0x10 && buffer[i+3] == 0x05 && buffer[i+4] == 0xAD) { instr_len = 6; desc = "mov word [0x0510], 0xDEAD        ; Fault: No Waking Vector"; }
     else if (buffer[i] == 0xBE && buffer[i+1] == 0x20 && buffer[i+2] == 0x05) { instr_len = 3; desc = "mov si, 0x0520                   ; Probe addresses table"; }
+    else if (buffer[i] == 0xBE && buffer[i+1] == 0x30 && buffer[i+2] == 0x05) { instr_len = 3; desc = "mov si, 0x0530                   ; Post-arm probe addresses table"; }
     else if (buffer[i] == 0xBF && buffer[i+1] == 0x40 && buffer[i+2] == 0x05) { instr_len = 3; desc = "mov di, 0x0540                   ; Raw probe results destination"; }
+    else if (buffer[i] == 0xBF && buffer[i+1] == 0x60 && buffer[i+2] == 0x05) { instr_len = 3; desc = "mov di, 0x0560                   ; Post-arm probe results destination"; }
     else if (buffer[i] == 0xB9 && buffer[i+1] == 0x08 && buffer[i+2] == 0x00) { instr_len = 3; desc = "mov cx, 8                         ; Probe count = 8 dwords"; }
+    else if (buffer[i] == 0xB9 && buffer[i+1] == 0x04 && buffer[i+2] == 0x00) { instr_len = 3; desc = "mov cx, 4                         ; Probe count = 4 dwords"; }
     else if (buffer[i] == 0x66 && buffer[i+1] == 0x8B && buffer[i+2] == 0x04) { instr_len = 3; desc = ".probe_loop: mov eax, [si]       ; Read target 0xCF8 address"; }
     else if (buffer[i] == 0xBA && buffer[i+1] == 0xF8 && buffer[i+2] == 0x0C && buffer[i+3] == 0x00 && buffer[i+4] == 0x00) { instr_len = 5; desc = "mov edx, 0x0CF8"; }
     else if (buffer[i] == 0xBA && buffer[i+1] == 0xFC && buffer[i+2] == 0x0C && buffer[i+3] == 0x00 && buffer[i+4] == 0x00) { instr_len = 5; desc = "mov edx, 0x0CFC"; }
@@ -857,6 +860,8 @@ static void TestGuAcpiBuildTrampolineCode(void) {
     else if (buffer[i] == 0x89 && buffer[i+1] == 0xF0) { instr_len = 2; desc = "mov eax, esi"; }
     else if (buffer[i] == 0x83 && buffer[i+1] == 0xE0 && buffer[i+2] == 0x0F) { instr_len = 3; desc = "and eax, 0x0F                   ; Offset = AX & 0x0F"; }
     else if (buffer[i] == 0xC1 && buffer[i+1] == 0xEE && buffer[i+2] == 0x04) { instr_len = 3; desc = "shr esi, 4                      ; Segment = ESI >> 4"; }
+    else if (buffer[i] == 0xC1 && buffer[i+1] == 0xE6 && buffer[i+2] == 0x10) { instr_len = 3; desc = "shl esi, 16                      ; Pack segment into high word"; }
+    else if (buffer[i] == 0x09 && buffer[i+1] == 0xF0) { instr_len = 2; desc = "or eax, esi                       ; EAX = (Segment << 16) | Offset"; }
     else if (buffer[i] == 0x66 && buffer[i+1] == 0xA3) { instr_len = 5; desc = "mov [disp32], ax                ; Store target/telemetry offset"; }
     else if (buffer[i] == 0x66 && buffer[i+1] == 0x89 && buffer[i+2] == 0x35) { instr_len = 6; desc = "mov [disp32], si                ; Store target/telemetry segment"; }
     else if (buffer[i] == 0x66 && buffer[i+1] == 0xC7 && buffer[i+2] == 0x05) { instr_len = 9; desc = "mov word [0x0009E512], 0xAA02   ; Exit Checkpoint 0xAA02"; }
@@ -937,8 +942,16 @@ static void TestGuAcpiBuildTrampolineCode(void) {
     else if (buffer[i] == 0x85 && buffer[i+1] == 0xC0) { instr_len = 2; desc = "test eax, eax"; }
     else if (buffer[i] == 0x75) { instr_len = 2; desc = "jnz <rel8>"; }
     else if (buffer[i] == 0xEB) { instr_len = 2; desc = "jmp short .teardown"; }
+    else if (buffer[i] == 0xBD) { instr_len = 5; desc = "mov ebp, ret_target             ; Link subroutine return address"; }
+    else if (buffer[i] == 0xE9) { instr_len = 5; desc = "jmp near .sec2_sub_start        ; Call SEC2 reset subroutine"; }
+    else if (buffer[i] == 0xFF && buffer[i+1] == 0xE5) { instr_len = 2; desc = "jmp ebp                         ; Return from SEC2 reset subroutine"; }
+    else if (buffer[i] == 0xB1 && buffer[i+1] == 0x0A) { instr_len = 2; desc = "mov cl, 10                      ; 10 dummy read cycle counter"; }
+    else if (buffer[i] == 0xB1 && buffer[i+1] == 0x64) { instr_len = 2; desc = "mov cl, 100                     ; 100 poll cycle counter"; }
+    else if (buffer[i] == 0xFC) { instr_len = 1; desc = "cld                             ; Clear direction flag"; }
+    else if (buffer[i] == 0x31 && buffer[i+1] == 0xC9) { instr_len = 2; desc = "xor ecx, ecx                     ; Clear ECX"; }
     else if (buffer[i] == 0xB8 && buffer[i+1] == 0x04 && buffer[i+2] == 0x19 && buffer[i+3] == 0x00 && buffer[i+4] == 0x80) { instr_len = 5; desc = "mov eax, 0x80001904          ; Root Port 0:3:1 Cmd/Stat"; }
     else if (buffer[i] == 0xB8 && buffer[i+1] == 0x20 && buffer[i+2] == 0x19 && buffer[i+3] == 0x00 && buffer[i+4] == 0x80) { instr_len = 5; desc = "mov eax, 0x80001920          ; Root Port 0:3:1 MemBase/Limit"; }
+    else if (buffer[i] == 0xB8 && buffer[i+1] == 0x18 && buffer[i+2] == 0x19 && buffer[i+3] == 0x00 && buffer[i+4] == 0x80) { instr_len = 5; desc = "mov eax, 0x80001918          ; Root Port 0:3:1 Bus Numbers"; }
     else if (buffer[i] == 0xB8 && buffer[i+1] == 0x10 && buffer[i+2] == 0x00 && buffer[i+3] == 0x2D && buffer[i+4] == 0x80) { instr_len = 5; desc = "mov eax, 0x802D0010          ; GPU 45:0:0 BAR0"; }
     else if (buffer[i] == 0xB8 && buffer[i+1] == 0x04 && buffer[i+2] == 0x00 && buffer[i+3] == 0x2D && buffer[i+4] == 0x80) { instr_len = 5; desc = "mov eax, 0x802D0004          ; GPU 45:0:0 Cmd/Stat"; }
     else if (buffer[i] == 0xB8 && buffer[i+1] == 0x00 && buffer[i+2] == 0xFB && buffer[i+3] == 0x00 && buffer[i+4] == 0xFC) { instr_len = 5; desc = "mov eax, 0xFC00FB00          ; Root Port Mem Window 0xFB00..0xFC00"; }
@@ -1271,11 +1284,16 @@ static void TestGuAcpiBuildTrampolineCode(void) {
   }
   CHECK(found_unlk_magic, "Trampoline must write 'UNLK' (0x554E4C4B) to TelemetryPage + 0x80");
 
-  /* Verify PCI teardown restoration (GPU Command, GPU BAR0, Root Port MemWindow, Root Port Command) */
+  /* Verify 5-Stage PCI teardown restoration (GPU Cmd, GPU BAR0, Root Port MemWindow, Root Port Cmd, Root Port BusNum) */
+  BOOLEAN found_gpu_cmd_restore = FALSE;
   BOOLEAN found_gpu_bar0_restore = FALSE;
   BOOLEAN found_rp_mem_restore = FALSE;
   BOOLEAN found_rp_cmd_restore = FALSE;
+  BOOLEAN found_rp_bus_restore = FALSE;
   for (UINT32 i = pm32_offset; i < pm16_offset - 8; i++) {
+    if (buffer[i] == 0xB8 && *(UINT32 *)(buffer + i + 1) == 0x802D0004U) {
+      found_gpu_cmd_restore = TRUE;
+    }
     if (buffer[i] == 0xB8 && *(UINT32 *)(buffer + i + 1) == 0x802D0010U) {
       found_gpu_bar0_restore = TRUE;
     }
@@ -1285,10 +1303,26 @@ static void TestGuAcpiBuildTrampolineCode(void) {
     if (buffer[i] == 0xB8 && *(UINT32 *)(buffer + i + 1) == 0x80001904U) {
       found_rp_cmd_restore = TRUE;
     }
+    if (buffer[i] == 0xB8 && *(UINT32 *)(buffer + i + 1) == 0x80001918U) {
+      found_rp_bus_restore = TRUE;
+    }
   }
-  CHECK(found_gpu_bar0_restore, "Trampoline teardown must restore GPU BAR0 (0x802D0010)");
-  CHECK(found_rp_mem_restore, "Trampoline teardown must restore Root Port 0:3:1 Memory Base/Limit (0x80001920)");
-  CHECK(found_rp_cmd_restore, "Trampoline teardown must restore Root Port 0:3:1 Command Register (0x80001904)");
+  CHECK(found_gpu_cmd_restore, "Trampoline teardown Stage 1 must restore GPU Command (0x802D0004)");
+  CHECK(found_gpu_bar0_restore, "Trampoline teardown Stage 2 must restore GPU BAR0 (0x802D0010)");
+  CHECK(found_rp_mem_restore, "Trampoline teardown Stage 3 must restore Root Port 0:3:1 Memory Base/Limit (0x80001920)");
+  CHECK(found_rp_cmd_restore, "Trampoline teardown Stage 4 must restore Root Port 0:3:1 Command Register (0x80001904)");
+  CHECK(found_rp_bus_restore, "Trampoline teardown Stage 5 must restore Root Port 0:3:1 Bus Numbers (0x80001918)");
+
+  /* Verify Telemetry Mirroring and collision check */
+  BOOLEAN found_telem_low_rep_movsd = FALSE;
+  for (UINT32 i = pm32_offset; i < pm16_offset - 1; i++) {
+    if (buffer[i] == 0xF3 && buffer[i+1] == 0xA5) {
+      found_telem_low_rep_movsd = TRUE;
+      break;
+    }
+  }
+  CHECK(found_telem_low_rep_movsd, "Trampoline teardown must mirror telemetry using rep movsd (F3 A5)");
+  CHECK(0x0580U + (24U * 4U) <= GU_TRAMP_RM_IDTR_OFF, "Telemetry mirror buffer (+0x0580..+0x05DF) must not collide with RM_IDTR (+0x0600)");
 
   /* Verify 5-byte port address loads in 32-bit flat mode (no 2-byte phase shift) */
   BOOLEAN found_5byte_port_cf8 = FALSE;

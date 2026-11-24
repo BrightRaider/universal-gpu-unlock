@@ -15,7 +15,7 @@ New-Item -ItemType Directory -Force -Path $OutDir | Out-Null
 $src = Join-Path $repo 'src'
 $includes = @('.', 'compat', 'vendor', 'vendor\edk2\Include', 'vendor\edk2\Include\X64') |
     ForEach-Object { '/I"' + (Join-Path $src $_) + '"' }
-$flags = '/nologo /W3 /TC /D__KERNEL__ /DGU_UEFI_PORT /DGU_AD104_TRANSACTION /DGU_ENTRY_LATCHED_SS1_FULL /D_CRT_SECURE_NO_WARNINGS ' + ($includes -join ' ')
+$flags = '/nologo /W3 /TC /D__KERNEL__ /DGU_UEFI_PORT /DGU_AD104_TRANSACTION /DGU_ENTRY_LATCHED_SS1_FULL /D_CRT_SECURE_NO_WARNINGS /DGU_S3_HOST_TEST=1 ' + ($includes -join ' ')
 
 # Test name -> extra sources from src\ that the test links against.
 $tests = [ordered]@{

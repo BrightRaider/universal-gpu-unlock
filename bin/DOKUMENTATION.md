@@ -1155,6 +1155,96 @@ In Version `v1.8.57` habe ich die finale Ursache für den RISC-V Falcon Halt/Tra
    - Vollständiger 4-Stufen-PCIe-Teardown, 0 CMOS/RTC-Mutation, `OspmFlags = 0`.
    - Authenticode-signierte Binaries `BOOTX64.EFI` und `AdaUnlockDxe.efi` erfolgreich gebaut, signiert und auf alle 4 Zielpfade auf USB-Laufwerk `F:` synchronisiert.
 
+### 13.31 Die v1.8.58 Architektur: 1:1 SEC2 Engine Reset Cycle, 5-Stufen-PCIe-Teardown & S3-Wake Crash-Dump Forensik
+In Version `v1.8.58` habe ich die Post-Unlock- und Reset-Architektur für den AD102 SEC2 Falcon im S3-Wake vollständig gegen den Linux-Referenztreiber (`src/vendor/unlock_610.c`) harmonisiert, die Ursache für den Black Screen beim Wake isoliert und das PCIe-Teardown-Verhalten gehärtet:
+
+1. **Exakter 1:1 SEC2 Reset-Zyklus (`hold_sec2_reset()`, `unlock_610.c:1614-1674`):**
+   - Der Referenztreiber in `src/vendor/unlock_610.c` definiert den Engine-Reset von SEC2 wie folgt:
+   ```c
+   /* Reset SEC2 after FLR and leave it halted with reset released. Do not reset
+    * GSP here: stock RM first requires completed GFW and a halted GSP Falcon.
+    * ksec2ResetHw_TU102 ends with RESET_FALSE. Leaving RESET_TRUE makes later
+    * host reads return FECS_PRI_RESET (0xbadf12 in bits 31:8). RM's scrub wait
+    * treats that value as scrubbing-pending and does not finish.
+    */
+   static int hold_sec2_reset(struct unlock_transaction_work *work, const char *phase)
+   {
+       unsigned int j;
+       u32 engine, before, first = 0, hwcfg;
+       int ret;
+
+       if (read_bar(work, SEC2_BASE + 0x3c0, &engine) || inaccessible(engine))
+           return GU_RESULT(-ENODEV);
+       before = engine;
+       write_bar(work, SEC2_BASE + 0x3c0, engine | 1);
+       for (j = 0; j < 10; j++) {
+           if (read_bar(work, SEC2_BASE + 0x3c0, &engine) || inaccessible(engine))
+               return GU_RESULT(-EIO);
+           if (!j) first = engine;
+       }
+       ret = poll_us(work, SEC2_BASE + 0x3c0, 1, 1, 1000, true);
+       if (ret) return GU_RESULT(ret);
+       if (read_bar(work, SEC2_BASE + 0x3c0, &engine) || inaccessible(engine))
+           return GU_RESULT(-EIO);
+       write_bar(work, SEC2_BASE + 0x3c0, engine & ~1u);
+       for (j = 0; j < 10; j++) {
+           if (read_bar(work, SEC2_BASE + 0x3c0, &engine) || inaccessible(engine))
+               return GU_RESULT(-EIO);
+       }
+       ret = poll_us(work, SEC2_BASE + 0x3c0, 1, 0, 1000, true);
+       if (ret) return GU_RESULT(ret);
+       ret = poll_us(work, SEC2_BASE + 0xf4, 1u << 12, 0, 1000000, true);
+       if (ret) return GU_RESULT(ret);
+       if (read_bar(work, SEC2_BASE + 0xf4, &hwcfg) || inaccessible(hwcfg))
+           return GU_RESULT(-EIO);
+       return 0;
+   }
+   ```
+   - **Wesentliche Erkenntnisse:**
+     - SEC2 muss am Ende zwingend mit gelöstem Reset (`RESET_FALSE`, Bit 0 = 0) verlassen werden! Wird der Reset aktiv gelassen (`RESET_TRUE`), antwortet der Chip bei Host-Reads mit `FECS_PRI_RESET` (`0xbadf12`), wodurch das Scrubbing-Wait von `nvlddmkm.sys` in eine Endlosschleife läuft.
+     - `0x00841668` (`FALCON2_BCR`) schaltet vor dem Firmware-Start aus dem Boot-ROM-Modus um (`falcon_reset()`, Zeilen 485–495). Es ist **kein** Bestandteil des Post-Unlock-Cleanups und darf im Post-Unlock-Pfad keinesfalls erneut beschrieben werden.
+   - **Realisierung im 32-Bit-Trampolin (`src/s3_facs.c`):**
+     - Dedizierte, stackfreie Subroutine `.sec2_reset_cycle`:
+       1. `0x008403C0 |= 1` (Reset anlegen)
+       2. 10 Dummy-Reads auf `0x008403C0`
+       3. Bounded-Poll auf `0x008403C0 & 1 == 1`
+       4. `0x008403C0 &= ~1` (Reset lösen)
+       5. 10 Dummy-Reads auf `0x008403C0`
+       6. Bounded-Poll auf `0x008403C0 & 1 == 0`
+       7. Bounded-Poll auf HWCFG2 Memory Scrubbing Complete: `(0x008400F4 & 0x1000) == 0` (Bit 12)
+       8. Return via `jmp ebp`
+     - Aufruf erfolgt stack-free vor dem Booter-Start und nach dem Selector-Write.
+
+2. **Forensische Crash-Dump-Analyse des S3-Wake Black Screens (`C:\Windows\MEMORY.DMP`):**
+   - **BugCheck:** `0x0000007E` (`SYSTEM_THREAD_EXCEPTION_NOT_HANDLED`).
+   - **P1:** `0xFFFFFFFF80000003` (`STATUS_BREAKPOINT`).
+   - **P2:** `0xFFFFF801993BF4DE` (`nvlddmkm.sys + 0x25BF4DE`, Treiberversion 621.14 / 32.0.16.2114).
+   - **Absturz-Code:**
+     ```asm
+     fffff801`993bf4d2 mov  rax, qword ptr [fffff801`9890e6b8]
+     fffff801`993bf4d9 cmp  byte ptr [rax], 0
+     fffff801`993bf4dc je   fffff801`993bf4df
+     fffff801`993bf4de int  3           ; Fail-Fast Treiber-Assertion
+     ```
+   - **Hardware-Zusammenhang D3cold vs. S3:**
+     - Im Desktop-S3 (Suspend-to-RAM) verbleibt der System-Arbeitsspeicher im Self-Refresh, die diskrete GPU befindet sich jedoch in D3cold: Ihr On-Board VRAM ist vollständig stromlos und bis zum `nvlddmkm.sys`-Devinit uninitialisiert.
+     - Wenn der Treiber beim Wake feststellt, dass die Root-Port-Bridge noch dekonfiguriert ist oder der SEC2-Scrub nicht abgeschlossen ist, löst der Treiber eine Fail-Fast-Assertion (`int 3`) aus, was zum Black Screen führt.
+
+3. **Sauberer 5-Stufen-PCIe-Teardown mit Bridge-Routing-Erhalt (`src/s3_facs.c`):**
+   - Um das PCIe-Routing über den Host-Root-Port (`00:03.1`, `0x800019xx`) bis zum allerletzten Moment aufrechtzuerhalten, wird das Bus-Routing erst ganz am Schluss restauriert:
+     - **Stufe 1:** GPU Command/Status Register (`0x802D0004`)
+     - **Stufe 2:** GPU BAR0 Basisadresse (`0x802D0010`)
+     - **Stufe 3:** Root Port Memory Base/Limit (`0x80001920`)
+     - **Stufe 4:** Root Port Command/Status Register (`0x80001904`)
+     - **Stufe 5:** Root Port Secondary/Subordinate Bus Numbers (`0x80001918`) strictly as last stage.
+
+4. **Telemetrie-Spiegelung & Speichergrenzen:**
+   - Die Rückspiegelung der Telemetriedaten (`rep movsd` von 24 DWORDs = 96 Bytes nach `TrampolinePhys + 0x0580`) ist durch einen statischen Assert gegen `RM_IDTR` (`+0x0600`) begrenzt (`0x0580 + 0x60 = 0x05E0 < 0x0600`).
+   - Gesamte Trampolin-Code-Größe: **1277 Bytes**, strikt innerhalb des 1280-Byte-Limits (`0x0000 - 0x04FF`).
+   - Alle 8.720 Checks in 10 MSVC Host Test Suites erfolgreich (`MSVC_HOST_TESTS=PASS`).
+   - Vollständiger 5-Stufen-PCIe-Teardown, 0 CMOS/RTC-Mutation, `OspmFlags = 0`.
+
+
 
 
 
