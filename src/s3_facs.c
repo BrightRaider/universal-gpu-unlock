@@ -464,9 +464,11 @@ UINT32 GuAcpiBuildTrampolineCode(
   UINT32 high_telem_dest = TelemetryPhys ? (UINT32)TelemetryPhys : (UINT32)(high_acpi_phys + 0x0500);
   UINT32 bar0_target = GpuBar0Phys ? (UINT32)GpuBar0Phys : 0xFB000000U;
   UINT32 booter_dma = ContextPhys ? (UINT32)(ContextPhys + 0x01000U) : 0x00021000U;
+  UINT32 meta_dma = ContextPhys ? (UINT32)(ContextPhys + 0x2A000U) : 0x0004A000U;
   UINT32 booter_size = (GuAssets[0].firmware.size > 0) ? (UINT32)GuAssets[0].firmware.size : 57672U;
   UINT32 booter_sz_param = (booter_size & ~0xFFU) | 0x10U;
   (VOID)booter_size;
+  (VOID)booter_sz_param;
 
   /* Pre-populate PCI probe addresses at +0x0520 (8 dwords = 32 bytes) */
   UINT32 *probe_addrs = (UINT32 *)(Buffer + 0x0520);
@@ -720,30 +722,30 @@ UINT32 GuAcpiBuildTrampolineCode(
   *e++ = 0xEF;                                       /* out dx, eax */
 
   /* 2. Read Root Port 0:3:1 Memory Base/Limit (0x80001920) and assign temporary window 0xFC00FB00 */
-  *e++ = 0xBA; *e++ = 0xF8; *e++ = 0x0C; *e++ = 0x00; *e++ = 0x00; /* mov edx, 0x0CF8 */
+  *e++ = 0xB2; *e++ = 0xF8;                         /* mov dl, 0xF8 */
   *e++ = 0xB8; *e++ = 0x20; *e++ = 0x19; *e++ = 0x00; *e++ = 0x80; /* mov eax, 0x80001920 */
   *e++ = 0xEF;                                       /* out dx, eax */
-  *e++ = 0xBA; *e++ = 0xFC; *e++ = 0x0C; *e++ = 0x00; *e++ = 0x00; /* mov edx, 0x0CFC */
+  *e++ = 0xB2; *e++ = 0xFC;                         /* mov dl, 0xFC */
   *e++ = 0xED;                                       /* in eax, dx */
   *e++ = 0xA3; *(UINT32 *)e = (UINT32)(high_telem_dest + 0xB4); e += 4; /* mov [dest+0xB4], eax (save rp_mem) */
   *e++ = 0xB8; *e++ = 0x00; *e++ = 0xFB; *e++ = 0x00; *e++ = 0xFC; /* mov eax, 0xFC00FB00 */
   *e++ = 0xEF;                                       /* out dx, eax (unconditionally set window 0xFB00..0xFC00) */
 
   /* 3. Assign GPU BAR0 = bar0_target (0x802D0010) */
-  *e++ = 0xBA; *e++ = 0xF8; *e++ = 0x0C; *e++ = 0x00; *e++ = 0x00; /* mov edx, 0x0CF8 */
+  *e++ = 0xB2; *e++ = 0xF8;                         /* mov dl, 0xF8 */
   *e++ = 0xB8; *e++ = 0x10; *e++ = 0x00; *e++ = 0x2D; *e++ = 0x80; /* mov eax, 0x802D0010 */
   *e++ = 0xEF;                                       /* out dx, eax */
-  *e++ = 0xBA; *e++ = 0xFC; *e++ = 0x0C; *e++ = 0x00; *e++ = 0x00; /* mov edx, 0x0CFC */
+  *e++ = 0xB2; *e++ = 0xFC;                         /* mov dl, 0xFC */
   *e++ = 0xED;                                       /* in eax, dx */
   *e++ = 0xA3; *(UINT32 *)e = (UINT32)(high_telem_dest + 0xBC); e += 4; /* mov [dest+0xBC], eax (save gpu_bar0) */
   *e++ = 0xB8; *(UINT32 *)e = bar0_target; e += 4;   /* mov eax, bar0_target */
   *e++ = 0xEF;                                       /* out dx, eax */
 
   /* 4. Enable GPU Command Memory Space Enable (bit 1) + Bus Master Enable (bit 2) (0x802D0004) */
-  *e++ = 0xBA; *e++ = 0xF8; *e++ = 0x0C; *e++ = 0x00; *e++ = 0x00; /* mov edx, 0x0CF8 */
+  *e++ = 0xB2; *e++ = 0xF8;                         /* mov dl, 0xF8 */
   *e++ = 0xB8; *e++ = 0x04; *e++ = 0x00; *e++ = 0x2D; *e++ = 0x80; /* mov eax, 0x802D0004 */
   *e++ = 0xEF;                                       /* out dx, eax */
-  *e++ = 0xBA; *e++ = 0xFC; *e++ = 0x0C; *e++ = 0x00; *e++ = 0x00; /* mov edx, 0x0CFC */
+  *e++ = 0xB2; *e++ = 0xFC;                         /* mov dl, 0xFC */
   *e++ = 0xED;                                       /* in eax, dx */
   *e++ = 0xA3; *(UINT32 *)e = (UINT32)(high_telem_dest + 0xB8); e += 4; /* mov [dest+0xB8], eax (save gpu_cmd) */
   *e++ = 0x0C; *e++ = 0x06;                         /* or al, 0x06 (MSE | BME) */
@@ -853,7 +855,7 @@ UINT32 GuAcpiBuildTrampolineCode(
   *e++ = 0x8B; *e++ = 0x83; *(UINT32 *)e = 0x00840100U; e += 4; /* mov eax, [ebx + 0x00840100] */
   *e++ = 0xA3; *(UINT32 *)e = (UINT32)(high_telem_dest + 0xD0); e += 4; /* mov [dest+0xD0], eax */
 
-  /* 4. FBIF & Booter DMA Setup, Falcon CPU Start and Halt Polling (v1.8.53) */
+  /* 4. FBIF & Booter Chunked DMA Transfers, Falcon2 Config, CPU Start and Bounded Polling (v1.8.54) */
   /* FBIF Trans Enable: [ebx + 0x00840624] |= 0x80 */
   *e++ = 0x8B; *e++ = 0x83; *(UINT32 *)e = 0x00840624U; e += 4; /* mov eax, [ebx + 0x00840624] */
   *e++ = 0x0C; *e++ = 0x80;                                     /* or al, 0x80 */
@@ -873,32 +875,124 @@ UINT32 GuAcpiBuildTrampolineCode(
   *e++ = 0xC7; *e++ = 0x83; *(UINT32 *)e = 0x00840110U; e += 4; /* mov dword [ebx + 0x00840110], imm32 */
   *(UINT32 *)e = (UINT32)(booter_dma >> 8); e += 4;
 
-  /* Booter DMA address high: [ebx + 0x00840114] = 0 */
+  /* Booter DMA address high: [ebx + 0x00840128] = 0 */
   *e++ = 0x31; *e++ = 0xC0;                                     /* xor eax, eax */
-  *e++ = 0x89; *e++ = 0x83; *(UINT32 *)e = 0x00840114U; e += 4; /* mov [ebx + 0x00840114], eax */
+  *e++ = 0x89; *e++ = 0x83; *(UINT32 *)e = 0x00840128U; e += 4; /* mov [ebx + 0x00840128], eax */
 
-  /* Booter DMA size & kick: [ebx + 0x00840118] = booter_sz_param */
-  *e++ = 0xC7; *e++ = 0x83; *(UINT32 *)e = 0x00840118U; e += 4; /* mov dword [ebx + 0x00840118], imm32 */
-  *(UINT32 *)e = booter_sz_param; e += 4;
+  /* Setup IMEM DMA transfer: EDI=0 (Dest), EDX=256 (Offset), EBP=125 (Count), ESI=0x0614 (Cmd) */
+  *e++ = 0x31; *e++ = 0xFF;                                     /* xor edi, edi */
+  *e++ = 0xBA; *(UINT32 *)e = 256U; e += 4;                     /* mov edx, 256 */
+  *e++ = 0xBD; *(UINT32 *)e = 125U; e += 4;                     /* mov ebp, 125 */
+  *e++ = 0xBE; *(UINT32 *)e = 0x0614U; e += 4;                  /* mov esi, 0x0614 */
+
+  /* .dma_loop_entry: */
+  UINT8 *dma_loop_entry = e;
+
+  /* Poll DMA Idle: [ebx + 0x00840118] & 1 == 0 (with bounded timeout 50,000) */
+  *e++ = 0xB9; *e++ = 0x50; *e++ = 0xC3; *e++ = 0x00; *e++ = 0x00; /* mov ecx, 50000 */
+  UINT8 *dma_idle_poll = e;
+  *e++ = 0x8B; *e++ = 0x83; *(UINT32 *)e = 0x00840118U; e += 4; /* mov eax, [ebx + 0x00840118] */
+  *e++ = 0xA8; *e++ = 0x01;                                     /* test al, 0x01 */
+  *e++ = 0x74;                                                 /* jz .dma_idle_ready */
+  UINT8 *dma_idle_break = e++;
+  *e++ = 0x49;                                                 /* dec ecx */
+  *e++ = 0x75;                                                 /* jnz dma_idle_poll */
+  *e++ = (UINT8)(dma_idle_poll - (e + 1));
+  *dma_idle_break = (UINT8)(e - (dma_idle_break + 1));
+
+  /* Write Dest, Offset, Cmd */
+  *e++ = 0x89; *e++ = 0xBB; *(UINT32 *)e = 0x00840114U; e += 4; /* mov [ebx + 0x00840114], edi */
+  *e++ = 0x89; *e++ = 0x93; *(UINT32 *)e = 0x0084011CU; e += 4; /* mov [ebx + 0x0084011C], edx */
+  *e++ = 0x89; *e++ = 0xB3; *(UINT32 *)e = 0x00840118U; e += 4; /* mov [ebx + 0x00840118], esi */
+
+  /* Advance pointers by 256 bytes per chunk */
+  *e++ = 0x81; *e++ = 0xC7; *(UINT32 *)e = 256U; e += 4;        /* add edi, 256 */
+  *e++ = 0x81; *e++ = 0xC2; *(UINT32 *)e = 256U; e += 4;        /* add edx, 256 */
+  *e++ = 0x4D;                                                 /* dec ebp */
+  *e++ = 0x75;                                                 /* jnz .dma_loop_entry */
+  *e++ = (UINT8)(dma_loop_entry - (e + 1));
+
+  /* Check if IMEM completed (ESI == 0x0614). If so, reload for DMEM (Count=96, Offset=32256, Cmd=0x0600) */
+  *e++ = 0x81; *e++ = 0xFE; *(UINT32 *)e = 0x0614U; e += 4;     /* cmp esi, 0x0614 */
+  *e++ = 0x75;                                                 /* jne .dma_transfers_done */
+  UINT8 *dma_done_jmp = e++;
+  *e++ = 0x31; *e++ = 0xFF;                                     /* xor edi, edi */
+  *e++ = 0xBA; *(UINT32 *)e = 32256U; e += 4;                   /* mov edx, 32256 */
+  *e++ = 0xBD; *(UINT32 *)e = 96U; e += 4;                      /* mov ebp, 96 */
+  *e++ = 0xBE; *(UINT32 *)e = 0x0600U; e += 4;                  /* mov esi, 0x0600 */
+  *e++ = 0xEB;                                                 /* jmp short .dma_loop_entry */
+  *e++ = (UINT8)(dma_loop_entry - (e + 1));
+  *dma_done_jmp = (UINT8)(e - (dma_done_jmp + 1));
+
+  /* Poll DMA Complete: [ebx + 0x00840118] & 2 == 2 (bounded timeout 50,000) */
+  *e++ = 0xB9; *e++ = 0x50; *e++ = 0xC3; *e++ = 0x00; *e++ = 0x00; /* mov ecx, 50000 */
+  UINT8 *dma_comp_poll = e;
+  *e++ = 0x8B; *e++ = 0x83; *(UINT32 *)e = 0x00840118U; e += 4; /* mov eax, [ebx + 0x00840118] */
+  *e++ = 0xA8; *e++ = 0x02;                                     /* test al, 0x02 */
+  *e++ = 0x75;                                                 /* jnz .dma_comp_done */
+  UINT8 *dma_comp_break = e++;
+  *e++ = 0x49;                                                 /* dec ecx */
+  *e++ = 0x75;                                                 /* jnz dma_comp_poll */
+  *e++ = (UINT8)(dma_comp_poll - (e + 1));
+  *dma_comp_break = (UINT8)(e - (dma_comp_break + 1));
+
+  /* Falcon2 Registers */
+  /* [ebx + 0x00841210] = 16 (sig_dmem) */
+  *e++ = 0xC7; *e++ = 0x83; *(UINT32 *)e = 0x00841210U; e += 4;
+  *(UINT32 *)e = 16U; e += 4;
+
+  /* [ebx + 0x0084119C] = 1 (engine_mask) */
+  *e++ = 0xC7; *e++ = 0x83; *(UINT32 *)e = 0x0084119CU; e += 4;
+  *(UINT32 *)e = 1U; e += 4;
+
+  /* [ebx + 0x00841198] = 3 (ucode_id) */
+  *e++ = 0xC7; *e++ = 0x83; *(UINT32 *)e = 0x00841198U; e += 4;
+  *(UINT32 *)e = 3U; e += 4;
+
+  /* [ebx + 0x00841180] = 1 */
+  *e++ = 0xC7; *e++ = 0x83; *(UINT32 *)e = 0x00841180U; e += 4;
+  *(UINT32 *)e = 1U; e += 4;
+
+  /* Entry Point Vector: [ebx + 0x00840104] = 256 (code_va) */
+  *e++ = 0xC7; *e++ = 0x83; *(UINT32 *)e = 0x00840104U; e += 4;
+  *(UINT32 *)e = 256U; e += 4;
+
+  /* Mailbox 0: [ebx + 0x00840040] = meta_dma */
+  *e++ = 0xC7; *e++ = 0x83; *(UINT32 *)e = 0x00840040U; e += 4;
+  *(UINT32 *)e = meta_dma; e += 4;
+
+  /* Mailbox 1: [ebx + 0x00840044] = 0 */
+  *e++ = 0x31; *e++ = 0xC0;                                     /* xor eax, eax */
+  *e++ = 0x89; *e++ = 0x83; *(UINT32 *)e = 0x00840044U; e += 4; /* mov [ebx + 0x00840044], eax */
 
   /* Start Falcon CPU: [ebx + 0x00840100] = 2 */
   *e++ = 0xC7; *e++ = 0x83; *(UINT32 *)e = 0x00840100U; e += 4; /* mov dword [ebx + 0x00840100], 2 */
-  *(UINT32 *)e = 2; e += 4;
+  *(UINT32 *)e = 2U; e += 4;
 
-  /* Poll Falcon Engine Halt (Bit 4 == 0x10 in CPUCTL) with bounded timeout (50,000 iterations) */
-  *e++ = 0xB9; *e++ = 0x50; *e++ = 0xC3; *e++ = 0x00; *e++ = 0x00; /* mov ecx, 50000 */
+  /* Bounded Polling on Mailbox 0 == 0x67b00001 (GU_AD102_MARKER) or Falcon Halt (Bit 4 in CPUCTL) (100,000 iterations) */
+  *e++ = 0xB9; *e++ = 0xA0; *e++ = 0x86; *e++ = 0x01; *e++ = 0x00; /* mov ecx, 100000 */
   UINT8 *halt_poll_start = e;
-  *e++ = 0x8B; *e++ = 0x83; *(UINT32 *)e = 0x00840100U; e += 4;   /* mov eax, [ebx + 0x00840100] */
+  *e++ = 0x8B; *e++ = 0x83; *(UINT32 *)e = 0x00840040U; e += 4;   /* mov eax, [ebx + 0x00840040] (Mailbox 0) */
+  *e++ = 0x3D; *(UINT32 *)e = 0x67B00001U; e += 4;               /* cmp eax, 0x67B00001 */
+  *e++ = 0x74;                                                   /* jz .halt_done */
+  UINT8 *halt_break1 = e++;
+  *e++ = 0x8B; *e++ = 0x83; *(UINT32 *)e = 0x00840100U; e += 4;   /* mov eax, [ebx + 0x00840100] (CPUCTL) */
   *e++ = 0xA8; *e++ = 0x10;                                       /* test al, 0x10 */
   *e++ = 0x75;                                                   /* jnz .halt_done */
-  UINT8 *halt_break = e++;
+  UINT8 *halt_break2 = e++;
   *e++ = 0x49;                                                   /* dec ecx */
   *e++ = 0x75;                                                   /* jnz halt_poll_start */
   *e++ = (UINT8)(halt_poll_start - (e + 1));
-  *halt_break = (UINT8)(e - (halt_break + 1));
+  *halt_break1 = (UINT8)(e - (halt_break1 + 1));
+  *halt_break2 = (UINT8)(e - (halt_break2 + 1));
 
-  /* Save post-booter SEC2_CPUCTL to +0xD8 (v1.8.53) */
+  /* Save post-booter SEC2_CPUCTL to +0xD8 */
+  *e++ = 0x8B; *e++ = 0x83; *(UINT32 *)e = 0x00840100U; e += 4;   /* mov eax, [ebx + 0x00840100] */
   *e++ = 0xA3; *(UINT32 *)e = (UINT32)(high_telem_dest + GU_TELEM_BOOTER_CPUCTL_POST_OFF); e += 4; /* mov [dest+0xD8], eax */
+
+  /* Save post-booter Mailbox 0 / Marker to +0xDC (v1.8.54) */
+  *e++ = 0x8B; *e++ = 0x83; *(UINT32 *)e = 0x00840040U; e += 4;   /* mov eax, [ebx + 0x00840040] */
+  *e++ = 0xA3; *(UINT32 *)e = (UINT32)(high_telem_dest + GU_TELEM_BOOTER_MARKER_POST_OFF); e += 4; /* mov [dest+0xDC], eax */
 
   /* Read pre-unlock registers: SS0 (0x82381C), SS1 (0x823820), PLM (0x823804), Readout1 (0x823818) */
   *e++ = 0x8B; *e++ = 0x83; *(UINT32 *)e = 0x0082381CU; e += 4; /* mov eax, [ebx + 0x0082381C] */
@@ -977,31 +1071,31 @@ UINT32 GuAcpiBuildTrampolineCode(
   *e++ = 0xBA; *e++ = 0xF8; *e++ = 0x0C; *e++ = 0x00; *e++ = 0x00; /* mov edx, 0x0CF8 */
   *e++ = 0xB8; *e++ = 0x04; *e++ = 0x00; *e++ = 0x2D; *e++ = 0x80; /* mov eax, 0x802D0004 */
   *e++ = 0xEF;                                       /* out dx, eax */
-  *e++ = 0xBA; *e++ = 0xFC; *e++ = 0x0C; *e++ = 0x00; *e++ = 0x00; /* mov edx, 0x0CFC */
+  *e++ = 0xB2; *e++ = 0xFC;                         /* mov dl, 0xFC */
   *e++ = 0xA1; *(UINT32 *)e = (UINT32)(high_telem_dest + 0xB8); e += 4; /* mov eax, [dest+0xB8] */
   *e++ = 0xEF;                                       /* out dx, eax */
 
   /* 7. Restore GPU BAR0 */
-  *e++ = 0xBA; *e++ = 0xF8; *e++ = 0x0C; *e++ = 0x00; *e++ = 0x00; /* mov edx, 0x0CF8 */
+  *e++ = 0xB2; *e++ = 0xF8;                         /* mov dl, 0xF8 */
   *e++ = 0xB8; *e++ = 0x10; *e++ = 0x00; *e++ = 0x2D; *e++ = 0x80; /* mov eax, 0x802D0010 */
   *e++ = 0xEF;                                       /* out dx, eax */
-  *e++ = 0xBA; *e++ = 0xFC; *e++ = 0x0C; *e++ = 0x00; *e++ = 0x00; /* mov edx, 0x0CFC */
+  *e++ = 0xB2; *e++ = 0xFC;                         /* mov dl, 0xFC */
   *e++ = 0xA1; *(UINT32 *)e = (UINT32)(high_telem_dest + 0xBC); e += 4; /* mov eax, [dest+0xBC] */
   *e++ = 0xEF;                                       /* out dx, eax */
 
   /* 8. Restore Root Port Memory Base/Limit register */
-  *e++ = 0xBA; *e++ = 0xF8; *e++ = 0x0C; *e++ = 0x00; *e++ = 0x00; /* mov edx, 0x0CF8 */
+  *e++ = 0xB2; *e++ = 0xF8;                         /* mov dl, 0xF8 */
   *e++ = 0xB8; *e++ = 0x20; *e++ = 0x19; *e++ = 0x00; *e++ = 0x80; /* mov eax, 0x80001920 */
   *e++ = 0xEF;                                       /* out dx, eax */
-  *e++ = 0xBA; *e++ = 0xFC; *e++ = 0x0C; *e++ = 0x00; *e++ = 0x00; /* mov edx, 0x0CFC */
+  *e++ = 0xB2; *e++ = 0xFC;                         /* mov dl, 0xFC */
   *e++ = 0xA1; *(UINT32 *)e = (UINT32)(high_telem_dest + 0xB4); e += 4; /* mov eax, [dest+0xB4] */
   *e++ = 0xEF;                                       /* out dx, eax */
 
   /* 9. Restore Root Port Command register */
-  *e++ = 0xBA; *e++ = 0xF8; *e++ = 0x0C; *e++ = 0x00; *e++ = 0x00; /* mov edx, 0x0CF8 */
+  *e++ = 0xB2; *e++ = 0xF8;                         /* mov dl, 0xF8 */
   *e++ = 0xB8; *e++ = 0x04; *e++ = 0x19; *e++ = 0x00; *e++ = 0x80; /* mov eax, 0x80001904 */
   *e++ = 0xEF;                                       /* out dx, eax */
-  *e++ = 0xBA; *e++ = 0xFC; *e++ = 0x0C; *e++ = 0x00; *e++ = 0x00; /* mov edx, 0x0CFC */
+  *e++ = 0xB2; *e++ = 0xFC;                         /* mov dl, 0xFC */
   *e++ = 0xA1; *(UINT32 *)e = (UINT32)(high_telem_dest + 0xB0); e += 4; /* mov eax, [dest+0xB0] */
   *e++ = 0xEF;                                       /* out dx, eax */
 

@@ -6,6 +6,56 @@ For packaged binaries and downloads, visit [GitHub Releases](https://github.com/
 
 ---
 
+## [v1.8.54] - 2026-11-24
+### Added & Fixed
+- **AD102 Blockweises 256-Byte SEC2 DMA (IMEM/DMEM), Falcon2-Register & Mailbox Booter Execution im 32-Bit Flat Mode bei S3-Wake (addresses #19):**
+  - **Forensische Analyse der v1.8.53 S3-Resume Telemetrie (`RUN0070.TXT`):**
+    - S3 Standby/Wake Zyklus in 1572 ms stabil und sauber (`BiosInitDuration = 1572`).
+    - FALCON2_BCR_Post (`+0xD4`) = `0x00000001` und SEC2_CPUCTL_Post (`+0xD0`) = `0x00000010` bewiesen, dass der Falcon-Reset und BCR-Switch sauber greifen.
+    - Allerdings blieb `+0xD8` = `0` und `PLM` auf `0xffffff8f`, da AD102 Falcon 2 (RISC-V Architektur) blockweise 256-Byte-DMA (IMEM/DMEM), Falcon2-Konfigurationsregister und Mailbox 0 (`0x00840040`) benötigt statt eines einmaligen Legacy-Writes auf `0x110/0x118`.
+  - **Blockweises 256-Byte Chunked DMA Interface (`src/s3_facs.c`):**
+    - FBIF Setup & DMA Base:
+      - `0x00840624 |= 0x80` (FBIF Trans Enable)
+      - `0x0084010C = 0` (Falcon IRQ Status Clear)
+      - `0x00840600 = ([ebx + 0x00840600] & ~7) | 5` (FBIF Trans Mode Setup)
+      - `0x00840110 = booter_dma >> 8` (Physische 32-Bit ACPI NVS Basisadresse des Booters)
+      - `0x00840128 = 0` (DMA Address High = 0)
+    - IMEM Transfer: 125 Chunks (32.000 Bytes) Microcode (`booter_load_ad102.bin` app_code):
+      - Bounded Polling auf DMA Idle (`[ebx + 0x00840118] & 1 == 0`).
+      - Destination `[ebx + 0x00840114] = edi` (ab 0, +256 pro Chunk).
+      - Offset `[ebx + 0x0084011C] = edx` (ab 256, +256 pro Chunk).
+      - Command `[ebx + 0x00840118] = 0x0614` (`gpu_unlock_dma_cmd(true)`).
+    - DMEM Transfer: 96 Chunks (24.576 Bytes) Data (`booter_load_ad102.bin` os_data):
+      - Destination `[ebx + 0x00840114] = edi` (ab 0, +256 pro Chunk).
+      - Offset `[ebx + 0x0084011C] = edx` (ab 32256, +256 pro Chunk).
+      - Command `[ebx + 0x00840118] = 0x0600` (`gpu_unlock_dma_cmd(false)`).
+    - Bounded Polling auf DMA Complete (`[ebx + 0x00840118] & 2 == 2`).
+  - **Falcon2 Register, Entry Point & Mailbox Initialisierung:**
+    - Entry Point: `[ebx + 0x00840104] = 256` (`code_va = 0x0100`).
+    - Falcon2 Konfiguration:
+      - `[ebx + 0x00841210] = 16` (`sig_dmem = patch_loc - os_data_off = 32272 - 32256`)
+      - `[ebx + 0x0084119C] = 1` (`engine_mask = 1`)
+      - `[ebx + 0x00841198] = 3` (`ucode_id = 3`)
+      - `[ebx + 0x00841180] = 1`
+    - Mailbox 0: `[ebx + 0x00840040] = meta_dma` (`ContextPhys + 0x2A000U`).
+    - Mailbox 1: `[ebx + 0x00840044] = 0`.
+  - **Falcon CPU Start & Bounded Polling auf Marker / Halt:**
+    - CPU Start: `[ebx + 0x00840100] = 2`.
+    - Bounded Polling auf `0x67b00001` (`GU_AD102_MARKER`) in Mailbox 0 (`0x00840040`) oder Falcon Engine Halt (`bit 4` in `0x00840100`).
+    - Telemetrie-Sicherung:
+      - `+0xD8`: Post-Booter SEC2 CPUCTL (`0x00840100`).
+      - `+0xDC`: Post-Booter Mailbox 0 / Marker (`0x00840040`).
+  - **Rate-Limiter Selector Writes & Verifikation:**
+    - Schreiben von `SS0` (`0x82381C -> 0x88888888`) und `SS1` (`0x823820 -> 0x00000008`).
+    - Rücklesen von `SS0`, `SS1`, `Readout1` (`0x823818`), `PLM` (`0x823804`) in Telemetrie `+0xA0`..`+0xAC`.
+  - **Code Envelope & Register Effizienz:**
+    - Optimierung der PCI-I/O-Portwechsel (`mov dl, 0xF8` / `mov dl, 0xFC`) und der DMA-Schleife.
+    - Gesamte Trampolin-Code-Größe: **1277 Bytes**, bleibt exakt unter dem 1280-Byte-Limit (`< 0x0500`).
+    - Alle 8.714 Checks in 10 MSVC Host Test Suites erfolgreich (`MSVC_HOST_TESTS=PASS`).
+    - Vollständiger 4-Stufen-PCIe-Teardown, 0 CMOS/RTC-Mutation, `OspmFlags = 0`.
+
+---
+
 ## [v1.8.53] - 2026-11-24
 ### Added & Fixed
 - **SEC2 FBIF & Booter DMA Handshake & Falcon CPU Execution im 32-Bit Flat Mode bei S3-Wake (addresses #19):**

@@ -75,6 +75,7 @@
 #define GU_TELEM_SEC2_CPUCTL_POST_OFF  0x00D0U /* SEC2_CPUCTL after reset cycle (BAR0 + 0x00840100) (v1.8.51) */
 #define GU_TELEM_FALCON2_BCR_POST_OFF  0x00D4U /* FALCON2_BCR after switch out of Boot-ROM (BAR0 + 0x00841668) (v1.8.52) */
 #define GU_TELEM_BOOTER_CPUCTL_POST_OFF 0x00D8U /* SEC2_CPUCTL after booter execution (BAR0 + 0x00840100) (v1.8.53) */
+#define GU_TELEM_BOOTER_MARKER_POST_OFF 0x00DCU /* Mailbox 0 / Marker after booter execution (BAR0 + 0x00840040) (v1.8.54) */
 
 /* Dedicated High (>1MB, <4GB) ACPI NVS Page Offsets for Shadow Tables */
 #define GU_HIGH_SHADOW_RSDP_OFF        0x0000U

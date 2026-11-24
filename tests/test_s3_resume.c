@@ -859,8 +859,25 @@ static void TestGuAcpiBuildTrampolineCode(void) {
     else if (buffer[i] == 0x0C && buffer[i+1] == 0x05) { instr_len = 2; desc = "or al, 0x05                         ; Set FBIF trans mode 5"; }
     else if (buffer[i] == 0x89 && buffer[i+1] == 0x83 && buffer[i+2] == 0x00 && buffer[i+3] == 0x06 && buffer[i+4] == 0x84 && buffer[i+5] == 0x00) { instr_len = 6; desc = "mov [ebx+0x840600], eax             ; Write SEC2 FBIF Trans Mode"; }
     else if (buffer[i] == 0xC7 && buffer[i+1] == 0x83 && buffer[i+2] == 0x10 && buffer[i+3] == 0x01 && buffer[i+4] == 0x84 && buffer[i+5] == 0x00) { instr_len = 10; desc = "mov dword [ebx+0x840110], booter_dma ; Set SEC2 Booter DMA Address Low"; }
-    else if (buffer[i] == 0x89 && buffer[i+1] == 0x83 && buffer[i+2] == 0x14 && buffer[i+3] == 0x01 && buffer[i+4] == 0x84 && buffer[i+5] == 0x00) { instr_len = 6; desc = "mov [ebx+0x840114], eax             ; Set SEC2 Booter DMA Address High (0)"; }
-    else if (buffer[i] == 0xC7 && buffer[i+1] == 0x83 && buffer[i+2] == 0x18 && buffer[i+3] == 0x01 && buffer[i+4] == 0x84 && buffer[i+5] == 0x00) { instr_len = 10; desc = "mov dword [ebx+0x840118], booter_sz  ; Set SEC2 Booter DMA Size & Kick"; }
+    else if (buffer[i] == 0x89 && buffer[i+1] == 0x83 && buffer[i+2] == 0x28 && buffer[i+3] == 0x01 && buffer[i+4] == 0x84 && buffer[i+5] == 0x00) { instr_len = 6; desc = "mov [ebx+0x840128], eax             ; Set SEC2 Booter DMA Address High (0)"; }
+    else if (buffer[i] == 0x31 && buffer[i+1] == 0xFF) { instr_len = 2; desc = "xor edi, edi                     ; Clear Chunk DMA Dest (0)"; }
+    else if (buffer[i] == 0x89 && buffer[i+1] == 0xBB && buffer[i+2] == 0x14 && buffer[i+3] == 0x01 && buffer[i+4] == 0x84 && buffer[i+5] == 0x00) { instr_len = 6; desc = "mov [ebx+0x840114], edi             ; Set Chunk DMA Dest"; }
+    else if (buffer[i] == 0x89 && buffer[i+1] == 0x93 && buffer[i+2] == 0x1C && buffer[i+3] == 0x01 && buffer[i+4] == 0x84 && buffer[i+5] == 0x00) { instr_len = 6; desc = "mov [ebx+0x84011C], edx             ; Set Chunk DMA Offset"; }
+    else if (buffer[i] == 0x89 && buffer[i+1] == 0xB3 && buffer[i+2] == 0x18 && buffer[i+3] == 0x01 && buffer[i+4] == 0x84 && buffer[i+5] == 0x00) { instr_len = 6; desc = "mov [ebx+0x840118], esi             ; Set Chunk DMA Cmd & Kick"; }
+    else if (buffer[i] == 0x81 && buffer[i+1] == 0xC7 && buffer[i+2] == 0x00 && buffer[i+3] == 0x01 && buffer[i+4] == 0x00 && buffer[i+5] == 0x00) { instr_len = 6; desc = "add edi, 256                     ; Advance Chunk DMA Dest by 256"; }
+    else if (buffer[i] == 0x81 && buffer[i+1] == 0xC2 && buffer[i+2] == 0x00 && buffer[i+3] == 0x01 && buffer[i+4] == 0x00 && buffer[i+5] == 0x00) { instr_len = 6; desc = "add edx, 256                     ; Advance Chunk DMA Offset by 256"; }
+    else if (buffer[i] == 0x81 && buffer[i+1] == 0xFE && buffer[i+2] == 0x14 && buffer[i+3] == 0x06 && buffer[i+4] == 0x00 && buffer[i+5] == 0x00) { instr_len = 6; desc = "cmp esi, 0x0614                   ; Check IMEM DMA transfer complete"; }
+    else if (buffer[i] == 0xA8 && buffer[i+1] == 0x02) { instr_len = 2; desc = "test al, 0x02                       ; Test DMA Complete Bit"; }
+    else if (buffer[i] == 0xC7 && buffer[i+1] == 0x83 && buffer[i+2] == 0x10 && buffer[i+3] == 0x12 && buffer[i+4] == 0x84 && buffer[i+5] == 0x00) { instr_len = 10; desc = "mov dword [ebx+0x841210], 16       ; Set Falcon2 sig_dmem = 16"; }
+    else if (buffer[i] == 0xC7 && buffer[i+1] == 0x83 && buffer[i+2] == 0x9C && buffer[i+3] == 0x11 && buffer[i+4] == 0x84 && buffer[i+5] == 0x00) { instr_len = 10; desc = "mov dword [ebx+0x84119C], 1        ; Set Falcon2 engine_mask = 1"; }
+    else if (buffer[i] == 0xC7 && buffer[i+1] == 0x83 && buffer[i+2] == 0x98 && buffer[i+3] == 0x11 && buffer[i+4] == 0x84 && buffer[i+5] == 0x00) { instr_len = 10; desc = "mov dword [ebx+0x841198], 3        ; Set Falcon2 ucode_id = 3"; }
+    else if (buffer[i] == 0xC7 && buffer[i+1] == 0x83 && buffer[i+2] == 0x80 && buffer[i+3] == 0x11 && buffer[i+4] == 0x84 && buffer[i+5] == 0x00) { instr_len = 10; desc = "mov dword [ebx+0x841180], 1        ; Set Falcon2 config = 1"; }
+    else if (buffer[i] == 0xC7 && buffer[i+1] == 0x83 && buffer[i+2] == 0x04 && buffer[i+3] == 0x01 && buffer[i+4] == 0x84 && buffer[i+5] == 0x00) { instr_len = 10; desc = "mov dword [ebx+0x840104], 256      ; Set Falcon Entry Point Vector = 256"; }
+    else if (buffer[i] == 0xC7 && buffer[i+1] == 0x83 && buffer[i+2] == 0x40 && buffer[i+3] == 0x00 && buffer[i+4] == 0x84 && buffer[i+5] == 0x00) { instr_len = 10; desc = "mov dword [ebx+0x840040], meta_dma ; Set Mailbox 0 = meta_dma"; }
+    else if (buffer[i] == 0x89 && buffer[i+1] == 0x83 && buffer[i+2] == 0x44 && buffer[i+3] == 0x00 && buffer[i+4] == 0x84 && buffer[i+5] == 0x00) { instr_len = 6; desc = "mov [ebx+0x840044], eax             ; Clear Mailbox 1 (0)"; }
+    else if (buffer[i] == 0x3D && buffer[i+1] == 0x01 && buffer[i+2] == 0x00 && buffer[i+3] == 0xB0 && buffer[i+4] == 0x67) { instr_len = 5; desc = "cmp eax, 0x67B00001               ; Check Mailbox 0 marker (AD102 unlock)"; }
+    else if (buffer[i] == 0xB2 && buffer[i+1] == 0xF8) { instr_len = 2; desc = "mov dl, 0xF8                     ; Fast switch to PCI CF8 port"; }
+    else if (buffer[i] == 0xB2 && buffer[i+1] == 0xFC) { instr_len = 2; desc = "mov dl, 0xFC                     ; Fast switch to PCI CFC port"; }
     else if (buffer[i] == 0xC7 && buffer[i+1] == 0x83 && buffer[i+2] == 0x00 && buffer[i+3] == 0x01 && buffer[i+4] == 0x84 && buffer[i+5] == 0x00 && *(UINT32 *)(buffer + i + 6) == 2U) { instr_len = 10; desc = "mov dword [ebx+0x840100], 2          ; Start SEC2 Falcon CPU (CPUCTL = 2)"; }
     else if (buffer[i] == 0xA8 && buffer[i+1] == 0x10) { instr_len = 2; desc = "test al, 0x10                       ; Test Falcon Halt Bit (CPUCTL & 0x10)"; }
     else if (buffer[i] == 0x49) { instr_len = 1; desc = "dec ecx                             ; Decrement loop/poll timeout"; }
@@ -1059,17 +1076,29 @@ static void TestGuAcpiBuildTrampolineCode(void) {
   CHECK(found_chip_id_write, "Trampoline must write Chip-ID to SEC2 (BAR0 + 0x840084)");
   CHECK(found_telem_cpuctl_post, "Trampoline must save post-reset CPUCTL to Telemetry +0xD0");
 
-  /* Verify FBIF & Booter DMA Handshake and Falcon CPU Start (v1.8.53) */
+  /* Verify FBIF & Chunked DMA Transfers, Falcon2 Config and CPU Start (v1.8.54) */
   BOOLEAN found_fbif_trans_read = FALSE;
   BOOLEAN found_fbif_trans_write = FALSE;
   BOOLEAN found_irq_clear = FALSE;
   BOOLEAN found_fbif_mode_write = FALSE;
   BOOLEAN found_booter_dma_low = FALSE;
   BOOLEAN found_booter_dma_high = FALSE;
-  BOOLEAN found_booter_dma_size = FALSE;
+  BOOLEAN found_dma_dest_write = FALSE;
+  BOOLEAN found_dma_offset_write = FALSE;
+  BOOLEAN found_dma_cmd_write = FALSE;
+  BOOLEAN found_dma_poll_comp = FALSE;
+  BOOLEAN found_falcon2_sig = FALSE;
+  BOOLEAN found_falcon2_eng = FALSE;
+  BOOLEAN found_falcon2_ucode = FALSE;
+  BOOLEAN found_falcon2_cfg = FALSE;
+  BOOLEAN found_entry_point = FALSE;
+  BOOLEAN found_mailbox0 = FALSE;
+  BOOLEAN found_mailbox1 = FALSE;
   BOOLEAN found_falcon_cpu_start = FALSE;
+  BOOLEAN found_poll_marker = FALSE;
   BOOLEAN found_poll_falcon_halt = FALSE;
   BOOLEAN found_telem_booter_cpuctl = FALSE;
+  BOOLEAN found_telem_booter_marker = FALSE;
   for (UINT32 i = pm32_offset; i < pm16_offset - 9; i++) {
     if (buffer[i] == 0x8B && buffer[i+1] == 0x83 && *(UINT32 *)(buffer + i + 2) == 0x00840624U) {
       found_fbif_trans_read = TRUE;
@@ -1086,14 +1115,47 @@ static void TestGuAcpiBuildTrampolineCode(void) {
     if (buffer[i] == 0xC7 && buffer[i+1] == 0x83 && *(UINT32 *)(buffer + i + 2) == 0x00840110U) {
       found_booter_dma_low = TRUE;
     }
-    if (buffer[i] == 0x89 && buffer[i+1] == 0x83 && *(UINT32 *)(buffer + i + 2) == 0x00840114U) {
+    if (buffer[i] == 0x89 && buffer[i+1] == 0x83 && *(UINT32 *)(buffer + i + 2) == 0x00840128U) {
       found_booter_dma_high = TRUE;
     }
-    if (buffer[i] == 0xC7 && buffer[i+1] == 0x83 && *(UINT32 *)(buffer + i + 2) == 0x00840118U) {
-      found_booter_dma_size = TRUE;
+    if (buffer[i] == 0x89 && buffer[i+1] == 0xBB && *(UINT32 *)(buffer + i + 2) == 0x00840114U) {
+      found_dma_dest_write = TRUE;
+    }
+    if (buffer[i] == 0x89 && buffer[i+1] == 0x93 && *(UINT32 *)(buffer + i + 2) == 0x0084011CU) {
+      found_dma_offset_write = TRUE;
+    }
+    if (buffer[i] == 0x89 && buffer[i+1] == 0xB3 && *(UINT32 *)(buffer + i + 2) == 0x00840118U) {
+      found_dma_cmd_write = TRUE;
+    }
+    if (buffer[i] == 0xA8 && buffer[i+1] == 0x02) {
+      found_dma_poll_comp = TRUE;
+    }
+    if (buffer[i] == 0xC7 && buffer[i+1] == 0x83 && *(UINT32 *)(buffer + i + 2) == 0x00841210U && *(UINT32 *)(buffer + i + 6) == 16U) {
+      found_falcon2_sig = TRUE;
+    }
+    if (buffer[i] == 0xC7 && buffer[i+1] == 0x83 && *(UINT32 *)(buffer + i + 2) == 0x0084119CU && *(UINT32 *)(buffer + i + 6) == 1U) {
+      found_falcon2_eng = TRUE;
+    }
+    if (buffer[i] == 0xC7 && buffer[i+1] == 0x83 && *(UINT32 *)(buffer + i + 2) == 0x00841198U && *(UINT32 *)(buffer + i + 6) == 3U) {
+      found_falcon2_ucode = TRUE;
+    }
+    if (buffer[i] == 0xC7 && buffer[i+1] == 0x83 && *(UINT32 *)(buffer + i + 2) == 0x00841180U && *(UINT32 *)(buffer + i + 6) == 1U) {
+      found_falcon2_cfg = TRUE;
+    }
+    if (buffer[i] == 0xC7 && buffer[i+1] == 0x83 && *(UINT32 *)(buffer + i + 2) == 0x00840104U && *(UINT32 *)(buffer + i + 6) == 256U) {
+      found_entry_point = TRUE;
+    }
+    if (buffer[i] == 0xC7 && buffer[i+1] == 0x83 && *(UINT32 *)(buffer + i + 2) == 0x00840040U) {
+      found_mailbox0 = TRUE;
+    }
+    if (buffer[i] == 0x89 && buffer[i+1] == 0x83 && *(UINT32 *)(buffer + i + 2) == 0x00840044U) {
+      found_mailbox1 = TRUE;
     }
     if (buffer[i] == 0xC7 && buffer[i+1] == 0x83 && *(UINT32 *)(buffer + i + 2) == 0x00840100U && *(UINT32 *)(buffer + i + 6) == 2U) {
       found_falcon_cpu_start = TRUE;
+    }
+    if (buffer[i] == 0x3D && *(UINT32 *)(buffer + i + 1) == 0x67B00001U) {
+      found_poll_marker = TRUE;
     }
     if (buffer[i] == 0xA8 && buffer[i+1] == 0x10) {
       found_poll_falcon_halt = TRUE;
@@ -1101,16 +1163,24 @@ static void TestGuAcpiBuildTrampolineCode(void) {
     if (buffer[i] == 0xA3 && *(UINT32 *)(buffer + i + 1) == (UINT32)(telem_phys + 0xD8)) {
       found_telem_booter_cpuctl = TRUE;
     }
+    if (buffer[i] == 0xA3 && *(UINT32 *)(buffer + i + 1) == (UINT32)(telem_phys + 0xDC)) {
+      found_telem_booter_marker = TRUE;
+    }
   }
   CHECK(found_fbif_trans_read && found_fbif_trans_write, "Trampoline must enable FBIF Trans (0x00840624 |= 0x80)");
   CHECK(found_irq_clear, "Trampoline must clear Falcon IRQ Status (0x0084010C = 0)");
   CHECK(found_fbif_mode_write, "Trampoline must setup FBIF Trans Mode (0x00840600 = (val & ~7) | 5)");
   CHECK(found_booter_dma_low, "Trampoline must write Booter DMA Address Low to 0x00840110");
-  CHECK(found_booter_dma_high, "Trampoline must write Booter DMA Address High to 0x00840114");
-  CHECK(found_booter_dma_size, "Trampoline must write Booter Size & kick DMA to 0x00840118");
+  CHECK(found_booter_dma_high, "Trampoline must write Booter DMA Address High to 0x00840128");
+  CHECK(found_dma_dest_write && found_dma_offset_write && found_dma_cmd_write, "Trampoline must execute chunked DMA transfers to IMEM and DMEM");
+  CHECK(found_dma_poll_comp, "Trampoline must poll DMA completion (status & 2 == 2)");
+  CHECK(found_falcon2_sig && found_falcon2_eng && found_falcon2_ucode && found_falcon2_cfg, "Trampoline must program Falcon2 registers (sig, eng, ucode, cfg)");
+  CHECK(found_entry_point, "Trampoline must set Falcon Entry Point Vector (0x00840104 = 256)");
+  CHECK(found_mailbox0 && found_mailbox1, "Trampoline must program Mailbox 0 (meta_dma) and Mailbox 1 (0)");
   CHECK(found_falcon_cpu_start, "Trampoline must start Falcon CPU (0x00840100 = 2)");
-  CHECK(found_poll_falcon_halt, "Trampoline must poll Falcon Engine Halt Bit (CPUCTL & 0x10)");
+  CHECK(found_poll_marker && found_poll_falcon_halt, "Trampoline must poll Marker (0x67B00001) and Falcon Engine Halt (0x10)");
   CHECK(found_telem_booter_cpuctl, "Trampoline must save post-booter CPUCTL to Telemetry +0xD8");
+  CHECK(found_telem_booter_marker, "Trampoline must save post-booter Marker to Telemetry +0xDC");
 
   /* Verify MSE + BME (0x06) programmed into Root Port Command & GPU Command */
   BOOLEAN found_cmd_bme = FALSE;
