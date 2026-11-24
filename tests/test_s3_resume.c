@@ -909,6 +909,7 @@ static void TestGuAcpiBuildTrampolineCode(void) {
     else if (buffer[i] == 0xB8 && buffer[i+1] == 0x04 && buffer[i+2] == 0x00 && buffer[i+3] == 0x2D && buffer[i+4] == 0x80) { instr_len = 5; desc = "mov eax, 0x802D0004          ; GPU 45:0:0 Cmd/Stat"; }
     else if (buffer[i] == 0xB8 && buffer[i+1] == 0x00 && buffer[i+2] == 0xFB && buffer[i+3] == 0x00 && buffer[i+4] == 0xFC) { instr_len = 5; desc = "mov eax, 0xFC00FB00          ; Root Port Mem Window 0xFB00..0xFC00"; }
     else if (buffer[i] == 0xB8 && buffer[i+1] == 0x01 && buffer[i+2] == 0x00 && buffer[i+3] == 0x00 && buffer[i+4] == 0x00) { instr_len = 5; desc = "mov eax, 1                   ; Status = Success (1)"; }
+    else if (buffer[i] == 0x48) { instr_len = 1; desc = "dec eax                         ; Status = Success (1)"; }
     else if (buffer[i] == 0xB8 && buffer[i+1] == 0x02 && buffer[i+2] == 0x00 && buffer[i+3] == 0x00 && buffer[i+4] == 0x00) { instr_len = 5; desc = "mov eax, 2                   ; Status = Mismatch (2)"; }
     else if (buffer[i] == 0xB8) { instr_len = 5; desc = "mov eax, imm32"; }
     else if (buffer[i] == 0xA3) { instr_len = 5; desc = "mov [disp32], eax"; }
@@ -1044,7 +1045,8 @@ static void TestGuAcpiBuildTrampolineCode(void) {
     if (buffer[i] == 0x24 && buffer[i+1] == 0xFE) {
       found_reset_deassert = TRUE;
     }
-    if (buffer[i] == 0xA9 && buffer[i+1] == 0x00 && buffer[i+2] == 0x10 && buffer[i+3] == 0x00 && buffer[i+4] == 0x00) {
+    if ((buffer[i] == 0xA9 && buffer[i+1] == 0x00 && buffer[i+2] == 0x10 && buffer[i+3] == 0x00 && buffer[i+4] == 0x00) ||
+        (buffer[i] == 0xF6 && buffer[i+1] == 0xC4 && buffer[i+2] == 0x10)) {
       found_poll_scrub = TRUE;
     }
     if (buffer[i] == 0x89 && buffer[i+1] == 0x83 && *(UINT32 *)(buffer + i + 2) == 0x00841668U) {

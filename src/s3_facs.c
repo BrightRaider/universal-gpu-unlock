@@ -759,7 +759,7 @@ UINT32 GuAcpiBuildTrampolineCode(
   *e++ = 0xA3; *(UINT32 *)e = (UINT32)(high_telem_dest + 0x88); e += 4; /* mov [dest+0x88], eax */
 
   /* Check for unmapped MMIO (0xFFFFFFFF or 0xBADFxxxx) */
-  *e++ = 0x3D; *e++ = 0xFF; *e++ = 0xFF; *e++ = 0xFF; *e++ = 0xFF; /* cmp eax, 0xFFFFFFFF */
+  *e++ = 0x83; *e++ = 0xF8; *e++ = 0xFF;             /* cmp eax, -1 (0xFFFFFFFF) */
   UINT8 *fault_jmp1 = e;
   *e++ = 0x0F; *e++ = 0x84; *e++ = 0x00; *e++ = 0x00; *e++ = 0x00; *e++ = 0x00; /* jz near .fault */
 
@@ -794,7 +794,8 @@ UINT32 GuAcpiBuildTrampolineCode(
   *e++ = 0x89; *e++ = 0x83; *(UINT32 *)e = 0x008403C0U; e += 4; /* mov [ebx + 0x008403C0], eax */
 
   /* 10 dummy reads of 0x008403C0 for signal propagation */
-  *e++ = 0xB9; *e++ = 0x0A; *e++ = 0x00; *e++ = 0x00; *e++ = 0x00; /* mov ecx, 10 */
+  *e++ = 0x31; *e++ = 0xC9;                         /* xor ecx, ecx */
+  *e++ = 0xB1; *e++ = 0x0A;                         /* mov cl, 10 */
   UINT8 *dummy_loop1 = e;
   *e++ = 0x8B; *e++ = 0x83; *(UINT32 *)e = 0x008403C0U; e += 4; /* mov eax, [ebx + 0x008403C0] */
   *e++ = 0x49;                                                 /* dec ecx */
@@ -806,8 +807,8 @@ UINT32 GuAcpiBuildTrampolineCode(
   *e++ = 0x24; *e++ = 0xFE;                                     /* and al, 0xFE */
   *e++ = 0x89; *e++ = 0x83; *(UINT32 *)e = 0x008403C0U; e += 4; /* mov [ebx + 0x008403C0], eax */
 
-  /* 10 dummy reads of 0x008403C0 after reset release */
-  *e++ = 0xB9; *e++ = 0x0A; *e++ = 0x00; *e++ = 0x00; *e++ = 0x00; /* mov ecx, 10 */
+  /* 10 dummy reads of 0x008403C0 after reset release (ECX is already 0) */
+  *e++ = 0xB1; *e++ = 0x0A;                         /* mov cl, 10 */
   UINT8 *dummy_loop2 = e;
   *e++ = 0x8B; *e++ = 0x83; *(UINT32 *)e = 0x008403C0U; e += 4; /* mov eax, [ebx + 0x008403C0] */
   *e++ = 0x49;                                                 /* dec ecx */
@@ -1040,18 +1041,16 @@ UINT32 GuAcpiBuildTrampolineCode(
   *e++ = 0x83; *e++ = 0xFA; *e++ = 0x08;             /* cmp edx, 0x08 */
   UINT8 *stat_mismatch2 = e;
   *e++ = 0x75; *e++ = 0x00;                         /* jne .stat_done */
-  *e++ = 0xB8; *e++ = 0x01; *e++ = 0x00; *e++ = 0x00; *e++ = 0x00; /* mov eax, 1 (Success!) */
+  *e++ = 0x48;                                       /* dec eax (Status = 1 Success) */
 
   /* .stat_done: */
   stat_mismatch1[1] = (UINT8)(e - (stat_mismatch1 + 2));
   stat_mismatch2[1] = (UINT8)(e - (stat_mismatch2 + 2));
   *e++ = 0xA3; *(UINT32 *)e = (UINT32)(high_telem_dest + 0x84); e += 4; /* mov [dest+0x84], eax (status) */
-  *e++ = 0xC7; *e++ = 0x05; *(UINT32 *)e = (UINT32)(high_telem_dest + 0x80); e += 4;
-  *e++ = 0x4B; *e++ = 0x4C; *e++ = 0x4E; *e++ = 0x55; /* mov dword [dest+0x80], 0x554E4C4B ('UNLK') */
 
-  /* Jump over fault handler to teardown */
+  /* Jump over fault handler to common teardown */
   UINT8 *skip_fault_jmp = e;
-  *e++ = 0xEB; *e++ = 0x00;                         /* jmp short .teardown */
+  *e++ = 0xEB; *e++ = 0x00;                         /* jmp short .common_teardown */
 
   /* .fault: */
   INT32 fdisp1 = (INT32)(e - (fault_jmp1 + 6));
@@ -1061,11 +1060,11 @@ UINT32 GuAcpiBuildTrampolineCode(
 
   *e++ = 0xC7; *e++ = 0x05; *(UINT32 *)e = (UINT32)(high_telem_dest + 0x84); e += 4;
   *e++ = 0x03; *e++ = 0x00; *e++ = 0x00; *e++ = 0x00; /* mov dword [dest+0x84], 3 (Fault) */
-  *e++ = 0xC7; *e++ = 0x05; *(UINT32 *)e = (UINT32)(high_telem_dest + 0x80); e += 4;
-  *e++ = 0x4B; *e++ = 0x4C; *e++ = 0x4E; *e++ = 0x55; /* 'UNLK' */
 
-  /* .teardown: Restore GPU and Bridge PCI config to pre-trampoline state */
+  /* .common_teardown: Restore GPU and Bridge PCI config to pre-trampoline state */
   skip_fault_jmp[1] = (UINT8)(e - (skip_fault_jmp + 2));
+  *e++ = 0xC7; *e++ = 0x05; *(UINT32 *)e = (UINT32)(high_telem_dest + 0x80); e += 4;
+  *e++ = 0x4B; *e++ = 0x4C; *e++ = 0x4E; *e++ = 0x55; /* mov dword [dest+0x80], 0x554E4C4B ('UNLK') */
 
   /* 6. Restore GPU Command register */
   *e++ = 0xBA; *e++ = 0xF8; *e++ = 0x0C; *e++ = 0x00; *e++ = 0x00; /* mov edx, 0x0CF8 */

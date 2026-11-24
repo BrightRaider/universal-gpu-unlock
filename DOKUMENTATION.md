@@ -1,7 +1,7 @@
 # Technische Dokumentation: Universal GPU Unlock (Multi-Gen)
 
 > **Tool:** Universal GPU Unlock  
-> **Version:** v1.8.52  
+> **Version:** v1.8.55  
 > **Architekturen:** NVIDIA Ada Lovelace (RTX 40), Ampere (RTX 30), Turing (RTX 20 / CMP)  
 > **Unterstützte Betriebssysteme:** Windows 10, Windows 11, WSL2 / Ubuntu CUDA Container  
 
@@ -1099,9 +1099,25 @@ Mit `v1.8.54` habe ich den Durchbruch für den vollständigen AD102 Tensor Core 
 
 6. **Code Envelope & Register Effizienz:**
    - Optimierung der PCI-I/O-Portwechsel (`mov dl, 0xF8` / `mov dl, 0xFC`) und der DMA-Schleife.
-   - Gesamte Trampolin-Code-Größe: **1277 Bytes**, bleibt exakt unter dem 1280-Byte-Limit (`< 0x0500`).
+   - Gesamte Trampolin-Code-Größe: **1275 Bytes**, bleibt exakt unter dem 1280-Byte-Limit (`< 0x0500`).
    - Alle 8.714 Checks in 10 MSVC Host Test Suites erfolgreich (`MSVC_HOST_TESTS=PASS`).
    - Vollständiger 4-Stufen-PCIe-Teardown, 0 CMOS/RTC-Mutation, `OspmFlags = 0`.
+
+### 13.27 Die v1.8.55 Erweiterung: Desktop Ada Lovelace Whitelist (RTX 4060 Ti & RTX 4060)
+In Version `v1.8.55` habe ich die Hardware-Erkennung für die Desktop-Modelle der Ada-Lovelace-Mittelklasse vervollständigt:
+- **Hintergrund:** Die Firmware-Payloads in `AD102-ASSETS` (SEC2-Booter, RISC-V GSP-Firmware und die V67 PLM-Rate-Limiter-Bypass-Sequenz) sind architekturweit für alle Ada-Chips (AD102, AD103, AD104, AD106, AD107) identisch. Allerdings enthielt die C-Header-Whitelist `src/gpu_device_ids.h` für AD106 und AD107 bisher primär Mobile-IDs (`0x2860` und `0x2882`).
+- **Erweiterte Device-IDs in `GU_ADA_DEVICE_IDS`:**
+  - `0x2803`: NVIDIA GeForce RTX 4060 Ti 8GB Desktop (AD106)
+  - `0x2805`: NVIDIA GeForce RTX 4060 Ti 16GB Desktop (AD106)
+  - `0x2807`: NVIDIA GeForce RTX 4060 Ti OEM / Board-Partner-Variante (AD106)
+  - `0x2860`: NVIDIA GeForce RTX 4060 Ti Mobile (AD106)
+  - `0x2882`: NVIDIA GeForce RTX 4060 Desktop (AD107)
+  - `0x28a0`: NVIDIA GeForce RTX 4060 Laptop (AD107)
+- **Verifikation & Testbench:**
+  - Integration in `tests/test_turing_local.c` für PCI-ID-Matching (`GuIsSupportedPciId` für `0x280310de`, `0x280510de`, `0x288210de`).
+  - Re-Kompilierung von `BOOTX64.EFI` und `AdaUnlockDxe.efi` mit gültiger Authenticode-Signatur.
+  - Alle Host-Tests erfolgreich (`MSVC_HOST_TESTS=PASS`).
+
 
 
 

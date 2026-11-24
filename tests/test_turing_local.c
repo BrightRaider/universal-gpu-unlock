@@ -93,6 +93,9 @@ int main(void) {
   CHECK(GuIsSupportedPciId(0x1e8910deU), "RTX 2060 TU104 0x1e8910de must be supported");
   CHECK(GuIsSupportedPciId(0x1f0b10deU), "CMP 40HX 0x1f0b10de must be supported");
   CHECK(GuIsSupportedPciId(0x268410deU), "RTX 4090 0x268410de must be supported");
+  CHECK(GuIsSupportedPciId(0x280310deU), "RTX 4060 Ti 8GB 0x280310de must be supported");
+  CHECK(GuIsSupportedPciId(0x280510deU), "RTX 4060 Ti 16GB 0x280510de must be supported");
+  CHECK(GuIsSupportedPciId(0x288210deU), "RTX 4060 Desktop 0x288210de must be supported");
   CHECK(GuIsSupportedPciId(0x220610deU), "RTX 3080 0x220610de must be supported");
   CHECK(GuIsSupportedPciId(0x25ec10deU), "RTX 3050 Laptop 0x25ec10de must be supported");
   CHECK(GuIsSupportedPciId(0x25ed10deU), "RTX 2050 Mobile 0x25ed10de must be supported");

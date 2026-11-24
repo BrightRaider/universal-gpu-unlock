@@ -6,6 +6,20 @@ For packaged binaries and downloads, visit [GitHub Releases](https://github.com/
 
 ---
 
+## [v1.8.55] - 2026-11-24
+### Added & Fixed
+- **Desktop Ada Lovelace AD106 & AD107 Whitelist & Verification (addresses #21):**
+  - Ergänzung der Desktop-PCI-IDs für die Ada-Lovelace-Mittelklasse in `src/gpu_device_ids.h`:
+    - `0x2803`: NVIDIA GeForce RTX 4060 Ti 8GB Desktop (AD106)
+    - `0x2805`: NVIDIA GeForce RTX 4060 Ti 16GB Desktop (AD106)
+    - `0x2807`: NVIDIA GeForce RTX 4060 Ti Variant / OEM (AD106)
+    - `0x2882`: NVIDIA GeForce RTX 4060 Desktop (AD107)
+    - `0x28a0`: NVIDIA GeForce RTX 4060 Laptop (AD107)
+  - Vollständige Kompatibilität mit dem bestehenden, einheitlichen Payload-Satz in `AD102-ASSETS/` (`booter_load_ad102.bin`, `gsp_boot_ad102.bin`, `v67-ad102-610.43.03-four-plm.bin`, `gsp_ga10x.bin`).
+  - Erweiterung der Unit-Tests in `tests/test_turing_local.c` für `GuIsSupportedPciId` auf die neuen Device-IDs.
+  - Re-Kompilierung und Authenticode-Signierung der EFI-Binaries `bin/BOOTX64.EFI` und `bin/AdaUnlockDxe.efi`.
+  - Aktualisierung der Hardware-Kompatibilitätsmatrix in `README.md` und `DOKUMENTATION.md`.
+
 ## [v1.8.54] - 2026-11-24
 ### Added & Fixed
 - **AD102 Blockweises 256-Byte SEC2 DMA (IMEM/DMEM), Falcon2-Register & Mailbox Booter Execution im 32-Bit Flat Mode bei S3-Wake (addresses #19):**
