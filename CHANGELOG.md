@@ -6,6 +6,18 @@ For packaged binaries and downloads, visit [GitHub Releases](https://github.com/
 
 ---
 
+## [v1.8.67] - 2026-11-24
+### Added & Fixed
+- **Port-`0x80`-getakteter SEC2-Booter-Poll & `[meta_dma]`-Probe `+0x14C` (addresses #19):**
+  - **Port-`0x80`-getaktetes SEC2-Booter-Gate (`src/s3_facs.c`):**
+    - Direkt nach `[0x00840100] = 2` legt das 32-Bit-Trampolin zunächst ~100 `in al, 0x80`-Anlaufreads ein.
+    - Die Hauptschleife pollt mit `in al, 0x80`-Taktung pro Durchlauf bis zu `6.000.000` Iterationen (~5–6 s Sicherheitsbudget, statt zuvor 100.000 ungepaceter MMIO-Reads / ~15–30 ms) und bricht sofort ab bei `MAILBOX0 == 0x67b00001` oder `(CPUCTL & 0x10) != 0 && MAILBOX0 != meta_dma`.
+    - Nach dem Marker wartet eine zusätzliche Port-`0x80`-getaktete Schleife (`100.000` Iterationen, analog zu `unlock_610.c`) bis zum echten SEC2-Halt (`0x00840100 & 0x10 != 0`), bevor `SS0`/`SS1` geschrieben werden.
+  - **Zusatz-Telemetrie `+0x14C` (`src/s3_facs.h`, `src/s3_facs.c`):**
+    - Sichert das erste DWORD direkt aus Host-RAM `[meta_dma]` (erwartetes Low-DWORD `0x371a60b3` von `GU_WPR_META_MAGIC`) an Telemetrie `+0x14C` (mit `L58` in `C:\S3Dumps\capture_s3_telem.ps1` automatisch im Dump erfasst; Trampolingröße `2.140` Bytes im `0x0A00`-Envelope).
+  - **Bewährte Basis unverändert:** GSP-FWSEC-Sequenz (inkl. GSP-Halt-Gate), 6-Puffer-Arena (`EfiReservedMemoryType`, 1 Deskriptor, `DMA_live = 0`), PCIe-FLR, post-FLR `hold_sec2_reset()`, 4-Stufen-Teardown (`0x002D2D00`) sowie `0x0A00`-Envelope-Layout.
+  - **Host-Tests:** Alle `8.795` Checks in `test_s3_resume.c` (inkl. Disassembler- und Bytecode-Asserts für SEC2-Port-`0x80`-Pacing, Post-Marker-Halt-Wait und `+0x14C`) sowie das komplette `MSVC_HOST_TESTS`-Paket bestanden (`MSVC_HOST_TESTS=PASS`).
+
 ## [v1.8.66] - 2026-11-24
 ### Added & Fixed
 - **Sauberes Port-`0x80`-getaktetes GSP-HALT-Gate & Diagnose-Telemetrie +0x120..+0x148 (addresses #19):**

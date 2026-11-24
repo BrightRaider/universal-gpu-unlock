@@ -1,7 +1,7 @@
 # Technische Dokumentation: Universal GPU Unlock (Multi-Gen)
 
 > **Tool:** Universal GPU Unlock  
-> **Version:** v1.8.66  
+> **Version:** v1.8.67  
 > **Architekturen:** NVIDIA Ada Lovelace (RTX 40), Ampere (RTX 30), Turing (RTX 20 / CMP)  
 > **Unterstützte Betriebssysteme:** Windows 10, Windows 11, WSL2 / Ubuntu CUDA Container  
 
@@ -164,6 +164,9 @@ Für Grafikkarten der Ada Lovelace-Reihe (RTX 4090 / AD102) mit GSP-Firmware und
    - **Port-`0x80`-getaktetes GSP-Halt-Gate:** Nach FWSEC-Kickoff (`0x00110100 = 2`) wartet das 32-Bit-Trampolin zunächst ~100 `in al, 0x80` Anlauf-Reads (~100 µs), bevor `gsp_halt_poll` mit 1.000.000 `in al, 0x80`-getakteten Iterationen (~500–1000 ms Budget) sauber bis `(BAR0 + 0x00110100) & 0x10 != 0` blockiert.
    - **Erweitertes Code-Envelope (`0x0A00` / 2560 Bytes):** Low-Data/Telemetrie/Mirror wandern auf `0x0A00..0x0AEF` und `RM_IDTR`/`PM_GDTR`/`GDT` auf `0x0B00..0x0B37`, abgesichert durch Compile-Time-Asserts (Trampolin-Codegröße: 2.098 Bytes).
    - **Erweiterte S3-Telemetrie (`+0x120..+0x148`) & Kaltstart-Referenz:** Neben Post-Booter SEC2-Diagnosen (`SEC2_DEBUGINFO`, `SEC2_IRQSTAT`, `SEC2_TRACEPC`, `SEC2_PRIV_ERR`, `SEC2_HUB_ERR`, `SEC2_PRIV_INFO`, `SEC2_PRIV_ADDR`) sowie `PMC_DEVICE_ENABLE`, `GSP_RISCV_CPUCTL`, `GSP_BCR` und `GSP_DEBUGINFO` werden `0x200`/`0x600`/`0x1100F4`/`0x110100`/`0x111388`/`0x111668` auch im Kaltstart (`RUN*.TXT`) protokolliert; `C:\S3Dumps\capture_s3_telem.ps1` liest über `!dd <Addr> L58` den vollständigen Bereich bis `+0x15C`.
+8. **Port-`0x80`-getakteter SEC2-Booter-Poll & `[meta_dma]`-Probe `+0x14C` (v1.8.67):**
+   - **Port-`0x80`-SEC2-Gate:** Unmittelbar nach SEC2-Kickoff (`0x00840100 = 2`) wartet das 32-Bit-Trampolin zunächst ~100 `in al, 0x80`-Anlauftakte, pollt anschließend über bis zu `6.000.000` Port-`0x80`-getaktete Iterationen (~5–6 s Budget) auf `MAILBOX0 == 0x67b00001` oder `(CPUCTL & 0x10) != 0 && MAILBOX0 != meta_dma` und wartet nach Erreichen des Markers noch per kurzem Port-`0x80`-Poll (`100.000` Iterationen) sauber auf `SEC2_CPUCTL & 0x10 != 0`, bevor `SS0`/`SS1` geschrieben werden.
+   - **Host-RAM-Verifikation (`+0x14C`):** Direkt vor dem SEC2-Start sichert das Trampolin das erste DWORD an `[meta_dma]` (erwartet: `0x371a60b3`, Low-DWORD von `GU_WPR_META_MAGIC`) in Telemetrie `+0x14C` (Trampolin-Codegröße: `2.140` Bytes im `0x0A00`-Envelope).
 
 ---
 

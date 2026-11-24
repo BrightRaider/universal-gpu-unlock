@@ -104,6 +104,7 @@
 #define GU_TELEM_SEC2_PRIV_INFO_OFF      0x0140U /* SEC2_PRIV_INFO (BAR0 + 0x00841504) (v1.8.66) */
 #define GU_TELEM_SEC2_PRIV_ADDR_OFF      0x0144U /* SEC2_PRIV_ADDR (BAR0 + 0x00841508) (v1.8.66) */
 #define GU_TELEM_GSP_DEBUGINFO_OFF       0x0148U /* GSP_DEBUGINFO (BAR0 + 0x00110094) (v1.8.66) */
+#define GU_TELEM_META_MAGIC_LO_OFF       0x014CU /* Host-RAM [meta_dma] Low-DWORD (expected 0x371a60b3) (v1.8.67) */
 
 /* Dedicated High (>1MB, <4GB) ACPI NVS Page Offsets for Shadow Tables */
 #define GU_HIGH_SHADOW_RSDP_OFF        0x0000U

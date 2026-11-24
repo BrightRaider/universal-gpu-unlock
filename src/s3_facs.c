@@ -1290,32 +1290,58 @@ UINT32 GuAcpiBuildTrampolineCode(
   *e++ = 0x8B; *e++ = 0x83; *(UINT32 *)e = 0x00110100U; e += 4; /* mov eax, [ebx + 0x00110100] */
   *e++ = 0xA3; *(UINT32 *)e = (UINT32)(high_telem_dest + GU_TELEM_GSP_CPUCTL_OFF); e += 4; /* mov [dest+0x104], eax */
 
+  /* +0x14C: Direct Host-RAM probe at [meta_dma] before SEC2 Booter kickoff (expected 0x371a60b3) (v1.8.67) */
+  *e++ = 0xA1; *(UINT32 *)e = meta_dma; e += 4;                                                 /* mov eax, [meta_dma] */
+  *e++ = 0xA3; *(UINT32 *)e = (UINT32)(high_telem_dest + GU_TELEM_META_MAGIC_LO_OFF); e += 4;   /* mov [dest+0x14C], eax */
+
   /* Start Falcon CPU: [ebx + 0x00840100] = 2 */
   *e++ = 0xC7; *e++ = 0x83; *(UINT32 *)e = 0x00840100U; e += 4; /* mov dword [ebx + 0x00840100], 2 */
   *(UINT32 *)e = 2U; e += 4;
 
-  /* Bounded Polling on Mailbox 0 == 0x67b00001 (GU_AD102_MARKER) (100,000 iterations)
+  /* Initial ~100 Port-0x80 Reads (~100us) so SEC2 clears any stale HALT bit 0x10 before polling (v1.8.67) */
+  *e++ = 0xB9; *(UINT32 *)e = 100U; e += 4;                     /* mov ecx, 100 */
+  UINT8 *sec2_kick_delay = e;
+  *e++ = 0xE4; *e++ = 0x80;                                     /* in al, 0x80 (~1us I/O pacing) */
+  *e++ = 0x49;                                                  /* dec ecx */
+  *e++ = 0x75;                                                  /* jnz sec2_kick_delay */
+  *e++ = (UINT8)(sec2_kick_delay - (e + 1));
+
+  /* Port-0x80 Paced Polling on Mailbox 0 == 0x67b00001 (GU_AD102_MARKER) (6,000,000 iterations, ~5-6s budget) (v1.8.67)
    * Only sample CPUCTL Halt (Bit 4) if Mailbox 0 != meta_dma to avoid premature abort on stale Halt bit
    */
-  *e++ = 0xB9; *e++ = 0xA0; *e++ = 0x86; *e++ = 0x01; *e++ = 0x00; /* mov ecx, 100000 */
+  *e++ = 0xB9; *(UINT32 *)e = 6000000U; e += 4;                 /* mov ecx, 6000000 (0x005B8D80) */
   UINT8 *halt_poll_start = e;
-  *e++ = 0x8B; *e++ = 0x83; *(UINT32 *)e = 0x00840040U; e += 4;   /* mov eax, [ebx + 0x00840040] (Mailbox 0) */
-  *e++ = 0x3D; *(UINT32 *)e = 0x67B00001U; e += 4;               /* cmp eax, 0x67B00001 */
-  *e++ = 0x74;                                                   /* jz .halt_done */
+  *e++ = 0x8B; *e++ = 0x83; *(UINT32 *)e = 0x00840040U; e += 4; /* mov eax, [ebx + 0x00840040] (Mailbox 0) */
+  *e++ = 0x3D; *(UINT32 *)e = 0x67B00001U; e += 4;              /* cmp eax, 0x67B00001 */
+  *e++ = 0x74;                                                  /* jz .halt_done */
   UINT8 *halt_break1 = e++;
-  *e++ = 0x3D; *(UINT32 *)e = meta_dma; e += 4;                   /* cmp eax, meta_dma */
-  *e++ = 0x74;                                                   /* jz .continue_poll */
+  *e++ = 0x3D; *(UINT32 *)e = meta_dma; e += 4;                 /* cmp eax, meta_dma */
+  *e++ = 0x74;                                                  /* jz .continue_poll */
   UINT8 *halt_continue = e++;
-  *e++ = 0x8B; *e++ = 0x83; *(UINT32 *)e = 0x00840100U; e += 4;   /* mov eax, [ebx + 0x00840100] (CPUCTL) */
-  *e++ = 0xA8; *e++ = 0x10;                                       /* test al, 0x10 */
-  *e++ = 0x75;                                                   /* jnz .halt_done */
+  *e++ = 0x8B; *e++ = 0x83; *(UINT32 *)e = 0x00840100U; e += 4; /* mov eax, [ebx + 0x00840100] (CPUCTL) */
+  *e++ = 0xA8; *e++ = 0x10;                                     /* test al, 0x10 */
+  *e++ = 0x75;                                                  /* jnz .halt_done */
   UINT8 *halt_break2 = e++;
-  *halt_continue = (UINT8)(e - (halt_continue + 1));              /* .continue_poll target */
-  *e++ = 0x49;                                                   /* dec ecx */
-  *e++ = 0x75;                                                   /* jnz halt_poll_start */
+  *halt_continue = (UINT8)(e - (halt_continue + 1));            /* .continue_poll target */
+  *e++ = 0xE4; *e++ = 0x80;                                     /* in al, 0x80 (~1us I/O pacing) */
+  *e++ = 0x49;                                                  /* dec ecx */
+  *e++ = 0x75;                                                  /* jnz halt_poll_start */
   *e++ = (UINT8)(halt_poll_start - (e + 1));
-  *halt_break1 = (UINT8)(e - (halt_break1 + 1));                  /* .halt_done target */
+  *halt_break1 = (UINT8)(e - (halt_break1 + 1));                /* .halt_done target */
   *halt_break2 = (UINT8)(e - (halt_break2 + 1));
+
+  /* Wait for SEC2 CPUCTL Halt (Bit 4) after marker 0x67b00001 before teardown/selectors (unlock_610.c:1564) (v1.8.67) */
+  *e++ = 0xB9; *(UINT32 *)e = 100000U; e += 4;                  /* mov ecx, 100000 (~100ms paced budget) */
+  UINT8 *sec2_halt_wait = e;
+  *e++ = 0x8B; *e++ = 0x83; *(UINT32 *)e = 0x00840100U; e += 4; /* mov eax, [ebx + 0x00840100] (CPUCTL) */
+  *e++ = 0xA8; *e++ = 0x10;                                     /* test al, 0x10 */
+  *e++ = 0x75;                                                  /* jnz .sec2_halted */
+  UINT8 *sec2_halt_break = e++;
+  *e++ = 0xE4; *e++ = 0x80;                                     /* in al, 0x80 (~1us I/O pacing) */
+  *e++ = 0x49;                                                  /* dec ecx */
+  *e++ = 0x75;                                                  /* jnz sec2_halt_wait */
+  *e++ = (UINT8)(sec2_halt_wait - (e + 1));
+  *sec2_halt_break = (UINT8)(e - (sec2_halt_break + 1));
 
   /* Save post-booter SEC2_CPUCTL to +0xD8 */
   *e++ = 0x8B; *e++ = 0x83; *(UINT32 *)e = 0x00840100U; e += 4;   /* mov eax, [ebx + 0x00840100] */

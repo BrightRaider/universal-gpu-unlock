@@ -944,6 +944,8 @@ static void TestGuAcpiBuildTrampolineCode(void) {
     else if (buffer[i] == 0xB2 && buffer[i+1] == 0xF8) { instr_len = 2; desc = "mov dl, 0xF8                     ; Fast switch to PCI CF8 port"; }
     else if (buffer[i] == 0xB2 && buffer[i+1] == 0xFC) { instr_len = 2; desc = "mov dl, 0xFC                     ; Fast switch to PCI CFC port"; }
     else if (buffer[i] == 0xC7 && buffer[i+1] == 0x83 && buffer[i+2] == 0x00 && buffer[i+3] == 0x01 && buffer[i+4] == 0x84 && buffer[i+5] == 0x00 && *(UINT32 *)(buffer + i + 6) == 2U) { instr_len = 10; desc = "mov dword [ebx+0x840100], 2          ; Start SEC2 Falcon CPU (CPUCTL = 2)"; }
+    else if (buffer[i] == 0xB9 && *(UINT32 *)(buffer + i + 1) == 6000000U) { instr_len = 5; desc = "mov ecx, 6000000                  ; SEC2 Booter Poll (~5-6s budget)"; }
+    else if (buffer[i] == 0xB9 && *(UINT32 *)(buffer + i + 1) == 100000U) { instr_len = 5; desc = "mov ecx, 100000                   ; SEC2 Halt Wait (100k Port-0x80)"; }
     else if (buffer[i] == 0xA8 && buffer[i+1] == 0x10) { instr_len = 2; desc = "test al, 0x10                       ; Test Falcon Halt Bit (CPUCTL & 0x10)"; }
     else if (buffer[i] == 0x49) { instr_len = 1; desc = "dec ecx                             ; Decrement loop/poll timeout"; }
     else if (buffer[i] == 0xC7 && buffer[i+1] == 0x83 && buffer[i+2] == 0x1C && buffer[i+3] == 0x38 && buffer[i+4] == 0x82 && buffer[i+5] == 0x00) { instr_len = 10; desc = "mov dword [ebx+0x82381C], 0x88888888 ; Write SS0 Rate-Limiter Unlock"; }
@@ -1817,6 +1819,46 @@ static void TestGuS3ArenaConsolidation(void) {
   }
   CHECK(found_gsp_pre_delay, "Trampoline must issue ~100 Port-0x80 pre-delay reads after GSP FWSEC kickoff");
   CHECK(found_gsp_halt_gate, "Trampoline must gate on GSP Halt (0x00110100 & 0x10) for up to 1,000,000 Port-0x80 iterations");
+
+  /* Verify SEC2 kickoff pre-delay (~100 Port-0x80), 6M Port-0x80 Booter Poll, and post-marker Halt Wait (v1.8.67) */
+  BOOLEAN found_sec2_pre_delay = FALSE;
+  BOOLEAN found_sec2_booter_poll = FALSE;
+  BOOLEAN found_sec2_halt_wait = FALSE;
+  for (UINT32 i = 0; i + 40 <= bytes; i++) {
+    if (buffer[i] == 0xC7 && buffer[i+1] == 0x83 && *(UINT32 *)(buffer + i + 2) == 0x00840100U &&
+        *(UINT32 *)(buffer + i + 6) == 2U &&
+        buffer[i+10] == 0xB9 && *(UINT32 *)(buffer + i + 11) == 100U &&
+        buffer[i+15] == 0xE4 && buffer[i+16] == 0x80 && buffer[i+17] == 0x49 && buffer[i+18] == 0x75) {
+      found_sec2_pre_delay = TRUE;
+    }
+    if (buffer[i] == 0xB9 && *(UINT32 *)(buffer + i + 1) == 6000000U &&
+        buffer[i+5] == 0x8B && buffer[i+6] == 0x83 && *(UINT32 *)(buffer + i + 7) == 0x00840040U &&
+        buffer[i+11] == 0x3D && *(UINT32 *)(buffer + i + 12) == 0x67B00001U &&
+        buffer[i+16] == 0x74 &&
+        buffer[i+35] == 0xE4 && buffer[i+36] == 0x80 && buffer[i+37] == 0x49 && buffer[i+38] == 0x75) {
+      found_sec2_booter_poll = TRUE;
+    }
+    if (buffer[i] == 0xB9 && *(UINT32 *)(buffer + i + 1) == 100000U &&
+        buffer[i+5] == 0x8B && buffer[i+6] == 0x83 && *(UINT32 *)(buffer + i + 7) == 0x00840100U &&
+        buffer[i+11] == 0xA8 && buffer[i+12] == 0x10 && buffer[i+13] == 0x75 &&
+        buffer[i+15] == 0xE4 && buffer[i+16] == 0x80 && buffer[i+17] == 0x49 && buffer[i+18] == 0x75) {
+      found_sec2_halt_wait = TRUE;
+    }
+  }
+  CHECK(found_sec2_pre_delay, "Trampoline must issue ~100 Port-0x80 pre-delay reads after SEC2 Booter kickoff");
+  CHECK(found_sec2_booter_poll, "Trampoline must poll SEC2 Booter (0x00840040) for up to 6,000,000 Port-0x80 iterations");
+  CHECK(found_sec2_halt_wait, "Trampoline must wait for SEC2 CPUCTL Halt (0x00840100 & 0x10) with Port-0x80 pacing after marker");
+
+  /* Verify +0x14C direct [meta_dma] host-RAM probe */
+  BOOLEAN found_meta_probe = FALSE;
+  for (UINT32 i = 0; i + 10 <= bytes; i++) {
+    if (buffer[i] == 0xA1 && *(UINT32 *)(buffer + i + 1) == 0xDAD31000U &&
+        buffer[i+5] == 0xA3 && *(UINT32 *)(buffer + i + 6) == (UINT32)(telem_phys + GU_TELEM_META_MAGIC_LO_OFF)) {
+      found_meta_probe = TRUE;
+      break;
+    }
+  }
+  CHECK(found_meta_probe, "Trampoline must probe [meta_dma] directly into telemetry +0x14C before SEC2 kickoff");
 
   /* Verify Mailbox 1 save to +0x11C */
   BOOLEAN found_mb1_save = FALSE;
