@@ -1,7 +1,7 @@
 # Technische Dokumentation: Universal GPU Unlock (Multi-Gen)
 
 > **Tool:** Universal GPU Unlock  
-> **Version:** v1.8.57  
+> **Version:** v1.8.63  
 > **Architekturen:** NVIDIA Ada Lovelace (RTX 40), Ampere (RTX 30), Turing (RTX 20 / CMP)  
 > **Unterstützte Betriebssysteme:** Windows 10, Windows 11, WSL2 / Ubuntu CUDA Container  
 
@@ -120,6 +120,30 @@ Um dieses Problem universell und herstellerunabhängig zu lösen, habe ich eine 
    - **Ablauf beim Aufwachen:** Das BIOS liest die echte FACS aus der LockBox und springt direkt in mein Trampolin.
    - **Dual-Mode Trampoline:** Startet im 16-Bit Real Mode, lädt eine eingebettete 5-Eintrag-GDT, wechselt in den 32-Bit Flat Protected Mode, setzt SEC2 Falcon zurück, re-authentifiziert den Unlock-Payload, verriegelt `SS0 = 0x88888888` und `SS1 = 0x8`, schaltet die CPU sauber in den 16-Bit Real Mode zurück und springt per Far Return (`retf`) direkt in Windows `HalpRMStub`.
    - **Ergebnis:** 100 % volatile, herstellerübergreifende S3-Persistenz ohne VBIOS-Flash und ohne SMM-Abhängigkeit.
+
+
+### 6.4 Fortgeschrittene S3-Architektur: Teardown, Reserved Memory Arena & Live-Telemetrie (ab v1.8.59)
+Für Grafikkarten der Ada Lovelace-Reihe (RTX 4090 / AD102) mit GSP-Firmware und WPR2-Partitionierung implementiert das S3-Trampolin ein hochpräzises, mehrstufiges Steuerungskonzept:
+1. **4-Stufen-Hardware-Teardown & PCIe-FLR (v1.8.59):**
+   - Vor dem SEC2-Neustart trennt das Trampolin die GPU sauber von allen PCIe-Bussen:
+     - Root Port 0:3:1 Offset 0x18 wird auf `0x002D2D00` (Sec=0x2D, Sub=0x2D) gehalten.
+     - PCIe Function-Level Reset (FLR, PCIe Device Control Bit 15) setzt alle internen Falcon- und DMA-Engines synchron zurück.
+     - Bounded Polling auf BAR0 Boot0 (`0x192000A1`) stellt die vollständige Wiederanbindung nach dem FLR sicher.
+2. **Single-Descriptor Reserved Memory Arena & DMA-Entflechtung (v1.8.61):**
+   - **Retention:** Das ca. 84 MB große GSP-Firmware-Image sowie die 3-stufige Radix-Page-Table werden beim Kaltstart in einer einzigen, zusammenhängenden 82-MB-Arena in `EfiReservedMemoryType` unter 4 GB reserviert (`is_arena = TRUE`). Die UEFI Memory Map wächst dadurch um genau 1 Deskriptor (Schutz vor Fragmentierung).
+   - **DMA-Entflechtung (`DMA_live = 0`):** Vor der Übergabe an Windows (`StartImage(bootmgfw.efi)`) werden alle UEFI-DMA-Mappings via `PciIo->Unmap()` sauber getrennt, während der physische Speicher im DRAM persistent verankert bleibt.
+3. **EfiRuntimeServicesData Live-Telemetrie (v1.8.62):**
+   - Die 4-KB-Telemetrieseite (`TelemetryPage`) wird in `EfiRuntimeServicesData` allokiert, sodass Windows NT (`kldbgdrv.sys` / `kd.exe -kl`) sie unmittelbar nach dem S3-Wake per WinDbg lesen kann.
+   - Ein dynamischer 512-KB-Abwärtsscan in `GuAcpiInstallShadowFacs()` garantiert, dass auch bei Warmstarts nach S3-Wake frühere Telemetriedaten sicher erkannt und protokolliert werden.
+4. **Pre-Booter Hardware-Snapshot (v1.8.63):**
+   - Unmittelbar vor dem Start des SEC2 Booters sichert das Trampolin genau 6 MMIO-Register in die Telemetrieseite:
+     * `+0xF0`: Pre-Booter WPR2_LO (`BAR0 + 0x001fa824`)
+     * `+0xF4`: Pre-Booter WPR2_HI (`BAR0 + 0x001fa828`)
+     * `+0xF8`: NV_PFB_PRI_MMU_LOCAL_MEMORY_RANGE (`BAR0 + 0x00100ce0`)
+     * `+0xFC`: GFW-BOOT-Completion (`BAR0 + 0x00118234`, `GU_GFW_BOOT_OFFSET`)
+     * `+0x100`: GSP_HWCFG2 (`BAR0 + 0x001100f4`)
+     * `+0x104`: GSP_CPUCTL (`BAR0 + 0x00110100`)
+   - Zusammen mit `C:\S3Dumps\capture_s3_telem.ps1` (`!dd <Addr> L50`) ermöglicht dies eine unterbrechungsfreie Hardware-Zustandsanalyse direkt nach dem S3-Aufwachen.
 
 ---
 

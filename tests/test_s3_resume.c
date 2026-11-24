@@ -948,6 +948,14 @@ static void TestGuAcpiBuildTrampolineCode(void) {
     else if (buffer[i] == 0x8B && buffer[i+1] == 0x83 && buffer[i+2] == 0x20 && buffer[i+3] == 0x38 && buffer[i+4] == 0x82 && buffer[i+5] == 0x00) { instr_len = 6; desc = "mov eax, [ebx+0x823820]         ; Read SS1 Selector"; }
     else if (buffer[i] == 0x8B && buffer[i+1] == 0x83 && buffer[i+2] == 0x04 && buffer[i+3] == 0x38 && buffer[i+4] == 0x82 && buffer[i+5] == 0x00) { instr_len = 6; desc = "mov eax, [ebx+0x823804]         ; Read PLM Permission Level Mask"; }
     else if (buffer[i] == 0x8B && buffer[i+1] == 0x83 && buffer[i+2] == 0x18 && buffer[i+3] == 0x38 && buffer[i+4] == 0x82 && buffer[i+5] == 0x00) { instr_len = 6; desc = "mov eax, [ebx+0x823818]         ; Read Readout 1 Speed Status"; }
+    else if (buffer[i] == 0x8B && buffer[i+1] == 0x83 && buffer[i+2] == 0x24 && buffer[i+3] == 0xA8 && buffer[i+4] == 0x1F && buffer[i+5] == 0x00) { instr_len = 6; desc = "mov eax, [ebx+0x001fa824]       ; Read pre-booter WPR2_LO"; }
+    else if (buffer[i] == 0x8B && buffer[i+1] == 0x83 && buffer[i+2] == 0x28 && buffer[i+3] == 0xA8 && buffer[i+4] == 0x1F && buffer[i+5] == 0x00) { instr_len = 6; desc = "mov eax, [ebx+0x001fa828]       ; Read WPR2_HI (pre-booter or post-FLR)"; }
+    else if (buffer[i] == 0x8B && buffer[i+1] == 0x83 && buffer[i+2] == 0xE0 && buffer[i+3] == 0x0C && buffer[i+4] == 0x10 && buffer[i+5] == 0x00) { instr_len = 6; desc = "mov eax, [ebx+0x00100ce0]       ; Read MMU Local Memory Range"; }
+    else if (buffer[i] == 0x8B && buffer[i+1] == 0x83 && buffer[i+2] == 0x34 && buffer[i+3] == 0x82 && buffer[i+4] == 0x11 && buffer[i+5] == 0x00) { instr_len = 6; desc = "mov eax, [ebx+0x00118234]       ; Read GFW-BOOT Completion"; }
+    else if (buffer[i] == 0x8B && buffer[i+1] == 0x83 && buffer[i+2] == 0xF4 && buffer[i+3] == 0x00 && buffer[i+4] == 0x11 && buffer[i+5] == 0x00) { instr_len = 6; desc = "mov eax, [ebx+0x001100f4]       ; Read GSP_HWCFG2"; }
+    else if (buffer[i] == 0x8B && buffer[i+1] == 0x83 && buffer[i+2] == 0x00 && buffer[i+3] == 0x01 && buffer[i+4] == 0x11 && buffer[i+5] == 0x00) { instr_len = 6; desc = "mov eax, [ebx+0x00110100]       ; Read GSP_CPUCTL"; }
+    else if (buffer[i] == 0x8B && buffer[i+1] == 0x83) { instr_len = 6; desc = "mov eax, [ebx+disp32]          ; Generic MMIO read"; }
+    else if (buffer[i] == 0x89 && buffer[i+1] == 0x83) { instr_len = 6; desc = "mov [ebx+disp32], eax          ; Generic MMIO write"; }
     else if (buffer[i] == 0xBB) { instr_len = 5; desc = "mov ebx, bar0_target           ; Set BAR0 Base Pointer"; }
     else if (buffer[i] == 0x8B && buffer[i+1] == 0x03) { instr_len = 2; desc = "mov eax, [ebx]                 ; Read GPU PMC Boot0 / Chip ID"; }
     else if (buffer[i] == 0x3D && buffer[i+1] == 0xFF && buffer[i+2] == 0xFF && buffer[i+3] == 0xFF && buffer[i+4] == 0xFF) { instr_len = 5; desc = "cmp eax, 0xFFFFFFFF           ; Check MMIO master abort"; }
@@ -1178,6 +1186,12 @@ static void TestGuAcpiBuildTrampolineCode(void) {
   BOOLEAN found_poll_falcon_halt = FALSE;
   BOOLEAN found_telem_booter_cpuctl = FALSE;
   BOOLEAN found_telem_booter_marker = FALSE;
+  BOOLEAN found_telem_pre_wpr2_lo = FALSE;
+  BOOLEAN found_telem_pre_wpr2_hi = FALSE;
+  BOOLEAN found_telem_mmu_lmr = FALSE;
+  BOOLEAN found_telem_gfw_boot = FALSE;
+  BOOLEAN found_telem_gsp_hwcfg2 = FALSE;
+  BOOLEAN found_telem_gsp_cpuctl = FALSE;
   for (UINT32 i = pm32_offset; i < pm16_offset - 9; i++) {
     if (buffer[i] == 0x8B && buffer[i+1] == 0x83 && *(UINT32 *)(buffer + i + 2) == 0x00840624U) {
       found_fbif_trans_read = TRUE;
@@ -1252,6 +1266,24 @@ static void TestGuAcpiBuildTrampolineCode(void) {
     if (buffer[i] == 0xA3 && *(UINT32 *)(buffer + i + 1) == (UINT32)(telem_phys + 0xDC)) {
       found_telem_booter_marker = TRUE;
     }
+    if (buffer[i] == 0xA3 && *(UINT32 *)(buffer + i + 1) == (UINT32)(telem_phys + GU_TELEM_PRE_BOOTER_WPR2_LO_OFF)) {
+      found_telem_pre_wpr2_lo = TRUE;
+    }
+    if (buffer[i] == 0xA3 && *(UINT32 *)(buffer + i + 1) == (UINT32)(telem_phys + GU_TELEM_PRE_BOOTER_WPR2_HI_OFF)) {
+      found_telem_pre_wpr2_hi = TRUE;
+    }
+    if (buffer[i] == 0xA3 && *(UINT32 *)(buffer + i + 1) == (UINT32)(telem_phys + GU_TELEM_MMU_LOCAL_MEM_RANGE_OFF)) {
+      found_telem_mmu_lmr = TRUE;
+    }
+    if (buffer[i] == 0xA3 && *(UINT32 *)(buffer + i + 1) == (UINT32)(telem_phys + GU_TELEM_GFW_BOOT_STATUS_OFF)) {
+      found_telem_gfw_boot = TRUE;
+    }
+    if (buffer[i] == 0xA3 && *(UINT32 *)(buffer + i + 1) == (UINT32)(telem_phys + GU_TELEM_GSP_HWCFG2_OFF)) {
+      found_telem_gsp_hwcfg2 = TRUE;
+    }
+    if (buffer[i] == 0xA3 && *(UINT32 *)(buffer + i + 1) == (UINT32)(telem_phys + GU_TELEM_GSP_CPUCTL_OFF)) {
+      found_telem_gsp_cpuctl = TRUE;
+    }
   }
   CHECK(found_fbif_trans_read && found_fbif_trans_write, "Trampoline must enable FBIF Trans (0x00840624 |= 0x80)");
   CHECK(found_irq_clear, "Trampoline must clear Falcon IRQ Status (0x0084010C = 0)");
@@ -1267,6 +1299,12 @@ static void TestGuAcpiBuildTrampolineCode(void) {
   CHECK(found_poll_marker && found_poll_meta_guard && found_poll_falcon_halt, "Trampoline must poll Marker (0x67B00001), guard Halt with meta_dma, and check Falcon Engine Halt (0x10)");
   CHECK(found_telem_booter_cpuctl, "Trampoline must save post-booter CPUCTL to Telemetry +0xD8");
   CHECK(found_telem_booter_marker, "Trampoline must save post-booter Marker to Telemetry +0xDC");
+  CHECK(found_telem_pre_wpr2_lo, "Trampoline must save pre-booter WPR2_LO (0x001fa824) to Telemetry +0xF0");
+  CHECK(found_telem_pre_wpr2_hi, "Trampoline must save pre-booter WPR2_HI (0x001fa828) to Telemetry +0xF4");
+  CHECK(found_telem_mmu_lmr, "Trampoline must save MMU Local Memory Range (0x00100ce0) to Telemetry +0xF8");
+  CHECK(found_telem_gfw_boot, "Trampoline must save GFW-BOOT Status (0x00118234) to Telemetry +0xFC");
+  CHECK(found_telem_gsp_hwcfg2, "Trampoline must save GSP_HWCFG2 (0x001100f4) to Telemetry +0x100");
+  CHECK(found_telem_gsp_cpuctl, "Trampoline must save GSP_CPUCTL (0x00110100) to Telemetry +0x104");
 
   /* Verify MSE + BME (0x06) programmed into Root Port Command & GPU Command */
   BOOLEAN found_cmd_bme = FALSE;

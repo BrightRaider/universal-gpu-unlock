@@ -994,6 +994,31 @@ UINT32 GuAcpiBuildTrampolineCode(
   *e++ = 0x31; *e++ = 0xC0;                                     /* xor eax, eax */
   *e++ = 0x89; *e++ = 0x83; *(UINT32 *)e = 0x00840044U; e += 4; /* mov [ebx + 0x00840044], eax */
 
+  /* Pre-Booter Diagnostic MMIO Snapshot (v1.8.63) */
+  /* +0xF0: Pre-Booter WPR2_LO (BAR0 + 0x001fa824) */
+  *e++ = 0x8B; *e++ = 0x83; *(UINT32 *)e = 0x001fa824U; e += 4; /* mov eax, [ebx + 0x001fa824] */
+  *e++ = 0xA3; *(UINT32 *)e = (UINT32)(high_telem_dest + GU_TELEM_PRE_BOOTER_WPR2_LO_OFF); e += 4; /* mov [dest+0xF0], eax */
+
+  /* +0xF4: Pre-Booter WPR2_HI (BAR0 + 0x001fa828) */
+  *e++ = 0x8B; *e++ = 0x83; *(UINT32 *)e = 0x001fa828U; e += 4; /* mov eax, [ebx + 0x001fa828] */
+  *e++ = 0xA3; *(UINT32 *)e = (UINT32)(high_telem_dest + GU_TELEM_PRE_BOOTER_WPR2_HI_OFF); e += 4; /* mov [dest+0xF4], eax */
+
+  /* +0xF8: NV_PFB_PRI_MMU_LOCAL_MEMORY_RANGE (BAR0 + 0x00100ce0) */
+  *e++ = 0x8B; *e++ = 0x83; *(UINT32 *)e = 0x00100ce0U; e += 4; /* mov eax, [ebx + 0x00100ce0] */
+  *e++ = 0xA3; *(UINT32 *)e = (UINT32)(high_telem_dest + GU_TELEM_MMU_LOCAL_MEM_RANGE_OFF); e += 4; /* mov [dest+0xF8], eax */
+
+  /* +0xFC: GFW-BOOT-Completion (BAR0 + 0x00118234) */
+  *e++ = 0x8B; *e++ = 0x83; *(UINT32 *)e = 0x00118234U; e += 4; /* mov eax, [ebx + 0x00118234] */
+  *e++ = 0xA3; *(UINT32 *)e = (UINT32)(high_telem_dest + GU_TELEM_GFW_BOOT_STATUS_OFF); e += 4; /* mov [dest+0xFC], eax */
+
+  /* +0x100: GSP_HWCFG2 (BAR0 + 0x001100f4) */
+  *e++ = 0x8B; *e++ = 0x83; *(UINT32 *)e = 0x001100f4U; e += 4; /* mov eax, [ebx + 0x001100f4] */
+  *e++ = 0xA3; *(UINT32 *)e = (UINT32)(high_telem_dest + GU_TELEM_GSP_HWCFG2_OFF); e += 4; /* mov [dest+0x100], eax */
+
+  /* +0x104: GSP_CPUCTL (BAR0 + 0x00110100) */
+  *e++ = 0x8B; *e++ = 0x83; *(UINT32 *)e = 0x00110100U; e += 4; /* mov eax, [ebx + 0x00110100] */
+  *e++ = 0xA3; *(UINT32 *)e = (UINT32)(high_telem_dest + GU_TELEM_GSP_CPUCTL_OFF); e += 4; /* mov [dest+0x104], eax */
+
   /* Start Falcon CPU: [ebx + 0x00840100] = 2 */
   *e++ = 0xC7; *e++ = 0x83; *(UINT32 *)e = 0x00840100U; e += 4; /* mov dword [ebx + 0x00840100], 2 */
   *(UINT32 *)e = 2U; e += 4;
@@ -1644,14 +1669,23 @@ EFI_STATUS GuAcpiInstallShadowFacs(
       UINT32 post_ss0      = *(UINT32 *)(unlk_page + GU_TELEM_POST_FLR_SS0_OFF);
       UINT32 post_ss1      = *(UINT32 *)(unlk_page + GU_TELEM_POST_FLR_SS1_OFF);
       UINT32 post_plm      = *(UINT32 *)(unlk_page + GU_TELEM_POST_FLR_PLM_OFF);
+      UINT32 pre_wpr2_lo   = *(UINT32 *)(unlk_page + GU_TELEM_PRE_BOOTER_WPR2_LO_OFF);
+      UINT32 pre_wpr2_hi   = *(UINT32 *)(unlk_page + GU_TELEM_PRE_BOOTER_WPR2_HI_OFF);
+      UINT32 mmu_lmr       = *(UINT32 *)(unlk_page + GU_TELEM_MMU_LOCAL_MEM_RANGE_OFF);
+      UINT32 gfw_boot      = *(UINT32 *)(unlk_page + GU_TELEM_GFW_BOOT_STATUS_OFF);
+      UINT32 gsp_hwcfg2    = *(UINT32 *)(unlk_page + GU_TELEM_GSP_HWCFG2_OFF);
+      UINT32 gsp_cpuctl    = *(UINT32 *)(unlk_page + GU_TELEM_GSP_CPUCTL_OFF);
       GuLog("S3 Wake Hardware Unlock Telemetry: Magic=UNLK Status=%u Chip=%#08x AssignedBAR0=%#08x\n"
             "  BCR_Post: %#08x CPUCTL_Post: %#08x Booter_CPUCTL: %#08x Mailbox0/Marker: %#08x\n"
+            "  Pre-Booter: WPR2_LO=%#08x WPR2_HI=%#08x LMR=%#08x GFW_BOOT=%#08x GSP_HWCFG2=%#08x GSP_CPUCTL=%#08x\n"
             "  SS0: %#08x -> %#08x (Target 0x88888888)\n"
             "  SS1: %#08x -> %#08x (Target 0x00000008)\n"
             "  Readout1: %#08x (Full-Rate = 0x00000000)\n"
             "  Post-FLR: WPR2_HI=%#08x (HI.VAL=%u) SS0=%#08x SS1=%#08x PLM=%#08x\n",
             (unsigned)unlk_status, (unsigned)unlk_chip, (unsigned)unlk_bar0,
             (unsigned)bcr_post, (unsigned)cpuctl_post, (unsigned)booter_cpuctl, (unsigned)booter_marker,
+            (unsigned)pre_wpr2_lo, (unsigned)pre_wpr2_hi, (unsigned)mmu_lmr,
+            (unsigned)gfw_boot, (unsigned)gsp_hwcfg2, (unsigned)gsp_cpuctl,
             (unsigned)ss0_before, (unsigned)ss0_after,
             (unsigned)ss1_before, (unsigned)ss1_after,
             (unsigned)ro_after,

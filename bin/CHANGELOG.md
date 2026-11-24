@@ -6,6 +6,27 @@ For packaged binaries and downloads, visit [GitHub Releases](https://github.com/
 
 ---
 
+## [v1.8.63] - 2026-11-24
+### Added & Fixed
+- **Pre-Booter MMIO-Diagnose-Snapshot & Telemetrie-Erweiterung im S3-Trampolin (addresses #19):**
+  - **Pre-Booter Hardware-Snapshot im 32-Bit-Trampolin (`src/s3_facs.c`, `src/s3_facs.h`):**
+    - Unmittelbar vor dem Start des SEC2 Falcon Booters (`[ebx + 0x00840100] = 2`) führt das 32-Bit-Trampolin genau 6 nicht-invasive MMIO-Reads durch und spiegelt sie in die Telemetrieseite:
+      * `+0xF0`: Pre-Booter WPR2_LO (`BAR0 + 0x001fa824`)
+      * `+0xF4`: Pre-Booter WPR2_HI (`BAR0 + 0x001fa828`)
+      * `+0xF8`: NV_PFB_PRI_MMU_LOCAL_MEMORY_RANGE (`BAR0 + 0x00100ce0`)
+      * `+0xFC`: GFW-BOOT-Completion (`BAR0 + 0x00118234`, `GU_GFW_BOOT_OFFSET`)
+      * `+0x100`: GSP_HWCFG2 (`BAR0 + 0x001100f4`)
+      * `+0x104`: GSP_CPUCTL (`BAR0 + 0x00110100`)
+    - Dadurch lässt sich beim nächsten S3-Wake im laufenden Windows verifizieren, ob VRAM-/Devinit bereit ist, ob GFW-Boot aktiv war und ob WPR2 bereits vor dem Booter durch GFW/FSP partitioniert wurde.
+  - **Erweiterung des Auto-Dump-Skripts (`C:\S3Dumps\capture_s3_telem.ps1`):**
+    - Telemetrie-Dump auf `L50` (80 DWORDs = 320 Bytes) erweitert, sodass `+0xF0..+0x104` vollständig in `wake_*.txt` und `wake_latest.txt` erfasst werden.
+  - **Bewährtes Trampolin unverändert erhalten:**
+    - 4-Stufen-Teardown (inkl. aktivem `0x002D2D00`), PCIe-FLR, post-FLR hold_sec2_reset, 82-MB-Reserved-Arena (`EfiReservedMemoryType`, 1 Deskriptor, `DMA_live = 0`) und `EfiRuntimeServicesData`-Telemetrie bleiben exakt erhalten.
+    - Trampolingröße: 1490 Bytes (weit unterhalb des 2048-Byte / `0x0800` Envelope-Limits).
+  - **Test-Suite & Disassembler-Härtung (`tests/test_s3_resume.c`):**
+    - Disassembler mit generischem 6-Byte-MMIO-Handler (`8B 83` / `89 83`) und spezifischen Offsets gehärtet, um Fehlinterpretationen von Bitfeldern als `HLT` (`0xF4`) auszuschließen.
+    - Alle 8.755 Checks in 10 Test-Suites erfolgreich (`MSVC_HOST_TESTS=PASS`).
+
 ## [v1.8.62] - 2026-11-24
 ### Added & Fixed
 - **EfiRuntimeServicesData Telemetrie-Sichtbarkeit & Dynamischer Prior-Wake-Suchpfad (addresses #19):**
