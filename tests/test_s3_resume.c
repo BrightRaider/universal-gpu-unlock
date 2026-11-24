@@ -19,6 +19,7 @@
 #include "../src/port.h"
 #include "../src/compat/compat.h"
 #include "../src/vendor/prep_610.h"
+#include <Protocol/PciRootBridgeIo.h>
 #include <stddef.h>
 
 #include <stdarg.h>
@@ -276,7 +277,7 @@ static EFI_STATUS EFIAPI MockAllocatePages(
   return EFI_SUCCESS;
 }
 
-/* Mock PCI IO Protocol infrastructure for multi-vendor / switch topology tests (v1.9.0) */
+/* Mock PCI IO & PCI Root Bridge IO Protocol infrastructure for multi-vendor / switch topology tests (v1.9.1) */
 typedef struct {
   EFI_PCI_IO_PROTOCOL io;
   UINT8 bus;
@@ -285,9 +286,14 @@ typedef struct {
   UINT8 cfg[256];
 } MOCK_PCI_DEV;
 
-#define MAX_MOCK_PCI_DEVS 8
+#define MAX_MOCK_PCI_DEVS 16
 static MOCK_PCI_DEV g_mock_pci_devs[MAX_MOCK_PCI_DEVS];
 static UINTN g_mock_pci_count = 0;
+
+static MOCK_PCI_DEV g_mock_rb_devs[MAX_MOCK_PCI_DEVS];
+static UINTN g_mock_rb_count = 0;
+static BOOLEAN g_mock_rb_enabled = FALSE;
+static UINT32 g_mock_rb_segment = 0;
 
 static EFI_STATUS EFIAPI MockPciConfigRead(
     IN EFI_PCI_IO_PROTOCOL *This,
@@ -320,6 +326,36 @@ static EFI_STATUS EFIAPI MockPciGetLocation(
   return EFI_SUCCESS;
 }
 
+static EFI_STATUS EFIAPI MockRootBridgePciRead(
+    IN     EFI_PCI_ROOT_BRIDGE_IO_PROTOCOL        *This,
+    IN     EFI_PCI_ROOT_BRIDGE_IO_PROTOCOL_WIDTH  Width,
+    IN     UINT64                                 Address,
+    IN     UINTN                                  Count,
+    IN OUT VOID                                   *Buffer
+) {
+  (VOID)This;
+  if (!Buffer || Count != 1) return EFI_INVALID_PARAMETER;
+  UINT8 bus  = (UINT8)((Address >> 24) & 0xFFU);
+  UINT8 dev  = (UINT8)((Address >> 16) & 0xFFU);
+  UINT8 func = (UINT8)((Address >> 8) & 0xFFU);
+  UINT32 reg = (UINT32)(Address & 0xFFU);
+  UINTN elem_sz = (Width == EfiPciWidthUint8) ? 1U :
+                  (Width == EfiPciWidthUint16) ? 2U :
+                  (Width == EfiPciWidthUint32) ? 4U : 0U;
+  if (elem_sz == 0U || reg + elem_sz > 256U) return EFI_INVALID_PARAMETER;
+
+  for (UINTN i = 0; i < g_mock_rb_count; i++) {
+    if (g_mock_rb_devs[i].bus == bus && g_mock_rb_devs[i].dev == dev && g_mock_rb_devs[i].func == func) {
+      memcpy(Buffer, &g_mock_rb_devs[i].cfg[reg], elem_sz);
+      return EFI_SUCCESS;
+    }
+  }
+  memset(Buffer, 0xFF, elem_sz);
+  return EFI_SUCCESS;
+}
+
+static EFI_PCI_ROOT_BRIDGE_IO_PROTOCOL g_mock_root_bridge_io;
+
 static EFI_STATUS EFIAPI MockLocateHandleBuffer(
     IN EFI_LOCATE_SEARCH_TYPE SearchType,
     IN EFI_GUID *Protocol,
@@ -328,17 +364,31 @@ static EFI_STATUS EFIAPI MockLocateHandleBuffer(
     OUT EFI_HANDLE **Buffer
 ) {
   (VOID)SearchType; (VOID)SearchKey;
-  static const EFI_GUID pci_guid = { 0x4cf5b200, 0x68b8, 0x41fb, { 0x88, 0xae, 0xb2, 0xec, 0x17, 0x93, 0xac, 0x5d } };
-  if (!Protocol || !NoHandles || !Buffer || memcmp(Protocol, &pci_guid, sizeof(EFI_GUID)) != 0 || g_mock_pci_count == 0) {
-    return EFI_NOT_FOUND;
+  static const EFI_GUID pci_guid = EFI_PCI_IO_PROTOCOL_GUID;
+  static const EFI_GUID rb_guid = EFI_PCI_ROOT_BRIDGE_IO_PROTOCOL_GUID;
+  if (!Protocol || !NoHandles || !Buffer) return EFI_INVALID_PARAMETER;
+
+  if (memcmp(Protocol, &rb_guid, sizeof(EFI_GUID)) == 0 && g_mock_rb_enabled) {
+    memset(&g_mock_root_bridge_io, 0, sizeof(g_mock_root_bridge_io));
+    g_mock_root_bridge_io.Pci.Read = MockRootBridgePciRead;
+    g_mock_root_bridge_io.SegmentNumber = g_mock_rb_segment;
+    EFI_HANDLE *arr = (EFI_HANDLE *)calloc(1, sizeof(EFI_HANDLE));
+    arr[0] = (EFI_HANDLE)&g_mock_root_bridge_io;
+    *NoHandles = 1;
+    *Buffer = arr;
+    return EFI_SUCCESS;
   }
-  EFI_HANDLE *arr = (EFI_HANDLE *)calloc(g_mock_pci_count, sizeof(EFI_HANDLE));
-  for (UINTN i = 0; i < g_mock_pci_count; i++) {
-    arr[i] = (EFI_HANDLE)&g_mock_pci_devs[i];
+
+  if (memcmp(Protocol, &pci_guid, sizeof(EFI_GUID)) == 0 && g_mock_pci_count > 0) {
+    EFI_HANDLE *arr = (EFI_HANDLE *)calloc(g_mock_pci_count, sizeof(EFI_HANDLE));
+    for (UINTN i = 0; i < g_mock_pci_count; i++) {
+      arr[i] = (EFI_HANDLE)&g_mock_pci_devs[i];
+    }
+    *NoHandles = g_mock_pci_count;
+    *Buffer = arr;
+    return EFI_SUCCESS;
   }
-  *NoHandles = g_mock_pci_count;
-  *Buffer = arr;
-  return EFI_SUCCESS;
+  return EFI_NOT_FOUND;
 }
 
 static EFI_STATUS EFIAPI MockHandleProtocol(
@@ -346,12 +396,18 @@ static EFI_STATUS EFIAPI MockHandleProtocol(
     IN EFI_GUID *Protocol,
     OUT VOID **Interface
 ) {
-  static const EFI_GUID pci_guid = { 0x4cf5b200, 0x68b8, 0x41fb, { 0x88, 0xae, 0xb2, 0xec, 0x17, 0x93, 0xac, 0x5d } };
-  if (!Handle || !Protocol || !Interface || memcmp(Protocol, &pci_guid, sizeof(EFI_GUID)) != 0) {
-    return EFI_UNSUPPORTED;
+  static const EFI_GUID pci_guid = EFI_PCI_IO_PROTOCOL_GUID;
+  static const EFI_GUID rb_guid = EFI_PCI_ROOT_BRIDGE_IO_PROTOCOL_GUID;
+  if (!Handle || !Protocol || !Interface) return EFI_INVALID_PARAMETER;
+  if (memcmp(Protocol, &rb_guid, sizeof(EFI_GUID)) == 0 && Handle == (EFI_HANDLE)&g_mock_root_bridge_io) {
+    *Interface = Handle;
+    return EFI_SUCCESS;
   }
-  *Interface = Handle;
-  return EFI_SUCCESS;
+  if (memcmp(Protocol, &pci_guid, sizeof(EFI_GUID)) == 0) {
+    *Interface = Handle;
+    return EFI_SUCCESS;
+  }
+  return EFI_UNSUPPORTED;
 }
 
 static EFI_STATUS EFIAPI MockFreePool(IN VOID *Buffer) {
@@ -370,6 +426,25 @@ static void AddMockBridge(UINT8 bus, UINT8 dev, UINT8 func, UINT16 vendor, UINT1
   *(UINT16 *)&d->cfg[0x00] = vendor;
   *(UINT16 *)&d->cfg[0x02] = device_id;
   d->cfg[0x0E] = 0x01; /* Type 1 PCI-to-PCI Bridge */
+  d->cfg[0x18] = pri;
+  d->cfg[0x19] = sec;
+  d->cfg[0x1A] = sub;
+  if (pcie_cap_off >= 0x40) {
+    d->cfg[0x34] = pcie_cap_off;
+    d->cfg[pcie_cap_off] = 0x10;
+    d->cfg[pcie_cap_off + 1] = 0x00;
+  }
+}
+
+static void AddMockRbEntry(UINT8 bus, UINT8 dev, UINT8 func, UINT16 vendor, UINT16 device_id,
+                           UINT8 hdr_type, UINT8 pri, UINT8 sec, UINT8 sub, UINT8 pcie_cap_off) {
+  if (g_mock_rb_count >= MAX_MOCK_PCI_DEVS) return;
+  MOCK_PCI_DEV *d = &g_mock_rb_devs[g_mock_rb_count++];
+  memset(d, 0, sizeof(*d));
+  d->bus = bus; d->dev = dev; d->func = func;
+  *(UINT16 *)&d->cfg[0x00] = vendor;
+  *(UINT16 *)&d->cfg[0x02] = device_id;
+  d->cfg[0x0E] = hdr_type;
   d->cfg[0x18] = pri;
   d->cfg[0x19] = sec;
   d->cfg[0x1A] = sub;
@@ -636,8 +711,8 @@ static void TestGuAcpiFacsDiscoveryAndPatching(void) {
   for (UINT32 i = 0xB90; i < 0x1000; i++) {
     CHECK(mock_low_tramp[i] == 0, "Low trampoline memory +0xB90..+0xFFF must be zero-initialized");
   }
-  CHECK(*(UINT32 *)(mock_low_tramp + GU_TRAMP_BRIDGE_TBL_OFF + GU_TRAMP_BRIDGE_BDF_OFF) == 0x80001900U,
-        "Default fallback bridge[0] at +0x0B40 must match 0x80001900");
+  CHECK(*(UINT32 *)(mock_low_tramp + GU_TRAMP_BRIDGE_TBL_OFF + GU_TRAMP_BRIDGE_BDF_OFF) == 0U,
+        "Zero-bus context must NOT fabricate blind 0x80001900 bridge fallback");
   /* Verify Real FACS Mirror at +0x0880 */
   CHECK(*(UINT32 *)(mock_low_tramp + GU_TRAMP_REAL_FACS_MIRROR_OFF) == 0x00007C00U, "Real FACS mirror at +0x880");
 
@@ -2112,9 +2187,13 @@ static void TestGuS3UniversalTopologiesAndHardening(void) {
   mock_st.NumberOfTableEntries = 1;
   mock_st.ConfigurationTable = cfg;
 
-  /* --- Scenario A + E: Intel Root Port (0x8086, Bus 1, 0:1:0), BAR0 0xD0000000, S0ix + XFirmwareWakingVector --- */
-  g_mock_pci_count = 0;
-  AddMockBridge(0, 1, 0, 0x8086, 0xA70D, 0, 1, 1, 0xA0); /* Root Port 0:1:0 -> Bus 1, LinkReg = 0x800008B0 */
+  /* --- Scenario A1: AMI Aptio V (0 PciIo bridges, multifunction 0:3:0 + 0:3:1 in RootBridgeIo, Bus 45) --- */
+  g_mock_pci_count = 0; /* NO EFI_PCI_IO_PROTOCOL handles on bridges (matches AMI Aptio V hardware!) */
+  g_mock_rb_count = 0;
+  g_mock_rb_segment = 0;
+  g_mock_rb_enabled = TRUE;
+  AddMockRbEntry(0, 3, 0, 0x1022, 0x1482, 0x80, 0, 0, 0, 0x00);      /* Multifunction host bridge func 0 */
+  AddMockRbEntry(0, 3, 1, 0x1022, 0x1483, 0x01, 0, 45, 45, 0x50);    /* AMD Root Port 0:3:1 -> Bus 45, Cap 0x50 */
 
   memset(&Gu, 0, sizeof(Gu));
   Gu.bs = &mock_bs;
@@ -2126,11 +2205,11 @@ static void TestGuS3UniversalTopologiesAndHardening(void) {
   memset(&ctx, 0, sizeof(ctx));
   ctx.magic = GU_S3_CONTEXT_MAGIC;
   ctx.version = 2;
-  ctx.bar_base = 0xD0000000ULL;
+  ctx.bar_base = 0xFB000000ULL;
   ctx.pci_id = 0x268410DEU;
   ctx.chip_id = 0x192000A1U;
-  ctx.bus = 1; ctx.device = 0; ctx.function = 0;
-  ctx.pci_cmd_port_addr = 0x80010004U;
+  ctx.bus = 45; ctx.device = 0; ctx.function = 0;
+  ctx.pci_cmd_port_addr = 0x802D0004U;
   ctx.booter_dma = 0xDAD01000ULL;
   ctx.meta_dma = 0xDAD31000ULL;
   ctx.val_ss0 = 0x88888888U;
@@ -2146,7 +2225,55 @@ static void TestGuS3UniversalTopologiesAndHardening(void) {
   GU_ACPI_FACS_INFO info;
   EFI_PHYSICAL_ADDRESS low_phys = 0x0009D000ULL;
   EFI_STATUS s = GuAcpiInstallShadowFacs(&mock_st, &ctx, nvs_page, 0xDC500000ULL, low_page, low_phys, &info);
-  CHECK(s == EFI_SUCCESS, "Intel Root Port GuAcpiInstallShadowFacs must succeed");
+  CHECK(s == EFI_SUCCESS, "AMI Aptio V RootBridgeIo GuAcpiInstallShadowFacs must succeed with 0 PciIo bridges");
+  CHECK(ctx.bridge_count == 1, "AMI Aptio V must discover 0:3:1 dynamically via RootBridgeIo");
+  CHECK(ctx.bridges[0].bdf_base == 0x80001900U, "AMI Aptio V Root Port BDF must be 0:3:1");
+  CHECK(ctx.bridges[0].bus_val == 0x002D2D00U, "AMI Aptio V Root Port BusCfg must be 0x002D2D00");
+  CHECK(ctx.bridges[0].link_reg == 0x80001960U, "AMI Aptio V Root Port LinkReg must be 0x80001960");
+  CHECK(ctx.root_port_link_reg == 0x80001960U, "ctx.root_port_link_reg must match discovered LinkReg");
+  CHECK(strstr(g_log_history, "S3 PCIe Bridge[0]: BDF=0x80001900 (pri=0 sec=45 sub=45)") != NULL,
+        "Log must explicitly record discovered bridge pri/sec/sub");
+
+  /* --- Scenario A2 + E: Intel Root Port (0x8086, Bus 1, 0:1:0 via RootBridgeIo, 0 PciIo), BAR0 0xD0000000, S0ix + XFirmwareWakingVector --- */
+  mock_rsdp.XsdtAddress = (UINT64)(uintptr_t)&mock_xsdt;
+  sum = 0; for (UINT32 i = 0; i < 20; i++) sum = (UINT8)(sum + ((UINT8 *)&mock_rsdp)[i]);
+  mock_rsdp.Checksum = (UINT8)(0 - sum);
+  sum = 0; for (UINT32 i = 0; i < mock_rsdp.Length; i++) sum = (UINT8)(sum + ((UINT8 *)&mock_rsdp)[i]);
+  mock_rsdp.ExtendedChecksum = (UINT8)(0 - sum);
+  mock_fadt.FirmwareCtrl = (UINT32)(uintptr_t)&mock_facs;
+  mock_fadt.XFirmwareCtrl = (UINT64)(uintptr_t)&mock_facs;
+  mock_fadt.Header.Checksum = 0;
+  sum = 0; for (UINT32 i = 0; i < mock_fadt.Header.Length; i++) sum = (UINT8)(sum + ((UINT8 *)&mock_fadt)[i]);
+  mock_fadt.Header.Checksum = (UINT8)(0 - sum);
+  mock_facs.FirmwareWakingVector = 0x00007C00U;
+  mock_facs.XFirmwareWakingVector = 0x12345678ULL;
+  GuAcpiResetShadowStateForTest();
+
+  g_mock_pci_count = 0;
+  g_mock_rb_count = 0;
+  g_mock_rb_enabled = TRUE;
+  AddMockRbEntry(0, 1, 0, 0x8086, 0xA70D, 0x01, 0, 1, 1, 0xA0); /* Intel Root Port 0:1:0 -> Bus 1, LinkReg = 0x800008B0 */
+
+  memset(&ctx, 0, sizeof(ctx));
+  ctx.magic = GU_S3_CONTEXT_MAGIC;
+  ctx.version = 2;
+  ctx.bar_base = 0xD0000000ULL;
+  ctx.pci_id = 0x268410DEU;
+  ctx.chip_id = 0x192000A1U;
+  ctx.bus = 1; ctx.device = 0; ctx.function = 0;
+  ctx.pci_cmd_port_addr = 0x80010004U;
+  ctx.booter_dma = 0xDAD01000ULL;
+  ctx.meta_dma = 0xDAD31000ULL;
+  ctx.val_ss0 = 0x88888888U;
+  ctx.val_ss1 = 0x00000008U;
+
+  memset(nvs_page, 0, sizeof(nvs_page));
+  memset(low_page, 0, sizeof(low_page));
+  memset(g_mock_high_acpi, 0, sizeof(g_mock_high_acpi));
+  g_log_history[0] = '\0';
+
+  s = GuAcpiInstallShadowFacs(&mock_st, &ctx, nvs_page, 0xDC500000ULL, low_page, low_phys, &info);
+  CHECK(s == EFI_SUCCESS, "Intel Root Port GuAcpiInstallShadowFacs must succeed via RootBridgeIo");
   CHECK(ctx.bridge_count == 1, "Intel topology must discover 1 upstream bridge");
   CHECK(ctx.bridges[0].bdf_base == 0x80000800U, "Intel Root Port BDF must be 0:1:0 (0x80000800)");
   CHECK(ctx.bridges[0].bus_val == 0x00010100U, "Intel Root Port BusCfg must be 0x00010100");
@@ -2179,12 +2306,16 @@ static void TestGuS3UniversalTopologiesAndHardening(void) {
   CHECK(strstr(g_log_history, "LOW_POWER_S0_IDLE_CAPABLE") != NULL, "Log must emit S0ix Modern Standby preflight warning");
   CHECK(strstr(g_log_history, "XFirmwareWakingVector") != NULL, "Log must emit XFirmwareWakingVector preflight warning");
 
-  /* --- Scenario B: 2-Level PCIe Switch Topology (0:1:0 -> 1:0:0 -> 2:4:0 -> GPU 3:0:0; sibling 2:3:0 excluded) --- */
+  /* --- Scenario B: 2-Level PCIe Switch (Root 0:1:0 WITHOUT PciIo + Switch ports WITH/WITHOUT PciIo; sibling excluded) --- */
   g_mock_pci_count = 0;
-  AddMockBridge(2, 4, 0, 0x10B5, 0x8747, 2, 3, 3, 0x70); /* Downstream switch port (added out of order to test sorting!) */
-  AddMockBridge(2, 3, 0, 0x10B5, 0x8747, 2, 4, 4, 0x70); /* Sibling switch downstream port -> MUST BE EXCLUDED */
-  AddMockBridge(1, 0, 0, 0x10B5, 0x8747, 1, 2, 5, 0x70); /* Upstream switch port */
-  AddMockBridge(0, 1, 0, 0x8086, 0xA70D, 0, 1, 5, 0x40); /* Root Port */
+  AddMockBridge(1, 0, 0, 0x10B5, 0x8747, 1, 2, 5, 0x70); /* Only Switch ports in PciIo; Root Port 0:1:0 deliberately omitted! */
+  AddMockBridge(2, 4, 0, 0x10B5, 0x8747, 2, 3, 3, 0x70);
+  g_mock_rb_count = 0;
+  g_mock_rb_enabled = TRUE;
+  AddMockRbEntry(0, 1, 0, 0x8086, 0xA70D, 0x01, 0, 1, 5, 0x40); /* Root Port (LinkReg=0x80000850) */
+  AddMockRbEntry(1, 0, 0, 0x10B5, 0x8747, 0x01, 1, 2, 5, 0x60); /* Switch Upstream (LinkReg=0x80010070) */
+  AddMockRbEntry(2, 3, 0, 0x10B5, 0x8747, 0x01, 2, 4, 4, 0x70); /* Sibling Downstream -> MUST BE EXCLUDED */
+  AddMockRbEntry(2, 4, 0, 0x10B5, 0x8747, 0x01, 2, 3, 3, 0x70); /* Target Downstream (LinkReg=0x80022080) */
 
   /* Recover Real RSDP/FADT/FACS cleanly after Scenario A installed Shadow state */
   mock_rsdp.XsdtAddress = (UINT64)(uintptr_t)&mock_xsdt;
@@ -2210,10 +2341,12 @@ static void TestGuS3UniversalTopologiesAndHardening(void) {
   memset(low_page, 0, sizeof(low_page));
   s = GuAcpiInstallShadowFacs(&mock_st, &ctx, nvs_page, 0xDC500000ULL, low_page, low_phys, &info);
   CHECK(s == EFI_SUCCESS, "2-level PCIe switch GuAcpiInstallShadowFacs must succeed");
-  CHECK(ctx.bridge_count == 3, "2-level switch topology must discover exactly 3 bridges (Root -> Up -> Down)");
+  CHECK(ctx.bridge_count == 3, "2-level switch topology must discover all 3 bridges (Root 0:1:0 not missed!)");
   CHECK(ctx.bridges[0].bdf_base == 0x80000800U && ctx.bridges[0].bus_val == 0x00050100U, "Switch[0] Root Port 0:1:0");
   CHECK(ctx.bridges[1].bdf_base == 0x80010000U && ctx.bridges[1].bus_val == 0x00050201U, "Switch[1] Upstream 1:0:0");
   CHECK(ctx.bridges[2].bdf_base == 0x80022000U && ctx.bridges[2].bus_val == 0x00030302U, "Switch[2] Downstream 2:4:0");
+  CHECK(ctx.root_port_link_reg == 0x80022080U, "Direct parent Downstream Port LinkReg (2:4:0 -> 0x80022080) must be selected");
+  CHECK(*(UINT32 *)(low_page + GU_TRAMP_PCI_PROBE_ADDRS_OFF + 3U * 4U) == 0x80022080U, "probe[3] must probe direct parent LinkReg");
   CHECK(*(UINT32 *)(low_page + GU_TRAMP_BRIDGE_TBL_OFF + 2U * GU_TRAMP_BRIDGE_ENTRY_SIZE) == 0x80022000U,
         "Bridge table[2] must be Leaf Downstream 2:4:0");
   CHECK(*(UINT32 *)(low_page + GU_TRAMP_BRIDGE_TBL_OFF + 3U * GU_TRAMP_BRIDGE_ENTRY_SIZE) == 0U,
@@ -2230,6 +2363,53 @@ static void TestGuS3UniversalTopologiesAndHardening(void) {
     }
   }
   CHECK(found_leaf_ptr && found_cnt_3, "Teardown must initialize ESI at leaf bridge (2:4:0) and ECX=3");
+
+  /* --- Scenario F: PciIo Fallback when RootBridgeIo is unavailable --- */
+  g_mock_rb_enabled = FALSE;
+  g_mock_pci_count = 0;
+  AddMockBridge(0, 1, 0, 0x8086, 0xA70D, 0, 1, 1, 0xA0);
+  mock_rsdp.XsdtAddress = (UINT64)(uintptr_t)&mock_xsdt;
+  sum = 0; for (UINT32 i = 0; i < 20; i++) sum = (UINT8)(sum + ((UINT8 *)&mock_rsdp)[i]);
+  mock_rsdp.Checksum = (UINT8)(0 - sum);
+  sum = 0; for (UINT32 i = 0; i < mock_rsdp.Length; i++) sum = (UINT8)(sum + ((UINT8 *)&mock_rsdp)[i]);
+  mock_rsdp.ExtendedChecksum = (UINT8)(0 - sum);
+  mock_fadt.FirmwareCtrl = (UINT32)(uintptr_t)&mock_facs;
+  mock_fadt.XFirmwareCtrl = (UINT64)(uintptr_t)&mock_facs;
+  mock_fadt.Header.Checksum = 0;
+  sum = 0; for (UINT32 i = 0; i < mock_fadt.Header.Length; i++) sum = (UINT8)(sum + ((UINT8 *)&mock_fadt)[i]);
+  mock_fadt.Header.Checksum = (UINT8)(0 - sum);
+  mock_facs.FirmwareWakingVector = 0x00007C00U;
+  memset(&ctx, 0, sizeof(ctx));
+  ctx.magic = GU_S3_CONTEXT_MAGIC; ctx.version = 2; ctx.bar_base = 0xD0000000ULL;
+  ctx.bus = 1; ctx.device = 0; ctx.function = 0; ctx.pci_cmd_port_addr = 0x80010004U;
+  ctx.booter_dma = 0xDAD01000ULL; ctx.meta_dma = 0xDAD31000ULL;
+  s = GuAcpiInstallShadowFacs(&mock_st, &ctx, nvs_page, 0xDC500000ULL, low_page, low_phys, &info);
+  CHECK(s == EFI_SUCCESS && ctx.bridge_count == 1 && ctx.bridges[0].bdf_base == 0x80000800U,
+        "PciIo fallback must still work cleanly when RootBridgeIo is absent");
+
+  /* --- Scenario G: Clean Abort when 0 Upstream Bridges exist for target_gpu_bus > 0 (NO 0x80001900 fallback!) --- */
+  g_mock_pci_count = 0;
+  g_mock_rb_count = 0;
+  g_mock_rb_enabled = TRUE;
+  AddMockRbEntry(0, 2, 0, 0x8086, 0x1234, 0x01, 0, 10, 10, 0x40); /* Unrelated bridge (bus 10 != 45) */
+  mock_facs.FirmwareWakingVector = 0x00007C00U;
+  memset(&ctx, 0, sizeof(ctx));
+  ctx.magic = GU_S3_CONTEXT_MAGIC; ctx.version = 2; ctx.bar_base = 0xFB000000ULL;
+  ctx.bus = 45; ctx.device = 0; ctx.function = 0; ctx.pci_cmd_port_addr = 0x802D0004U;
+  memset(low_page, 0, sizeof(low_page));
+  g_log_history[0] = '\0';
+  EFI_STATUS no_br_s = GuAcpiInstallShadowFacs(&mock_st, &ctx, nvs_page, 0xDC500000ULL, low_page, low_phys, &info);
+  CHECK(no_br_s == EFI_NOT_FOUND, "GuAcpiInstallShadowFacs must abort cleanly with EFI_NOT_FOUND when 0 bridges match bus > 0");
+  CHECK(ctx.bridge_count == 0, "bridge_count must remain 0 when no upstream bridge matches");
+  CHECK(mock_facs.FirmwareWakingVector == 0x00007C00U, "Clean abort must NOT modify RealFACS waking vector");
+  CHECK(*(UINT32 *)(low_page + GU_TRAMP_BRIDGE_TBL_OFF) == 0U, "Low bridge table must NOT contain 0x80001900 fallback");
+  CHECK(strstr(g_log_history, "ERROR") != NULL, "Missing bridge abort must log an explicit ERROR");
+  UINT32 abort_bytes = GuAcpiBuildTrampolineCodeEx(
+      low_page, sizeof(low_page), low_phys, 0xDC5D8000ULL, 0xDC617400ULL,
+      0xDA000000ULL, 0xFB000000ULL, 0U, 0x802D0064U, 0xDAD41000ULL, &ctx);
+  CHECK(abort_bytes == 0U, "GuAcpiBuildTrampolineCodeEx must return 0 when bus > 0 and 0 bridges without RootPortLinkReg");
+  g_mock_rb_enabled = FALSE;
+  g_mock_rb_count = 0;
 
   /* --- Scenario C: RTX 4080 (0x270410DE) + Chip ID 0x193000A1 + Custom FWSEC/SEC2 Geometries --- */
   GU_S3_RESUME_CONTEXT ctx4080;

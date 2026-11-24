@@ -1,7 +1,7 @@
 # Technische Dokumentation: Universal GPU Unlock (Multi-Gen)
 
 > **Tool:** Universal GPU Unlock  
-> **Version:** v1.9.0  
+> **Version:** v1.9.1  
 > **Architekturen:** NVIDIA Ada Lovelace (RTX 40), Ampere (RTX 30), Turing (RTX 20 / CMP)  
 > **Unterstützte Betriebssysteme:** Windows 10, Windows 11, WSL2 / Ubuntu CUDA Container  
 
@@ -174,6 +174,11 @@ Für Grafikkarten der Ada Lovelace-Reihe (RTX 4090 / AD102) mit GSP-Firmware und
    - **Dynamische Ada-IDs & VBIOS-Geometrien:** `ctx->pci_id`, `PMC_BOOT_0` (`ctx->chip_id`) sowie im Kaltstart geparste FWSEC- und SEC2-Booter-Geometrien (IMEM/DMEM-Chunks, `app_code_off`, `os_data_off`, `sig_dmem`, `engine_mask`, `ucode_id`) werden über `GU_S3_RESUME_CONTEXT` (`version = 2`, `216` Bytes) dynamisch ins Trampolin übergeben (`2.281 / 2.560` Bytes Envelope).
    - **Plattform-Härtung:** Port-`0x80`-getaktetes Pre-FWSEC GFW-BOOT-/VRAM-Gate (`(0x118234 & 0xFF) == 0xFF && 0x100CE0 != 0`) gegen D3cold-Races, strikte `< 0x000A0000`-Low-RAM-Begrenzung (kein VGA/ROM-Fallback) sowie `[P]`-Preflight-Warnung bei Modern Standby (`FADT` Bit 21 `LOW_POWER_S0_IDLE_CAPABLE`) und nicht-null `XFirmwareWakingVector`.
    - **Host-Test-Verifikation:** Alle `9.782` Checks in `test_s3_resume.c` (inkl. Test `[11]` für Intel `0x8086`, 2-Stufen-Switch, `BAR0 = 0xD0000000`, `RTX 4080` `0x270410DE`, `< 0x000A0000`-Gate und S0ix-Erkennung) bestanden (`MSVC_HOST_TESTS=PASS`).
+10. **Universal-S3 `EFI_PCI_ROOT_BRIDGE_IO_PROTOCOL`-Erkennung & Null-Fallback-Härtung (`v1.9.1`):**
+    - **`RootBridgeIo`-Bus-Walk als Primärpfad:** `GuDiscoverUpstreamBridgeChain()` durchsucht nun primär `EFI_PCI_ROOT_BRIDGE_IO_PROTOCOL` (`SegmentNumber == target_seg`) ab `current_bus = 0` (`dev = 0..31`, Multifunction `0x80` -> `func = 0..7`, Filter `(HeaderType & 0x7F) == 0x01`, `sec > current_bus && sec <= target_gpu_bus <= sub`, max. 4 Ebenen) und protokolliert jede Brücke explizit als `S3 PCIe Bridge[i]: BDF=... (pri=.. sec=.. sub=..)`. Dadurch werden auch Root Ports ohne eigenes `EFI_PCI_IO_PROTOCOL`-Handle (z. B. AMI Aptio V `0:3:1`) sowie vorgelagerte PCIe-Switch-Root-Ports sicher erkannt.
+    - **`PciIo`-GUID-Fix & Fallback:** Korrektur der `EFI_PCI_IO_PROTOCOL_GUID` in `src/s3_facs.c` auf die offizielle EDK2-GUID (`PciIo.h`); `EFI_PCI_IO_PROTOCOL` dient nur noch als reiner Fallback bei fehlendem `RootBridgeIo`.
+    - **Direkte Eltern-Brücke & kein `0:3:1`-Fallback:** `GuFindRootPortLinkReg()` und `probe_addrs[0..3]` verwenden die PCIe-Capability (`0x10`, `LinkReg = CapOffset + 0x10`) der direkten Eltern-Brücke (`bridges[count - 1]`). Jeder blinde Fallback auf `0:3:1` (`0x80001900` / `0x80001960`) entfällt; bei `0` gefundenen Brücken für `target_gpu_bus > 0` bricht `GuAcpiInstallShadowFacs()` mit `ERROR` und `EFI_NOT_FOUND` sauber ohne FACS-Mutation ab.
+    - **Verifikation (`v1.9.1`):** Test `[11]` deckt zusätzlich AMI Aptio V (`0` PciIo-Brücken auf `0:3:1`), Intel `0:1:0` ohne `PciIo`, 2-Stufen-Switch (Root Port ohne `PciIo`), `PciIo`-Fallback und den `0`-Brücken-Abbruch ab (`9.798` Checks, `MSVC_HOST_TESTS=PASS`).
 
 ---
 
@@ -202,7 +207,7 @@ Alle Kernkomponenten werden über gemockte Firmware-Services automatisiert valid
 5. `test_gpu_topology`: Negative Topology Isolation (44 Checks).
 6. `test_gpu_discovery`: PCI I/O Protocol Adapter & Memory-Decode-Aktivierung (21 Checks).
 7. `test_turing_local`: Turing TU102/TU104/TU106 Device-IDs & Binär-Hashes.
-8. `test_s3_resume`: Universal S3 Resume Engine, ACPI FACS Shadow Intercept & 16-Bit Trampoline (9.782 Checks).
+8. `test_s3_resume`: Universal S3 Resume Engine, ACPI FACS Shadow Intercept & 16-Bit Trampoline (9.798 Checks).
 
 ---
 

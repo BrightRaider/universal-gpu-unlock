@@ -6,6 +6,14 @@ For packaged binaries and downloads, visit [GitHub Releases](https://github.com/
 
 ---
 
+## [v1.9.1] - 2026-11-24
+### Added & Hardened
+- **`EFI_PCI_ROOT_BRIDGE_IO_PROTOCOL` Primärpfad & Null-Fallback-Härtung (`src/s3_facs.c`, `addresses #19`):**
+  - **RootBridgeIo Bus-Walk als Primärpfad:** `GuDiscoverUpstreamBridgeChain()` nutzt nun primär `EFI_PCI_ROOT_BRIDGE_IO_PROTOCOL` (`2f707ebb-4a1a-11d4-9a38-0090273fc14d`, Header [PciRootBridgeIo.h](src/vendor/edk2/Include/Protocol/PciRootBridgeIo.h)) mit Segment-Abgleich (`SegmentNumber == target_seg`) und rekursivem Walk ab `current_bus = 0` (`dev = 0..31`, Multifunction-Erkennung über HeaderType Bit 7 `0x80`, Filter `(HeaderType & 0x7F) == 0x01` mit `sec > current_bus && sec <= target_gpu_bus <= sub`, max. 4 Ebenen). Damit werden auch Root Ports ohne `EFI_PCI_IO_PROTOCOL`-Handle (z. B. AMI Aptio V `0:3:1`, `RUN0086`-Befund) sowie vorgelagerte PCIe-Switch-Ketten vollständig erfasst und explizit als `S3 PCIe Bridge[i]: BDF=... (pri=.. sec=.. sub=..)` protokolliert.
+  - **`EFI_PCI_IO_PROTOCOL_GUID`-Bugfix & sauberer Fallback:** Behebung einer fehlerhaften hardcoded PCI-IO-GUID in `src/s3_facs.c` (verwendet nun durchgängig `EFI_PCI_IO_PROTOCOL_GUID` aus `PciIo.h`) und Beibehaltung des `EFI_PCI_IO_PROTOCOL`-Scans als reinen Fallback, falls `RootBridgeIo` keine Brücken liefert.
+  - **Direkte Eltern-Brücke & Entfernung des `0:3:1`-Fallbacks:** `GuFindRootPortLinkReg()` sowie `probe_addrs[0..3]` verwenden nun die PCIe-Capability (`0x10`, `LinkReg = CapOffset + 0x10`) der direkten Eltern-Brücke (`bridges[count - 1]`, `sec == target_gpu_bus`). Jeder stille Fallback auf `0:3:1` (`0x80001900` / `0x80001960`) oder festen Bus `45` wurde entfernt; werden bei `target_gpu_bus > 0` keine Brücken gefunden, bricht `GuAcpiInstallShadowFacs()` mit klarer `ERROR`-Meldung und `EFI_NOT_FOUND` ab, ohne `RealFACS` oder ACPI-Tabellen zu verändern.
+  - **Erweiterte MSVC Host Tests (`tests/test_s3_resume.c`):** Test `[11]` deckt nun den AMI-Aptio-V-Fall (`0` PciIo-Brücken, Multifunction `0:3:0` + `0:3:1` über `RootBridgeIo`), Intel `0:1:0` ohne `PciIo`, den 2-stufigen PCIe-Switch (Root Port ohne `PciIo` + Switch-Ports mit `PciIo` inkl. Verifikation von `LinkReg` auf Downstream Port `2:4:0`), `PciIo`-Fallback bei fehlendem `RootBridgeIo` sowie den sauberen Abbruch bei `0` Brücken ohne `0x80001900`-Zugriff ab (`9.798` Checks, `MSVC_HOST_TESTS=PASS`).
+
 ## [v1.9.0] - 2026-11-24
 ### Added & Changed (Universal-S3 Phase 1)
 - **Board-, Chipsatz-, VBIOS- & Ada-Universalität im `[P]`-S3-Trampolin (`addresses #19`):**
