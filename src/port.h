@@ -91,6 +91,7 @@ struct GU_DMA {
   UINT64 dma;
   UINTN bytes, pages;
   BOOLEAN mapped;
+  BOOLEAN is_arena;
 };
 typedef struct {
   EFI_BOOT_SERVICES *bs;
@@ -122,12 +123,20 @@ typedef struct {
   BOOLEAN (*display_check)(VOID);
   BOOLEAN s3_registered;
   BOOLEAN s3_persist_armed;
+  BOOLEAN s3_arena_armed;
+  BOOLEAN s3_arena_active;
+  EFI_PHYSICAL_ADDRESS s3_arena_phys;
+  UINTN s3_arena_pages;
+  UINTN s3_arena_used_pages;
   EFI_STATUS s3_status;
   UINT8 wpr_meta[256];
   BOOLEAN wpr_meta_valid;
   UINT32 fuse_version;
 } GU_PLATFORM;
 extern GU_PLATFORM Gu;
+
+#define GU_S3_ARENA_PAGES 21000ULL
+EFI_STATUS GuS3AllocateArena(VOID);
 
 VOID GuInit(EFI_BOOT_SERVICES *Bs, EFI_PCI_IO_PROTOCOL *Pci);
 #ifdef GU_ENTRY_LATCHED

@@ -83,8 +83,7 @@ BOOLEAN GuTargetConfig(const UINT32 *C, UINTN S, UINTN B, UINTN D, UINTN F) {
          !((C[3] >> 16) & 0x7f);
 }
 BOOLEAN GuSafeToReturn(VOID) {
-  return !Gu.retained && (!Gu.allocations || Gu.s3_persist_armed) &&
-         (!Gu.dma_count || Gu.s3_persist_armed) &&
+  return !Gu.retained && !Gu.allocations && !Gu.dma_count &&
          !Gu.master_attributes_pending &&
          (!Gu.started || (Gu.quiesced && !Gu.fault));
 }
@@ -108,6 +107,31 @@ VOID GuQuiesced(VOID) {
   if (!Gu.fault)
     Gu.quiesced = TRUE;
 }
+EFI_STATUS GuS3AllocateArena(VOID) {
+  if (Gu.s3_arena_armed)
+    return EFI_SUCCESS;
+  if (!Gu.bs || !Gu.bs->AllocatePages)
+    return EFI_NOT_READY;
+
+  EFI_PHYSICAL_ADDRESS Phys = 0xFFFFFFFFULL;
+  EFI_STATUS Status = Gu.bs->AllocatePages(AllocateMaxAddress, EfiReservedMemoryType,
+                                          (UINTN)GU_S3_ARENA_PAGES, &Phys);
+  if (EFI_ERROR(Status) || !Phys) {
+    GuLog("ERROR: Failed to allocate S3 Persistent Memory Arena (%u pages): %#llx\n",
+          (unsigned)GU_S3_ARENA_PAGES, (unsigned long long)Status);
+    return Status;
+  }
+
+  Gu.s3_arena_phys = Phys;
+  Gu.s3_arena_pages = (UINTN)GU_S3_ARENA_PAGES;
+  Gu.s3_arena_used_pages = 0;
+  Gu.s3_arena_armed = TRUE;
+  GuLog("S3 Persistent Memory Arena allocated: %u pages (%zu MB) at %#llx in EfiReservedMemoryType (single descriptor)\n",
+        (unsigned)GU_S3_ARENA_PAGES,
+        (size_t)(GU_S3_ARENA_PAGES * 4096 >> 20),
+        (unsigned long long)Phys);
+  return EFI_SUCCESS;
+}
 EFI_STATUS GuDmaAllocate(UINTN N, VOID **C, UINT64 *D) {
   EFI_STATUS Status;
   GU_DMA *Entry;
@@ -125,16 +149,19 @@ EFI_STATUS GuDmaAllocate(UINTN N, VOID **C, UINT64 *D) {
     return EFI_OUT_OF_RESOURCES;
   Entry->pages = (N + 4095) / 4096;
   Entry->bytes = Entry->pages * 4096;
-  EFI_MEMORY_TYPE MemType = Gu.s3_persist_armed ? EfiReservedMemoryType : EfiBootServicesData;
-  Status = Gu.pci->AllocateBuffer(Gu.pci, AllocateAnyPages, MemType,
-                                  Entry->pages, &Entry->cpu, 0);
-  if ((EFI_ERROR(Status) || !Entry->cpu) && Gu.s3_persist_armed && Gu.bs) {
-    EFI_PHYSICAL_ADDRESS Phys = 0xFFFFFFFFULL;
-    Status = Gu.bs->AllocatePages(AllocateMaxAddress, EfiReservedMemoryType,
-                                  Entry->pages, &Phys);
-    if (!EFI_ERROR(Status) && Phys) {
-      Entry->cpu = (VOID *)(UINTN)Phys;
-    }
+  Entry->is_arena = FALSE;
+
+  if (Gu.s3_persist_armed && Gu.s3_arena_active && Gu.s3_arena_armed &&
+      (Gu.s3_arena_used_pages + Entry->pages <= Gu.s3_arena_pages)) {
+    /* Sub-allocate from contiguous Reserved Arena (<4GB) */
+    Entry->cpu = (VOID *)(UINTN)(Gu.s3_arena_phys + (EFI_PHYSICAL_ADDRESS)Gu.s3_arena_used_pages * 4096);
+    Gu.s3_arena_used_pages += Entry->pages;
+    Entry->is_arena = TRUE;
+    Status = EFI_SUCCESS;
+  } else {
+    /* Temporary scratch buffer: allocate via PciIo as EfiBootServicesData */
+    Status = Gu.pci->AllocateBuffer(Gu.pci, AllocateAnyPages, EfiBootServicesData,
+                                    Entry->pages, &Entry->cpu, 0);
   }
   if (EFI_ERROR(Status) || !Entry->cpu) {
     GuFree(Entry);
@@ -144,9 +171,14 @@ EFI_STATUS GuDmaAllocate(UINTN N, VOID **C, UINT64 *D) {
   Mapped = Entry->bytes;
   Status = Gu.pci->Map(Gu.pci, EfiPciIoOperationBusMasterCommonBuffer,
                        Entry->cpu, &Mapped, &Entry->dma, &Entry->mapping);
-  if (!EFI_ERROR(Status))
+  if (!EFI_ERROR(Status)) {
     Entry->mapped = TRUE;
-  else if (Gu.s3_persist_armed) {
+    if (Entry->is_arena && Entry->dma != (UINT64)(UINTN)Entry->cpu) {
+      GuLog("WARNING: PciIo->Map non-identity mapping in S3 arena! cpu=%p dma=%#llx\n",
+            Entry->cpu, (unsigned long long)Entry->dma);
+    }
+  } else if (Entry->is_arena) {
+    /* Common buffer within <4GB arena: identity mapping fallback */
     Entry->dma = (UINT64)(UINTN)Entry->cpu;
     Entry->mapped = FALSE;
     Mapped = Entry->bytes;
@@ -163,14 +195,14 @@ EFI_STATUS GuDmaAllocate(UINTN N, VOID **C, UINT64 *D) {
       Gu.retained = TRUE;
       return Status;
     }
-    if (EFI_ERROR(Gu.pci->FreeBuffer(Gu.pci, Entry->pages, Entry->cpu))) {
-      if (Gu.bs)
-        Gu.bs->FreePages((EFI_PHYSICAL_ADDRESS)(UINTN)Entry->cpu, Entry->pages);
-      Entry->mapped = FALSE;
-      Entry->next = Gu.allocations;
-      Gu.allocations = Entry;
-      Gu.retained = TRUE;
-      return Status;
+    if (!Entry->is_arena) {
+      if (EFI_ERROR(Gu.pci->FreeBuffer(Gu.pci, Entry->pages, Entry->cpu))) {
+        Entry->mapped = FALSE;
+        Entry->next = Gu.allocations;
+        Gu.allocations = Entry;
+        Gu.retained = TRUE;
+        return Status;
+      }
     }
     GuFree(Entry);
     return Status;
@@ -181,8 +213,9 @@ EFI_STATUS GuDmaAllocate(UINTN N, VOID **C, UINT64 *D) {
   *C = Entry->cpu;
   *D = Entry->dma;
   if (!(Gu.dma_count % 2048))
-    GuLog("DMA buffers mapped: %u (type=%s)\n", Gu.dma_count,
-          Gu.s3_persist_armed ? "EfiReservedMemoryType" : "EfiBootServicesData");
+    GuLog("DMA buffers mapped: %u (type=%s%s)\n", Gu.dma_count,
+          Entry->is_arena ? "Arena/EfiReservedMemoryType" : "EfiBootServicesData",
+          Entry->is_arena ? " [single descriptor]" : "");
   return EFI_SUCCESS;
 }
 EFI_STATUS GuDmaFree(VOID *C, UINT64 D) {
@@ -193,9 +226,6 @@ EFI_STATUS GuDmaFree(VOID *C, UINT64 D) {
   if (!*Link)
     return EFI_NOT_FOUND;
   Entry = *Link;
-  if (Gu.s3_persist_armed) {
-    return EFI_SUCCESS;
-  }
   if (Gu.retained || Gu.master_attributes_pending ||
       (Gu.started && (!Gu.quiesced || Gu.fault))) {
     Gu.retained = TRUE;
@@ -209,10 +239,21 @@ EFI_STATUS GuDmaFree(VOID *C, UINT64 D) {
     }
     Entry->mapped = FALSE;
   }
-  Status = Gu.pci->FreeBuffer(Gu.pci, Entry->pages, Entry->cpu);
-  if (EFI_ERROR(Status)) {
-    Gu.retained = TRUE;
-    return Status;
+  /*
+   * S3 Persistence Mode (v1.8.61):
+   * For allocations from the contiguous Reserved Arena (is_arena == TRUE),
+   * DO NOT call FreeBuffer() or FreePages(). The arena remains permanently
+   * reserved in DRAM across S3 sleep.
+   *
+   * For non-arena temporary scratch allocations (is_arena == FALSE),
+   * free them normally.
+   */
+  if (!Entry->is_arena) {
+    Status = Gu.pci->FreeBuffer(Gu.pci, Entry->pages, Entry->cpu);
+    if (EFI_ERROR(Status)) {
+      Gu.retained = TRUE;
+      return Status;
+    }
   }
   *Link = Entry->next;
   GuFree(Entry);

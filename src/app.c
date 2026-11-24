@@ -245,11 +245,6 @@ static EFI_STATUS RunUnlock(EFI_SYSTEM_TABLE *t, EFI_HANDLE image,
   GuLog("TRANSACTION OK: %u of %u GPU(s) unlocked, hardware readbacks passed!\n",
         (unsigned)unlocked_count, (unsigned)device_count);
 
-  stage = "close-USB-log";
-  s = GuBootClose();
-  if (s != EFI_SUCCESS || Gu.fault)
-    return RunFailure(t, image, gpu, stage, s);
-
   s = GuBootWindows();
 
   GuBootHalt();

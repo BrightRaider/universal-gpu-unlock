@@ -834,6 +834,43 @@ EFI_STATUS GuBootClose(VOID) {
   return s;
 }
 
+static size_t GuFormat(char *Destination, size_t Capacity, const char *Format, ...) {
+  va_list args;
+  va_start(args, Format);
+  size_t n = GuFormatV(Destination, Capacity, Format, args);
+  va_end(args);
+  return n;
+}
+
+static VOID GuBootLogError(EFI_STATUS ErrorStatus) {
+  if (!Table || !Table->BootServices || !OwnVolume)
+    return;
+  EFI_SIMPLE_FILE_SYSTEM_PROTOCOL *fs = NULL;
+  EFI_FILE_PROTOCOL *root = NULL;
+  EFI_STATUS s = Table->BootServices->HandleProtocol(OwnVolume, &FsGuid, (VOID **)&fs);
+  if (EFI_ERROR(s) || !fs)
+    return;
+  s = fs->OpenVolume(fs, &root);
+  if (EFI_ERROR(s) || !root)
+    return;
+  EFI_FILE_PROTOCOL *log = NULL;
+  s = root->Open(root, &log, ActiveLogName, EFI_FILE_MODE_READ | EFI_FILE_MODE_WRITE, 0);
+  if (s == EFI_SUCCESS && log) {
+    (VOID)log->SetPosition(log, ~(UINT64)0);
+    CHAR8 buffer[256];
+    size_t n = GuFormat(buffer, sizeof(buffer),
+                        "\n[FATAL ERROR] StartImage(Windows) returned failure: %#llx!\n",
+                        (unsigned long long)ErrorStatus);
+    if (n != (size_t)-1 && n < sizeof(buffer)) {
+      UINTN bytes = n;
+      (VOID)log->Write(log, &bytes, buffer);
+      (VOID)log->Flush(log);
+    }
+    (VOID)log->Close(log);
+  }
+  (VOID)root->Close(root);
+}
+
 EFI_STATUS GuBootWindows(VOID) {
 
   if (!Windows)
@@ -845,11 +882,18 @@ EFI_STATUS GuBootWindows(VOID) {
   /* Apply Shadow ACPI tables immediately before StartImage(Windows) */
   (VOID)GuAcpiApplyShadowConfigTable();
 
+  GuLog("GuBootWindows: Calling StartImage(Windows=%p)...\n", Windows);
+  (VOID)GuBootClose();
+
   EFI_STATUS s = Table->BootServices->StartImage(Windows, NULL, NULL);
 
   /* If StartImage returns (error or exit), cleanly uninstall hook and restore config table */
   (VOID)GuAcpiUninstallEbsHook(Table);
   (VOID)GuAcpiRestoreConfigTable();
+
+  if (EFI_ERROR(s)) {
+    GuBootLogError(s);
+  }
 
   return s;
 }

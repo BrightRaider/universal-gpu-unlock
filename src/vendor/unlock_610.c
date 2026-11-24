@@ -785,13 +785,11 @@ static void free_coherent(struct unlock_transaction_work *work)
 	u32 i;
 
 	if (Gu.s3_persist_armed) {
-		/* S3 Persistence Mode (v1.8.60): Preserve the Radix page tables and GSP firmware
-		 * image in EfiReservedMemoryType. Windows never reclaims or overwrites EfiReservedMemoryType,
-		 * and nt!HalpSaveNvsArea is NOT endangered because this is strictly not in ACPI NVS.
+		/* S3 Persistence Mode (v1.8.61): Unmap all PciIo DMA mappings so that DMA_live == 0
+		 * before Windows handover, while keeping the contiguous Reserved Arena intact in DRAM.
 		 */
-		dev_info(&work->pdev->dev, "S3 persistence armed: preserving %u radix/image pages (%zu MB) in EfiReservedMemoryType\n",
-			 work->pages_allocated, (size_t)(work->pages_allocated * GU_RADIX_PAGE >> 20));
-		return;
+		dev_info(&work->pdev->dev, "S3 persistence armed: unmapping %u radix/image DMA buffers (preserving arena in EfiReservedMemoryType)\n",
+			 work->pages_allocated);
 	}
 
 	for (i = 0; i < work->pages_allocated; i++) {
@@ -866,7 +864,7 @@ static int unlock_transaction_unwind(struct unlock_transaction_work *work)
 		work->enabled = false;
 	}
 	free_coherent(work);
-	if (Gu.retained || (Gu.allocations && !Gu.s3_persist_armed)) {
+	if (Gu.retained || Gu.allocations) {
 		work->retained=true;return GU_RESULT(-EBUSY);
 	}
 	if (work->booter_fw) {
@@ -1107,10 +1105,16 @@ static int unlock_transaction_radix(struct unlock_transaction_work *work)
 	u32 i, level, first = 0;
 	int ret = 0;
 
+	if (Gu.s3_persist_armed) {
+		(VOID)GuS3AllocateArena();
+		Gu.s3_arena_active = TRUE;
+	}
+
 	work->page_count = r->table_pages + r->pages[3];
 	work->pages = kvcalloc(work->page_count, sizeof(*work->pages), GFP_KERNEL);
 	addresses = kvcalloc(work->page_count, sizeof(*addresses), GFP_KERNEL);
 	if (!work->pages || !addresses) {
+		Gu.s3_arena_active = FALSE;
 		kvfree(addresses);
 		return GU_RESULT(-ENOMEM);
 	}
@@ -1148,6 +1152,7 @@ static int unlock_transaction_radix(struct unlock_transaction_work *work)
 		first = child;
 	}
 out:
+	Gu.s3_arena_active = FALSE;
 	kvfree(addresses);
 	return GU_RESULT(ret);
 }

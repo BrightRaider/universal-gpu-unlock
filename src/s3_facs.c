@@ -1438,9 +1438,10 @@ static UINT32 GuFindGpuPmcsrReg(EFI_BOOT_SERVICES *bs, EFI_PCI_IO_PROTOCOL *gpu_
 }
 
 /*
- * Allocates a dedicated 4KB telemetry page of EfiRuntimeServicesData (or EfiReservedMemoryType)
+ * Allocates a dedicated 4KB telemetry page of EfiReservedMemoryType
  * strictly OUTSIDE the 27MB NVS zone (0xDADDA000..0xDC8DA000) so that nt!HalpRestoreNvsArea
- * does NOT overwrite it during S3 wake (v1.8.46c).
+ * does NOT overwrite it during S3 wake (v1.8.46c), and Windows NT does NOT recruit it
+ * for DLL loading or kernel pools (v1.8.61).
  */
 static EFI_PHYSICAL_ADDRESS GuAcpiAllocateTelemetryPage(
     IN EFI_BOOT_SERVICES *bs
@@ -1450,9 +1451,9 @@ static EFI_PHYSICAL_ADDRESS GuAcpiAllocateTelemetryPage(
   EFI_PHYSICAL_ADDRESS telem_phys = 0;
   EFI_STATUS s;
 
-  /* Strategy 1: AllocateMaxAddress <= 0xDADD9000 (below 27MB NVS block) as EfiRuntimeServicesData */
+  /* Strategy 1: AllocateMaxAddress <= 0xDADD9000 (below 27MB NVS block) as EfiReservedMemoryType (v1.8.61) */
   telem_phys = 0xDADD9000ULL;
-  s = bs->AllocatePages(AllocateMaxAddress, EfiRuntimeServicesData, 1, &telem_phys);
+  s = bs->AllocatePages(AllocateMaxAddress, EfiReservedMemoryType, 1, &telem_phys);
   if (!EFI_ERROR(s) && telem_phys >= 0x00100000ULL && (telem_phys < 0xDADDA000ULL || telem_phys >= 0xDC8DA000ULL)) {
     memset((VOID *)(UINTN)telem_phys, 0, 4096);
     return telem_phys;
@@ -1473,16 +1474,16 @@ static EFI_PHYSICAL_ADDRESS GuAcpiAllocateTelemetryPage(
   };
   for (UINTN i = 0; i < sizeof(candidate_addrs)/sizeof(candidate_addrs[0]); i++) {
     telem_phys = candidate_addrs[i];
-    s = bs->AllocatePages(AllocateAddress, EfiRuntimeServicesData, 1, &telem_phys);
+    s = bs->AllocatePages(AllocateAddress, EfiReservedMemoryType, 1, &telem_phys);
     if (!EFI_ERROR(s)) {
       memset((VOID *)(UINTN)telem_phys, 0, 4096);
       return telem_phys;
     }
   }
 
-  /* Strategy 4: AllocateMaxAddress 4GB with NVS bounds check */
+  /* Strategy 4: AllocateMaxAddress 4GB with NVS bounds check as EfiReservedMemoryType */
   telem_phys = 0xFFFFFFFFULL;
-  s = bs->AllocatePages(AllocateMaxAddress, EfiRuntimeServicesData, 1, &telem_phys);
+  s = bs->AllocatePages(AllocateMaxAddress, EfiReservedMemoryType, 1, &telem_phys);
   if (!EFI_ERROR(s)) {
     if (telem_phys < 0xDADDA000ULL || telem_phys >= 0xDC8DA000ULL) {
       memset((VOID *)(UINTN)telem_phys, 0, 4096);

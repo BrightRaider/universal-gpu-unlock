@@ -28,10 +28,29 @@ GU_ASSET GuAssets[5];
 static char g_log_history[8192] = {0};
 
 BOOLEAN GuSafeToReturn(VOID) {
-  return !Gu.retained && (!Gu.allocations || Gu.s3_persist_armed) &&
-         (!Gu.dma_count || Gu.s3_persist_armed) &&
+  return !Gu.retained && !Gu.allocations && !Gu.dma_count &&
          !Gu.master_attributes_pending &&
          (!Gu.started || (Gu.quiesced && !Gu.fault));
+}
+
+EFI_STATUS GuS3AllocateArena(VOID) {
+  if (Gu.s3_arena_armed)
+    return EFI_SUCCESS;
+  if (!Gu.bs || !Gu.bs->AllocatePages)
+    return EFI_NOT_READY;
+
+  EFI_PHYSICAL_ADDRESS Phys = 0xFFFFFFFFULL;
+  EFI_STATUS Status = Gu.bs->AllocatePages(AllocateMaxAddress, EfiReservedMemoryType,
+                                          (UINTN)GU_S3_ARENA_PAGES, &Phys);
+  if (EFI_ERROR(Status) || !Phys) {
+    return Status;
+  }
+
+  Gu.s3_arena_phys = Phys;
+  Gu.s3_arena_pages = (UINTN)GU_S3_ARENA_PAGES;
+  Gu.s3_arena_used_pages = 0;
+  Gu.s3_arena_armed = TRUE;
+  return EFI_SUCCESS;
 }
 
 VOID GuLog(const char *Format, ...) {
@@ -232,7 +251,9 @@ static EFI_STATUS EFIAPI MockAllocatePages(
     IN OUT EFI_PHYSICAL_ADDRESS *Memory
 ) {
   if (!Memory) return EFI_INVALID_PARAMETER;
-  if (MemoryType == EfiRuntimeServicesData || MemoryType == EfiReservedMemoryType) {
+  if (MemoryType == EfiReservedMemoryType && Pages >= 20000) {
+    *Memory = 0xDAD00000ULL;
+  } else if (MemoryType == EfiRuntimeServicesData || MemoryType == EfiReservedMemoryType) {
     *Memory = (EFI_PHYSICAL_ADDRESS)(uintptr_t)g_mock_telemetry_page;
   } else if (MemoryType == EfiACPIMemoryNVS && Pages >= 64) {
     *Memory = (EFI_PHYSICAL_ADDRESS)(uintptr_t)g_mock_nvs_buffer;
@@ -1520,7 +1541,7 @@ static void TestGuS3PersistentMemoryRetention(void) {
   Gu.quiesced = TRUE;
   Gu.started = TRUE;
 
-  /* Without S3 persistence: pending allocations block safe return */
+  /* Pending DMA allocations MUST ALWAYS block safe return (DMA_live must be 0 before Windows handover) */
   GU_DMA dummy_dma;
   memset(&dummy_dma, 0, sizeof(dummy_dma));
   Gu.allocations = &dummy_dma;
@@ -1528,9 +1549,13 @@ static void TestGuS3PersistentMemoryRetention(void) {
   Gu.s3_persist_armed = FALSE;
   CHECK(!GuSafeToReturn(), "Pending DMA allocations without s3_persist_armed must NOT be safe to return");
 
-  /* With S3 persistence: pending persistent EfiReservedMemoryType allocations ARE safe to return */
   Gu.s3_persist_armed = TRUE;
-  CHECK(GuSafeToReturn(), "Persistent DMA allocations with s3_persist_armed MUST be safe to return");
+  CHECK(!GuSafeToReturn(), "Pending DMA allocations with s3_persist_armed MUST NOT be safe to return (DMA_live must be 0)");
+
+  /* With 0 DMA allocations (DMA_live == 0), GuSafeToReturn() succeeds */
+  Gu.allocations = NULL;
+  Gu.dma_count = 0;
+  CHECK(GuSafeToReturn(), "Zero DMA allocations (DMA_live = 0) with s3_persist_armed MUST be safe to return");
 
   /* A real fault or unverified live engine must still block return */
   Gu.fault = TRUE;
@@ -1539,10 +1564,22 @@ static void TestGuS3PersistentMemoryRetention(void) {
   Gu.retained = TRUE;
   CHECK(!GuSafeToReturn(), "Retained error flag must still NOT be safe to return");
   Gu.retained = FALSE;
-  Gu.allocations = NULL;
-  Gu.dma_count = 0;
 
-  /* 2. Test WPR metadata host RAM pointer retention */
+  /* 2. Test S3 Contiguous Reserved Arena allocation & single-descriptor retention */
+  EFI_BOOT_SERVICES arena_bs;
+  memset(&arena_bs, 0, sizeof(arena_bs));
+  arena_bs.AllocatePages = MockAllocatePages;
+  arena_bs.FreePages = MockFreePages;
+  Gu.bs = &arena_bs;
+
+  EFI_STATUS arena_st = GuS3AllocateArena();
+  CHECK(arena_st == EFI_SUCCESS, "GuS3AllocateArena must succeed");
+  CHECK(Gu.s3_arena_armed == TRUE, "Gu.s3_arena_armed must be TRUE");
+  CHECK(Gu.s3_arena_phys == 0xDAD00000ULL, "Gu.s3_arena_phys must match 0xDAD00000");
+  CHECK(Gu.s3_arena_pages == GU_S3_ARENA_PAGES, "Gu.s3_arena_pages must match GU_S3_ARENA_PAGES");
+  CHECK(Gu.s3_arena_used_pages == 0, "Gu.s3_arena_used_pages must start at 0");
+
+  /* 3. Test WPR metadata host RAM pointer retention */
   Gu.bar_base = 0xFB000000ULL;
   Gu.device_id = 0x2684;
   Gu.s3_persist_armed = TRUE;
@@ -1551,7 +1588,7 @@ static void TestGuS3PersistentMemoryRetention(void) {
   memset(mock_wpr_meta, 0, 256);
   *(UINT64 *)(mock_wpr_meta + 0) = 0xdc3aae21371a60b3ULL;  /* Magic */
   *(UINT64 *)(mock_wpr_meta + 8) = 1ULL;                   /* Version */
-  *(UINT64 *)(mock_wpr_meta + 16) = 0xD81A3000ULL;         /* Radix table DMA in EfiReservedMemoryType */
+  *(UINT64 *)(mock_wpr_meta + 16) = 0xDAD00000ULL;         /* Radix table DMA in EfiReservedMemoryType */
   *(UINT64 *)(mock_wpr_meta + 24) = 0x05053000ULL;         /* Image size (84 MB) */
   *(UINT64 *)(mock_wpr_meta + 32) = 0xDC639000ULL;         /* boot_dma */
   *(UINT64 *)(mock_wpr_meta + 72) = 0xDC629000ULL;         /* signature_dma */
@@ -1572,7 +1609,7 @@ static void TestGuS3PersistentMemoryRetention(void) {
   UINT64 sig_sz_val = *(UINT64 *)(nvs_meta + 80);
 
   CHECK(magic_val == 0xdc3aae21371a60b3ULL, "WPR metadata magic must match");
-  CHECK(radix_dma_val == 0xD81A3000ULL, "radix_dma must point to persistent EfiReservedMemoryType (0xD81A3000)");
+  CHECK(radix_dma_val == 0xDAD00000ULL, "radix_dma must point to persistent EfiReservedMemoryType (0xDAD00000)");
   CHECK(img_size_val == 0x05053000ULL, "img_size must match 84 MB GSP firmware (0x05053000)");
   CHECK(boot_dma_val == (UINT64)(uintptr_t)(g_mock_nvs_buffer + 0x21000), "boot_dma must point to NVS staging buffer");
   CHECK(sig_dma_val == (UINT64)(uintptr_t)(g_mock_nvs_buffer + 0x11000), "sig_dma must point to NVS V67 signature");
