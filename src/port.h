@@ -134,6 +134,15 @@ typedef struct {
   UINT32 fuse_version;
   EFI_PHYSICAL_ADDRESS s3_fwsec_dma;
   UINT32 s3_fwsec_size;
+  EFI_PHYSICAL_ADDRESS s3_booter_dma;
+  UINT32 s3_booter_size;
+  EFI_PHYSICAL_ADDRESS s3_v67_dma;
+  EFI_PHYSICAL_ADDRESS s3_boot_dma;
+  UINT32 s3_boot_size;
+  EFI_PHYSICAL_ADDRESS s3_meta_dma;
+  VOID *s3_meta_cpu;
+  EFI_PHYSICAL_ADDRESS s3_radix_dma;
+  UINT64 s3_image_size;
 } GU_PLATFORM;
 extern GU_PLATFORM Gu;
 

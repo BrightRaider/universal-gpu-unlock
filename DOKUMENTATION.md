@@ -1,7 +1,7 @@
 # Technische Dokumentation: Universal GPU Unlock (Multi-Gen)
 
 > **Tool:** Universal GPU Unlock  
-> **Version:** v1.8.64  
+> **Version:** v1.8.65  
 > **Architekturen:** NVIDIA Ada Lovelace (RTX 40), Ampere (RTX 30), Turing (RTX 20 / CMP)  
 > **Unterstützte Betriebssysteme:** Windows 10, Windows 11, WSL2 / Ubuntu CUDA Container  
 
@@ -153,6 +153,13 @@ Für Grafikkarten der Ada Lovelace-Reihe (RTX 4090 / AD102) mit GSP-Firmware und
      * GSP Start CPU (`0x00110100 = 2`) und Bounded Poll auf Halt-Bit (`0x00110100 & 0x10 == 0x10`)
      * Post-FWSEC 5-fach Telemetrie-Snapshot ab `+0x108..+0x118` (WPR2_LO, WPR2_HI, GSP_CPUCTL, GSP_MAILBOX0, Scratch `0x00001438`)
    - Dadurch partitioniert FWSEC den WPR2-Bereich (`low = 0x5ff2000`, `high = 0x5ff2e00`), bevor der SEC2 Booter startet, wodurch der Booter-Fehler `0x91` behoben wird.
+6. **Vollständige Konsolidierung aller 6 GPU-DMA-Puffer in EfiReservedMemoryType-Arena & DMA_live = 0 (v1.8.65):**
+   - **82-MB-Reserved-Arena (<4GB, genau 1 Deskriptor):** Konsolidierung aller 6 GPU-DMA-Puffer (Radix-Tabelle, GSP-Firmware-Image, FWSEC-Image, Booter, V67-Payload, Boot-Image und unberührte WPR-Metadaten) in eine einzige zusammenhängende 82-MB `EfiReservedMemoryType`-Arena (20.662 von 21.000 Pages belegt, 338 Pages Puffer).
+   - **DMA_live = 0 vor OS-Start:** In `free_coherent()` werden für alle Allokationen via `GuDmaFree()` die PciIo-DMA-Mappings ungemappt (`Gu.pci->Unmap`), sodass vor `StartImage(bootmgfw.efi)` garantiert `DMA_live = 0` gilt, während der reservierte DRAM-Speicher dauerhaft über S3 erhalten bleibt.
+   - **Entfall des ACPI-NVS-Kopierens & Pointer-Retargetings:** Alle Microcode-Puffer verbleiben beim S3-Wake 1:1 an ihren unveränderten Kaltstart-Adressen in der Arena.
+   - **Schutz vor Kaltstart-Metadaten-Modifikation:** `publish_v67()` sichert vor dem Kaltstart-Run eine unberührte Kopie `Gu.s3_meta_cpu` (`Gu.s3_meta_dma`) in der Arena, um das spätere Überschreiben von `meta + 72` durch `unlock_transaction_signature()` abzuwehren.
+   - **Mini-Telemetrie (+0x11C):** Direkt nach dem SEC2-Booter-Halt sichert das Trampolin zusätzlich SEC2 Mailbox 1 (`BAR0 + 0x00840044`) an Telemetrie `+0x11C`. Trampolingröße: 1965 Bytes (<2048 Bytes Limit).
+   - **Dynamische meta_dma-Erkennung:** `C:\S3Dumps\capture_s3_telem.ps1` ermittelt `meta_dma` dynamisch aus `RUN*.TXT` statt des statischen Werts `dc642000`.
 
 ---
 

@@ -6,6 +6,27 @@ For packaged binaries and downloads, visit [GitHub Releases](https://github.com/
 
 ---
 
+## [v1.8.65] - 2026-11-24
+### Added & Fixed
+- **Vollständige Konsolidierung aller 6 GPU-DMA-Puffer in EfiReservedMemoryType-Arena & DMA_live = 0 (addresses #19):**
+  - **1:1 SEC2 Register-Diff-Verifikation (`src/vendor/unlock_610.c` vs. `src/s3_facs.c`):**
+    - Jeder einzelne Register-Write zwischen FWSEC-FRTS-Abschluss und SEC2-Booter-Kickoff (`0x008403C0`, `0x008400F4`, `0x00841668`, `0x00840084`, `0x00840624`, `0x0084010C`, `0x00840600`, `0x00840110`, `0x00840128`, `0x00840114`, `0x0084011C`, `0x00840118`, `0x00841210`, `0x0084119C`, `0x00841198`, `0x00841180`, `0x00840104`, `0x00840040`, `0x00840044`, `0x00840100`) wurde penibel verifiziert. Ergebnis: Exakte 1:1-Übereinstimmung ohne Abweichungen oder fehlende Register.
+  - **Konsolidierung aller 6 GPU-DMA-Puffer in die 82-MB-Reserved-Arena (`src/vendor/unlock_610.c`, `src/port.h`):**
+    - `work->booter_cpu` (60 KB), `work->v67_cpu` (64 KB), `work->meta_cpu` (4 KB) und `work->boot_cpu` (36 KB) werden bei aktivem S3-Persist-Modus linear aus den freien Pages der bestehenden 82-MB `EfiReservedMemoryType`-Arena bedient.
+    - Zusammen mit Radix-Tabelle, GSP-Firmware-Image und FWSEC-Image sind nun alle 6 Strukturen in genau einem einzigen Deskriptor in der UEFI Memory Map unter 4 GB untergebracht (20.662 von 21.000 Pages belegt, 338 Pages Puffer).
+    - Entflechtung und `DMA_live = 0`: In `free_coherent()` werden alle Allokationen via `GuDmaFree()` ungemappt (`Gu.pci->Unmap`), sodass vor `StartImage(bootmgfw.efi)` garantiert `DMA_live = 0` gilt, während der reservierte DRAM-Speicher über S3 hinweg dauerhaft erhalten bleibt.
+  - **Entfall des ACPI-NVS-Kopierens & Schutz vor Kaltstart-Metadaten-Modifikation (`src/s3_resume.c`):**
+    - Das manuelle Kopieren der Microcode-Images nach ACPI NVS sowie das Pointer-Retargeting in `s3_resume.c` entfällt vollständig: `meta_dma`, `boot_dma`, `signature_dma` und `booter_dma` behalten beim S3-Wake 1:1 ihre unveränderten Kaltstart-Adressen in der Reserved-Arena.
+    - Schutz vor Kaltstart-Modifikation: Da `unlock_transaction_signature()` beim Kaltstart-Cleanup `meta + 72` mit `stock_dma` überschreibt, sichert `publish_v67()` eine unberührte Kopie `Gu.s3_meta_cpu` (`Gu.s3_meta_dma`) in der Arena.
+  - **Mini-Telemetrie-Ergänzung (+0x11C) & Trampolin-Envelope (`src/s3_facs.c`, `src/s3_facs.h`):**
+    - Direkt nach dem SEC2-Booter-Halt sichert das 32-Bit-Trampolin zusätzlich SEC2 Mailbox 1 (`BAR0 + 0x00840044`) an Telemetrie `+0x11C`.
+    - Gesamte Trampolingröße beträgt 1965 Bytes (strikt innerhalb des 2048-Byte / `<0x0800` Envelope-Limits).
+  - **Dynamische meta_dma-Erkennung im Auto-Dump-Skript (`C:\S3Dumps\capture_s3_telem.ps1`):**
+    - `Find-MetaDmaAddress` ermittelt die dynamische `meta_dma`-Adresse aus der neuesten `RUN*.TXT` auf `F:\GPU-UNLOCK` statt der früheren festen NVS-Adresse `dc642000`.
+  - **Host-Tests (`tests/test_s3_resume.c`):**
+    - Test [10] hinzugefügt für vollständige Arena-Konsolidierung und DMA_live = 0.
+    - Alle 8.778 Host-Checks erfolgreich bestanden (`MSVC_HOST_TESTS=PASS`).
+
 ## [v1.8.64] - 2026-11-24
 ### Added & Fixed
 - **GSP FWSEC-FRTS WPR2-Partitionierungs-Sequenz im 32-Bit S3-Trampolin (addresses #19):**

@@ -170,91 +170,119 @@ EFI_STATUS GuS3PrepareAndRegister(EFI_SYSTEM_TABLE *t) {
     }
   }
 
-  /* Staging offsets within the 256 KB NVS allocation */
-  ctx->booter_dma = nvs_phys + 0x01000;
-  ctx->v67_dma = nvs_phys + 0x11000;
-  ctx->boot_dma = nvs_phys + 0x21000;
-  ctx->meta_dma = nvs_phys + 0x2A000;
-
-  if (GuAssets[0].firmware.data && GuAssets[0].firmware.size) {
-    const UINT8 *bdata = (const UINT8 *)GuAssets[0].firmware.data;
-    UINTN bsize = GuAssets[0].firmware.size;
-    if (bsize >= 72 && *(const UINT32 *)bdata == GU_BOOTER_CONTAINER_MAGIC) {
-      /* BooterLoad container: unpack 72-byte header, extract executable image and patch fuse signature */
-      struct gpu_unlock_booter_hdr hdr;
-      memcpy(&hdr, bdata + 8, sizeof(hdr));
-      UINT32 image_size = *(const UINT32 *)(bdata + 8 + sizeof(hdr));
-      UINT32 sig_bytes = *(const UINT32 *)(bdata + 12 + sizeof(hdr));
-
-      if (image_size && image_size <= 65536 - 4096 &&
-          72 + image_size + sig_bytes <= bsize) {
-        memcpy(nvs_base + 0x01000, bdata + 72, image_size);
-        ctx->booter_size = image_size;
-
-        /* Resolve fuse version: use cold-boot sampled version if available, or read GPU BAR0 */
-        UINT32 fuse_ver = Gu.fuse_version ? Gu.fuse_version : 1;
-        if (!Gu.fuse_version && !Gu.is_turing && Gu.bar_base) {
-          UINT32 index = (hdr.ucode_id > 0) ? (hdr.ucode_id - 1) : 0;
-          UINT32 fuse_raw = *(volatile UINT32 *)(UINTN)(Gu.bar_base + GU_FUSE_SEC2_UCODE1 + index * 4);
-          if (fuse_raw != 0xFFFFFFFFU && (fuse_raw & 0xFFFF0000U) != 0xBADF0000U) {
-            fuse_ver = gpu_unlock_fuse_version(fuse_raw);
-          }
-        }
-        gpu_unlock_booter_patch(nvs_base + 0x01000, image_size, &hdr,
-                                bdata + 72 + image_size, sig_bytes, fuse_ver);
-      } else {
-        ctx->booter_size = (UINT32)bsize;
-        memcpy(nvs_base + 0x01000, bdata, ctx->booter_size);
-      }
-    } else {
-      ctx->booter_size = (UINT32)bsize;
-      memcpy(nvs_base + 0x01000, bdata, ctx->booter_size);
-    }
-  }
-  if (GuAssets[1].firmware.data && GuAssets[1].firmware.size) {
-    ctx->v67_size = (UINT32)GuAssets[1].firmware.size;
-    memcpy(nvs_base + 0x11000, GuAssets[1].firmware.data, ctx->v67_size);
-  }
-  if (GuAssets[3].firmware.data && GuAssets[3].firmware.size) {
-    ctx->boot_size = (UINT32)GuAssets[3].firmware.size;
-    memcpy(nvs_base + 0x21000, GuAssets[3].firmware.data, ctx->boot_size);
-  }
-  if (Gu.wpr_meta_valid) {
-    ctx->meta_size = 256;
-    memcpy(nvs_base + 0x2A000, Gu.wpr_meta, 256);
-    /* Re-target internal DMA buffer pointers inside the persistent WPR metadata:
-     * +32: boot_dma (8 bytes) -> nvs_phys + 0x21000
-     * +72: signature_dma (8 bytes) -> nvs_phys + 0x11000
-     * +80: signature_size (8 bytes) -> 64000
+  if (Gu.s3_arena_armed && Gu.s3_meta_dma && Gu.s3_booter_dma) {
+    /*
+     * S3 Persistence Mode (v1.8.65):
+     * All 6 GPU-DMA buffers (radix table, GSP image, FWSEC image, booter, V67 payload,
+     * boot image, and pristine WPR metadata) are consolidated in the single contiguous
+     * EfiReservedMemoryType Arena (<4GB). They retain their cold-boot DMA addresses
+     * directly without copying to ACPI NVS or pointer retargeting.
      */
-    UINT8 *meta_pkt = nvs_base + 0x2A000;
-    UINT64 boot_dma_val = (UINT64)(nvs_phys + 0x21000);
-    UINT64 sig_dma_val = (UINT64)(nvs_phys + 0x11000);
-    UINT64 sig_size_val = 64000ULL;
-    memcpy(meta_pkt + 32, &boot_dma_val, sizeof(UINT64));
-    memcpy(meta_pkt + 72, &sig_dma_val, sizeof(UINT64));
-    memcpy(meta_pkt + 80, &sig_size_val, sizeof(UINT64));
-
-    UINT64 radix_dma_val = 0;
-    memcpy(&radix_dma_val, meta_pkt + 16, sizeof(UINT64));
-    UINT64 img_size_val = 0;
-    memcpy(&img_size_val, meta_pkt + 24, sizeof(UINT64));
-    GuLog("GuS3PrepareAndRegister: Persistent WPR Meta: radix_dma=%#llx (%s) img_sz=%#llx boot_dma=%#llx sig_dma=%#llx\n",
-          (unsigned long long)radix_dma_val,
-          Gu.s3_persist_armed ? "EfiReservedMemoryType" : "EfiBootServicesData",
-          (unsigned long long)img_size_val,
-          (unsigned long long)boot_dma_val,
-          (unsigned long long)sig_dma_val);
+    ctx->booter_dma = Gu.s3_booter_dma;
+    ctx->booter_size = Gu.s3_booter_size;
+    ctx->v67_dma = Gu.s3_v67_dma;
+    ctx->v67_size = GU_V67_SIZE;
+    ctx->boot_dma = Gu.s3_boot_dma;
+    ctx->boot_size = Gu.s3_boot_size;
+    ctx->meta_dma = Gu.s3_meta_dma;
+    ctx->meta_size = 256;
+    GuLog("GuS3PrepareAndRegister: 6 GPU-DMA buffers consolidated in Arena (EfiReservedMemoryType):\n"
+          "  booter_dma=%#llx (%u bytes), v67_dma=%#llx, boot_dma=%#llx (%u bytes), meta_dma=%#llx\n",
+          (unsigned long long)ctx->booter_dma, ctx->booter_size,
+          (unsigned long long)ctx->v67_dma,
+          (unsigned long long)ctx->boot_dma, ctx->boot_size,
+          (unsigned long long)ctx->meta_dma);
     if (Gu.s3_fwsec_dma) {
       GuLog("GuS3PrepareAndRegister: Persistent FWSEC: dma=%#llx sz=%#x (EfiReservedMemoryType)\n",
             (unsigned long long)Gu.s3_fwsec_dma, (unsigned)Gu.s3_fwsec_size);
     }
-  } else if (GuAssets[4].firmware.data && GuAssets[4].firmware.size) {
-    ctx->meta_size = (UINT32)GuAssets[4].firmware.size;
-    memcpy(nvs_base + 0x2A000, GuAssets[4].firmware.data, ctx->meta_size);
-    /* Ensure WPR magic is populated for AD102 even in fallback */
-    UINT64 wpr_magic = 0xdc3aae21371a60b3ULL;
-    memcpy(nvs_base + 0x2A000, &wpr_magic, sizeof(UINT64));
+  } else {
+    /* Legacy NVS staging fallback (for non-arena / Turing / test environments) */
+    ctx->booter_dma = nvs_phys + 0x01000;
+    ctx->v67_dma = nvs_phys + 0x11000;
+    ctx->boot_dma = nvs_phys + 0x21000;
+    ctx->meta_dma = nvs_phys + 0x2A000;
+
+    if (GuAssets[0].firmware.data && GuAssets[0].firmware.size) {
+      const UINT8 *bdata = (const UINT8 *)GuAssets[0].firmware.data;
+      UINTN bsize = GuAssets[0].firmware.size;
+      if (bsize >= 72 && *(const UINT32 *)bdata == GU_BOOTER_CONTAINER_MAGIC) {
+        /* BooterLoad container: unpack 72-byte header, extract executable image and patch fuse signature */
+        struct gpu_unlock_booter_hdr hdr;
+        memcpy(&hdr, bdata + 8, sizeof(hdr));
+        UINT32 image_size = *(const UINT32 *)(bdata + 8 + sizeof(hdr));
+        UINT32 sig_bytes = *(const UINT32 *)(bdata + 12 + sizeof(hdr));
+
+        if (image_size && image_size <= 65536 - 4096 &&
+            72 + image_size + sig_bytes <= bsize) {
+          memcpy(nvs_base + 0x01000, bdata + 72, image_size);
+          ctx->booter_size = image_size;
+
+          /* Resolve fuse version: use cold-boot sampled version if available, or read GPU BAR0 */
+          UINT32 fuse_ver = Gu.fuse_version ? Gu.fuse_version : 1;
+          if (!Gu.fuse_version && !Gu.is_turing && Gu.bar_base) {
+            UINT32 index = (hdr.ucode_id > 0) ? (hdr.ucode_id - 1) : 0;
+            UINT32 fuse_raw = *(volatile UINT32 *)(UINTN)(Gu.bar_base + GU_FUSE_SEC2_UCODE1 + index * 4);
+            if (fuse_raw != 0xFFFFFFFFU && (fuse_raw & 0xFFFF0000U) != 0xBADF0000U) {
+              fuse_ver = gpu_unlock_fuse_version(fuse_raw);
+            }
+          }
+          gpu_unlock_booter_patch(nvs_base + 0x01000, image_size, &hdr,
+                                  bdata + 72 + image_size, sig_bytes, fuse_ver);
+        } else {
+          ctx->booter_size = (UINT32)bsize;
+          memcpy(nvs_base + 0x01000, bdata, ctx->booter_size);
+        }
+      } else {
+        ctx->booter_size = (UINT32)bsize;
+        memcpy(nvs_base + 0x01000, bdata, ctx->booter_size);
+      }
+    }
+    if (GuAssets[1].firmware.data && GuAssets[1].firmware.size) {
+      ctx->v67_size = (UINT32)GuAssets[1].firmware.size;
+      memcpy(nvs_base + 0x11000, GuAssets[1].firmware.data, ctx->v67_size);
+    }
+    if (GuAssets[3].firmware.data && GuAssets[3].firmware.size) {
+      ctx->boot_size = (UINT32)GuAssets[3].firmware.size;
+      memcpy(nvs_base + 0x21000, GuAssets[3].firmware.data, ctx->boot_size);
+    }
+    if (Gu.wpr_meta_valid) {
+      ctx->meta_size = 256;
+      memcpy(nvs_base + 0x2A000, Gu.wpr_meta, 256);
+      /* Re-target internal DMA buffer pointers inside the persistent WPR metadata:
+       * +32: boot_dma (8 bytes) -> nvs_phys + 0x21000
+       * +72: signature_dma (8 bytes) -> nvs_phys + 0x11000
+       * +80: signature_size (8 bytes) -> 64000
+       */
+      UINT8 *meta_pkt = nvs_base + 0x2A000;
+      UINT64 boot_dma_val = (UINT64)(nvs_phys + 0x21000);
+      UINT64 sig_dma_val = (UINT64)(nvs_phys + 0x11000);
+      UINT64 sig_size_val = 64000ULL;
+      memcpy(meta_pkt + 32, &boot_dma_val, sizeof(UINT64));
+      memcpy(meta_pkt + 72, &sig_dma_val, sizeof(UINT64));
+      memcpy(meta_pkt + 80, &sig_size_val, sizeof(UINT64));
+
+      UINT64 radix_dma_val = 0;
+      memcpy(&radix_dma_val, meta_pkt + 16, sizeof(UINT64));
+      UINT64 img_size_val = 0;
+      memcpy(&img_size_val, meta_pkt + 24, sizeof(UINT64));
+      GuLog("GuS3PrepareAndRegister: Persistent WPR Meta: radix_dma=%#llx (%s) img_sz=%#llx boot_dma=%#llx sig_dma=%#llx\n",
+            (unsigned long long)radix_dma_val,
+            Gu.s3_persist_armed ? "EfiReservedMemoryType" : "EfiBootServicesData",
+            (unsigned long long)img_size_val,
+            (unsigned long long)boot_dma_val,
+            (unsigned long long)sig_dma_val);
+      if (Gu.s3_fwsec_dma) {
+        GuLog("GuS3PrepareAndRegister: Persistent FWSEC: dma=%#llx sz=%#x (EfiReservedMemoryType)\n",
+              (unsigned long long)Gu.s3_fwsec_dma, (unsigned)Gu.s3_fwsec_size);
+      }
+    } else if (GuAssets[4].firmware.data && GuAssets[4].firmware.size) {
+      ctx->meta_size = (UINT32)GuAssets[4].firmware.size;
+      memcpy(nvs_base + 0x2A000, GuAssets[4].firmware.data, ctx->meta_size);
+      /* Ensure WPR magic is populated for AD102 even in fallback */
+      UINT64 wpr_magic = 0xdc3aae21371a60b3ULL;
+      memcpy(nvs_base + 0x2A000, &wpr_magic, sizeof(UINT64));
+    }
   }
 
   /* Copy the self-contained GuS3ResumeDispatch PIC machine code into the ACPI NVS buffer.

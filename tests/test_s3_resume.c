@@ -1730,6 +1730,85 @@ static void TestGuS3PersistentMemoryRetention(void) {
   printf("[9] S3 Persistent Radix & GSP Image Memory Retention (EfiReservedMemoryType): OK!\n");
 }
 
+static void TestGuS3ArenaConsolidation(void) {
+  printf("[10] Testing S3 Full 6 GPU-DMA Buffer Consolidation into Reserved Arena (v1.8.65)...\n");
+  fflush(stdout);
+
+  EFI_SYSTEM_TABLE mock_st;
+  memset(&mock_st, 0, sizeof(mock_st));
+
+  /* Setup mock table and protocol */
+  EFI_BOOT_SERVICES mock_bs;
+  memset(&mock_bs, 0, sizeof(mock_bs));
+  mock_bs.AllocatePages = MockAllocatePages;
+  mock_bs.LocateProtocol = MockLocateProtocol;
+  mock_st.BootServices = &mock_bs;
+
+  /* Reset and configure Gu state */
+  memset(&Gu, 0, sizeof(Gu));
+  Gu.bs = &mock_bs;
+  Gu.bar_base = 0xFB000000ULL;
+  Gu.device_id = 0x2684;
+  Gu.s3_persist_armed = TRUE;
+  Gu.s3_arena_armed = TRUE;
+  Gu.s3_booter_dma = 0xDAD01000ULL;
+  Gu.s3_booter_size = 57672U;
+  Gu.s3_v67_dma = 0xDAD11000ULL;
+  Gu.s3_boot_dma = 0xDAD21000ULL;
+  Gu.s3_boot_size = 36864U;
+  Gu.s3_meta_dma = 0xDAD31000ULL;
+  Gu.s3_fwsec_dma = 0xDAD41000ULL;
+  Gu.s3_fwsec_size = 65536U;
+  Gu.wpr_meta_valid = TRUE;
+
+  EFI_STATUS status = GuS3PrepareAndRegister(&mock_st);
+  CHECK(status == EFI_SUCCESS, "GuS3PrepareAndRegister must succeed with arena consolidation");
+
+  GU_S3_RESUME_CONTEXT *ctx = (GU_S3_RESUME_CONTEXT *)g_mock_nvs_buffer;
+  CHECK(ctx->booter_dma == 0xDAD01000ULL, "ctx->booter_dma must match Gu.s3_booter_dma");
+  CHECK(ctx->booter_size == 57672U, "ctx->booter_size must match Gu.s3_booter_size");
+  CHECK(ctx->v67_dma == 0xDAD11000ULL, "ctx->v67_dma must match Gu.s3_v67_dma");
+  CHECK(ctx->boot_dma == 0xDAD21000ULL, "ctx->boot_dma must match Gu.s3_boot_dma");
+  CHECK(ctx->boot_size == 36864U, "ctx->boot_size must match Gu.s3_boot_size");
+  CHECK(ctx->meta_dma == 0xDAD31000ULL, "ctx->meta_dma must match Gu.s3_meta_dma");
+  CHECK(ctx->meta_size == 256U, "ctx->meta_size must be 256");
+
+  /* Test Trampoline code builder with arena pointers */
+  UINT8 buffer[4096];
+  EFI_PHYSICAL_ADDRESS tramp_phys = 0x0009E000ULL;
+  EFI_PHYSICAL_ADDRESS ctx_phys = 0xdc5d8000ULL;
+  EFI_PHYSICAL_ADDRESS shadow_facs_phys = 0xdc617400ULL;
+  EFI_PHYSICAL_ADDRESS telem_phys = 0xDA000000ULL;
+  UINT32 bytes = GuAcpiBuildTrampolineCode(buffer, sizeof(buffer), tramp_phys, ctx_phys,
+                                          shadow_facs_phys, telem_phys, 0xFB000000ULL,
+                                          0x80001960U, 0x802D0064U, Gu.s3_fwsec_dma);
+  CHECK(bytes > 0 && bytes <= 2048, "Trampoline builder must generate <= 2048 bytes with arena pointers");
+
+  /* Verify Mailbox 0 in trampoline code points to Gu.s3_meta_dma (0xDAD31000) */
+  BOOLEAN found_arena_meta = FALSE;
+  for (UINT32 i = 0; i < bytes - 8; i++) {
+    if (buffer[i] == 0xC7 && buffer[i+1] == 0x83 && *(UINT32 *)(buffer + i + 2) == 0x00840040U &&
+        *(UINT32 *)(buffer + i + 6) == 0xDAD31000U) {
+      found_arena_meta = TRUE;
+      break;
+    }
+  }
+  CHECK(found_arena_meta, "Trampoline Mailbox 0 write must use arena meta_dma (0xDAD31000)");
+
+  /* Verify Mailbox 1 save to +0x11C */
+  BOOLEAN found_mb1_save = FALSE;
+  for (UINT32 i = 0; i < bytes - 8; i++) {
+    if (buffer[i] == 0x8B && buffer[i+1] == 0x83 && *(UINT32 *)(buffer + i + 2) == 0x00840044U &&
+        buffer[i+6] == 0xA3 && *(UINT32 *)(buffer + i + 7) == (UINT32)(telem_phys + 0x11CU)) {
+      found_mb1_save = TRUE;
+      break;
+    }
+  }
+  CHECK(found_mb1_save, "Trampoline must record SEC2 Mailbox 1 at telemetry +0x11C");
+
+  printf("[10] S3 Full 6 GPU-DMA Buffer Consolidation into Reserved Arena: OK!\n");
+}
+
 int main(void) {
   setvbuf(stdout, NULL, _IONBF, 0);
   printf("=== Universal S3 Persistence Resume Engine Test Suite ===\n");
@@ -1744,6 +1823,7 @@ int main(void) {
   TestGuAcpiBuildTrampolineCode();
   TestGuS3Prepare_BooterUnpackAndPatch();
   TestGuS3PersistentMemoryRetention();
+  TestGuS3ArenaConsolidation();
 
   printf("=== ALL S3 RESUME TESTS PASSED (%u checks) [OK] ===\n", g_checks);
   fflush(stdout);

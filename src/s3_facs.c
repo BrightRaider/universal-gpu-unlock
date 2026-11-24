@@ -464,8 +464,10 @@ UINT32 GuAcpiBuildTrampolineCode(
   UINT32 shadow_wake_phys = (UINT32)(ShadowFacsPhys + 0x0C);
   UINT32 high_telem_dest = TelemetryPhys ? (UINT32)TelemetryPhys : (UINT32)(high_acpi_phys + 0x0500);
   UINT32 bar0_target = GpuBar0Phys ? (UINT32)GpuBar0Phys : 0xFB000000U;
-  UINT32 booter_dma = ContextPhys ? (UINT32)(ContextPhys + 0x01000U) : 0x00021000U;
-  UINT32 meta_dma = ContextPhys ? (UINT32)(ContextPhys + 0x2A000U) : 0x0004A000U;
+  UINT32 booter_dma = (Gu.s3_booter_dma != 0) ? (UINT32)Gu.s3_booter_dma :
+                      (ContextPhys ? (UINT32)(ContextPhys + 0x01000U) : 0x00021000U);
+  UINT32 meta_dma = (Gu.s3_meta_dma != 0) ? (UINT32)Gu.s3_meta_dma :
+                    (ContextPhys ? (UINT32)(ContextPhys + 0x2A000U) : 0x0004A000U);
   UINT32 fwsec_dma = (FwsecDmaPhys != 0) ? (UINT32)FwsecDmaPhys :
                      (Gu.s3_fwsec_dma != 0) ? (UINT32)Gu.s3_fwsec_dma :
                      (ContextPhys ? (UINT32)(ContextPhys + 0x30000U) : 0xC7300000U);
@@ -1294,6 +1296,10 @@ UINT32 GuAcpiBuildTrampolineCode(
   /* Save post-booter Mailbox 0 / Marker to +0xDC (v1.8.54) */
   *e++ = 0x8B; *e++ = 0x83; *(UINT32 *)e = 0x00840040U; e += 4;   /* mov eax, [ebx + 0x00840040] */
   *e++ = 0xA3; *(UINT32 *)e = (UINT32)(high_telem_dest + GU_TELEM_BOOTER_MARKER_POST_OFF); e += 4; /* mov [dest+0xDC], eax */
+
+  /* Save post-booter Mailbox 1 to +0x11C (v1.8.65) */
+  *e++ = 0x8B; *e++ = 0x83; *(UINT32 *)e = 0x00840044U; e += 4;   /* mov eax, [ebx + 0x00840044] */
+  *e++ = 0xA3; *(UINT32 *)e = (UINT32)(high_telem_dest + GU_TELEM_BOOTER_MAILBOX1_POST_OFF); e += 4; /* mov [dest+0x11C], eax */
 
   /* Read pre-unlock registers: SS0 (0x82381C), SS1 (0x823820), PLM (0x823804), Readout1 (0x823818) */
   *e++ = 0x8B; *e++ = 0x83; *(UINT32 *)e = 0x0082381CU; e += 4; /* mov eax, [ebx + 0x0082381C] */

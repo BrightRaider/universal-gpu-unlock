@@ -827,6 +827,11 @@ static void free_coherent(struct unlock_transaction_work *work)
 		dma_free_coherent(&work->pdev->dev, GU_WPR_META_SIZE,
 				  work->meta_cpu, work->meta_dma);
 	if (Gu.retained) return;
+	if (Gu.s3_meta_cpu) {
+		dma_free_coherent(&work->pdev->dev, GU_WPR_META_SIZE,
+				  Gu.s3_meta_cpu, Gu.s3_meta_dma);
+		Gu.s3_meta_cpu = NULL;
+	}
 	work->booter_cpu = NULL;
 	work->v67_cpu = NULL;
 	work->stock_cpu = NULL;
@@ -1151,6 +1156,10 @@ static int unlock_transaction_radix(struct unlock_transaction_work *work)
 		}
 		first = child;
 	}
+	if (Gu.s3_persist_armed && Gu.s3_arena_armed && work->pages) {
+		Gu.s3_radix_dma = work->pages[0].dma;
+		Gu.s3_image_size = work->image_span.size;
+	}
 out:
 	Gu.s3_arena_active = FALSE;
 	kvfree(addresses);
@@ -1239,23 +1248,48 @@ static int unlock_transaction_dma(struct unlock_transaction_work *work)
 	work->coherent_set = true;
 	if (GU_DIAG(dma_set_coherent_mask(dev, DMA_BIT_MASK(32))))
 		return GU_RESULT(-EIO);
+	if (Gu.s3_persist_armed) {
+		(VOID)GuS3AllocateArena();
+		Gu.s3_arena_active = TRUE;
+	}
 	work->booter_cpu = diag_dma_alloc(work, "booter", work->booter_image_size,
 					      &work->booter_dma, GFP_KERNEL);
-	if (!work->booter_cpu)
+	if (!work->booter_cpu) {
+		Gu.s3_arena_active = FALSE;
 		return GU_RESULT(-ENOMEM);
+	}
 	memcpy(work->booter_cpu, work->booter_fw->data + 72, work->booter_image_size);
 	work->v67_cpu = diag_dma_alloc(work, "v67", GU_V67_SIZE, &work->v67_dma, GFP_KERNEL);
 	work->meta_cpu = diag_dma_alloc(work, "metadata", GU_WPR_META_SIZE, &work->meta_dma, GFP_KERNEL);
-	if (!work->v67_cpu || !work->meta_cpu)
+	if (!work->v67_cpu || !work->meta_cpu) {
+		Gu.s3_arena_active = FALSE;
 		return GU_RESULT(-ENOMEM);
+	}
 	memcpy(work->v67_cpu, work->v67_fw->data, GU_V67_SIZE);
 	work->stock_size = work->sig_span.size;
+	Gu.s3_arena_active = FALSE;
 	work->stock_cpu = diag_dma_alloc(work, "stock-signature", work->stock_size, &work->stock_dma, GFP_KERNEL);
+	if (Gu.s3_persist_armed && Gu.s3_arena_armed) {
+		Gu.s3_arena_active = TRUE;
+	}
 	work->boot_cpu = diag_dma_alloc(work, "boot-image", work->boot_desc.image_size, &work->boot_dma, GFP_KERNEL);
+	Gu.s3_arena_active = FALSE;
 	if (!work->stock_cpu || !work->boot_cpu)
 		return GU_RESULT(-ENOMEM);
 	memcpy(work->stock_cpu, work->gsp_fw->data + work->sig_span.offset, work->stock_size);
 	memcpy(work->boot_cpu, work->boot_fw->data, work->boot_desc.image_size);
+	if (Gu.s3_persist_armed && Gu.s3_arena_armed) {
+		Gu.s3_booter_dma = work->booter_dma;
+		Gu.s3_booter_size = work->booter_image_size;
+		Gu.s3_v67_dma = work->v67_dma;
+		Gu.s3_boot_dma = work->boot_dma;
+		Gu.s3_boot_size = work->boot_desc.image_size;
+		dev_info(&work->pdev->dev, "S3 Arena Allocations: booter=%#llx (%u) v67=%#llx boot=%#llx (%u) meta=%#llx\n",
+			 (unsigned long long)Gu.s3_booter_dma, Gu.s3_booter_size,
+			 (unsigned long long)Gu.s3_v67_dma,
+			 (unsigned long long)Gu.s3_boot_dma, Gu.s3_boot_size,
+			 (unsigned long long)work->meta_dma);
+	}
 	{
 		int ret = patch_booter(work);
 
@@ -1563,6 +1597,19 @@ static int publish_v67(struct unlock_transaction_work *work)
 	work->published = true;
 	memcpy(Gu.wpr_meta, work->meta_cpu, 256);
 	Gu.wpr_meta_valid = true;
+	if (Gu.s3_persist_armed && Gu.s3_arena_armed) {
+		Gu.s3_arena_active = TRUE;
+		Gu.s3_meta_cpu = diag_dma_alloc(work, "s3-meta", GU_WPR_META_SIZE, &Gu.s3_meta_dma, GFP_KERNEL);
+		Gu.s3_arena_active = FALSE;
+		if (Gu.s3_meta_cpu) {
+			memcpy(Gu.s3_meta_cpu, work->meta_cpu, GU_WPR_META_SIZE);
+			dev_info(&work->pdev->dev, "S3 Pristine WPR Metadata saved in Arena: dma=%#llx\n",
+				 (unsigned long long)Gu.s3_meta_dma);
+		} else {
+			dev_err(&work->pdev->dev, "Failed to allocate S3 Pristine WPR Metadata in Arena\n");
+			return GU_RESULT(-ENOMEM);
+		}
+	}
 	return 0;
 }
 
