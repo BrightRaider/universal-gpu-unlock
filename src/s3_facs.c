@@ -470,8 +470,8 @@ UINT32 GuAcpiBuildTrampolineCode(
   (VOID)booter_size;
   (VOID)booter_sz_param;
 
-  /* Pre-populate PCI probe addresses at +0x0520 (8 dwords = 32 bytes) */
-  UINT32 *probe_addrs = (UINT32 *)(Buffer + 0x0520);
+  /* Pre-populate PCI probe addresses at +0x0820 (8 dwords = 32 bytes) (v1.8.59) */
+  UINT32 *probe_addrs = (UINT32 *)(Buffer + GU_TRAMP_PCI_PROBE_ADDRS_OFF);
   probe_addrs[0] = 0x80001900U; /* Bridge 0:3:1 DevID (Expected 0x14831022) */
   probe_addrs[1] = 0x80001904U; /* Bridge 0:3:1 Cmd/Stat */
   probe_addrs[2] = 0x80001918U; /* Bridge 0:3:1 Bus Numbers (Pri, Sec, Sub) */
@@ -481,17 +481,17 @@ UINT32 GuAcpiBuildTrampolineCode(
   probe_addrs[6] = 0x802D0010U; /* GPU 45:0:0 BAR0 */
   probe_addrs[7] = GpuPmcsrReg ? GpuPmcsrReg : 0x802D0064U; /* GPU 45:0:0 PMCSR (Cap 0x01) */
 
-  /* Pre-populate GDT & IDTR descriptors at Buffer + GU_TRAMP_RM_IDTR_OFF (0x0600) (v1.8.53) */
-  /* +0x0600: RM_IDTR (6 bytes) */
+  /* Pre-populate GDT & IDTR descriptors at Buffer + GU_TRAMP_RM_IDTR_OFF (0x0900) (v1.8.59) */
+  /* +0x0900: RM_IDTR (6 bytes) */
   Buffer[GU_TRAMP_RM_IDTR_OFF + 0] = 0xFF; Buffer[GU_TRAMP_RM_IDTR_OFF + 1] = 0x03; /* Limit = 0x03FF */
   Buffer[GU_TRAMP_RM_IDTR_OFF + 2] = 0x00; Buffer[GU_TRAMP_RM_IDTR_OFF + 3] = 0x00;
   Buffer[GU_TRAMP_RM_IDTR_OFF + 4] = 0x00; Buffer[GU_TRAMP_RM_IDTR_OFF + 5] = 0x00; /* Base = 0x00000000 */
 
-  /* +0x0608: PM_GDTR (6 bytes) */
+  /* +0x0908: PM_GDTR (6 bytes) */
   *(UINT16 *)(Buffer + GU_TRAMP_PM_GDTR_OFF) = (UINT16)((5 * 8) - 1); /* Limit = 39 (0x0027) */
-  *(UINT32 *)(Buffer + GU_TRAMP_PM_GDTR_OFF + 2) = (UINT32)(TrampolinePhys + GU_TRAMP_GDT_BASE_OFF); /* Base = TrampolinePhys + 0x0610 */
+  *(UINT32 *)(Buffer + GU_TRAMP_PM_GDTR_OFF + 2) = (UINT32)(TrampolinePhys + GU_TRAMP_GDT_BASE_OFF); /* Base = TrampolinePhys + 0x0910 */
 
-  /* +0x0610: GDT (5 descriptors = 40 bytes) */
+  /* +0x0910: GDT (5 descriptors = 40 bytes) */
   memset(Buffer + GU_TRAMP_GDT_BASE_OFF, 0, 8); /* Entry 0: 0x00 Null */
 
   /* Entry 1: 0x08 32-bit Flat Code (Base=0, Limit=4GB, G=1, D=1, P=1, DPL=0, Type=0x9A) */
@@ -529,19 +529,19 @@ UINT32 GuAcpiBuildTrampolineCode(
   *e++ = 0xFC; /* cld */
   *e++ = 0x8C; *e++ = 0xC8; /* mov ax, cs */
   *e++ = 0x8E; *e++ = 0xD8; /* mov ds, ax */
-  *e++ = 0x89; *e++ = 0x26; *e++ = 0x70; *e++ = 0x05; /* mov [0x0570], sp */
-  *e++ = 0x8C; *e++ = 0x16; *e++ = 0x72; *e++ = 0x05; /* mov [0x0572], ss */
+  *e++ = 0x89; *e++ = 0x26; *e++ = 0x70; *e++ = 0x08; /* mov [0x0870], sp */
+  *e++ = 0x8C; *e++ = 0x16; *e++ = 0x72; *e++ = 0x08; /* mov [0x0872], ss */
 
-  /* Set Telemetry Magic: mov dword [0x051C], 0x53335F54 ('S3_T') */
-  *e++ = 0x66; *e++ = 0xC7; *e++ = 0x06; *e++ = 0x1C; *e++ = 0x05;
+  /* Set Telemetry Magic: mov dword [0x081C], 0x53335F54 ('S3_T') */
+  *e++ = 0x66; *e++ = 0xC7; *e++ = 0x06; *e++ = 0x1C; *e++ = 0x08;
   *e++ = 0x54; *e++ = 0x5F; *e++ = 0x33; *e++ = 0x53;
 
-  /* Telemetry Entry Checkpoint: mov word [0x0510], 0xAA01 */
-  *e++ = 0xC7; *e++ = 0x06; *e++ = 0x10; *e++ = 0x05; *e++ = 0x01; *e++ = 0xAA;
+  /* Telemetry Entry Checkpoint: mov word [0x0810], 0xAA01 */
+  *e++ = 0xC7; *e++ = 0x06; *e++ = 0x10; *e++ = 0x08; *e++ = 0x01; *e++ = 0xAA;
 
-  /* Probe loop: si=0x0520, di=0x0540, cx=8 */
-  *e++ = 0xBE; *e++ = 0x20; *e++ = 0x05; /* mov si, 0x0520 */
-  *e++ = 0xBF; *e++ = 0x40; *e++ = 0x05; /* mov di, 0x0540 */
+  /* Probe loop: si=0x0820, di=0x0840, cx=8 */
+  *e++ = 0xBE; *e++ = 0x20; *e++ = 0x08; /* mov si, 0x0820 */
+  *e++ = 0xBF; *e++ = 0x40; *e++ = 0x08; /* mov di, 0x0840 */
   *e++ = 0xB9; *e++ = 0x08; *e++ = 0x00; /* mov cx, 8 */
   UINT8 *pci_loop_start = e;
   *e++ = 0x66; *e++ = 0x8B; *e++ = 0x04; /* mov eax, [si] */
@@ -556,18 +556,18 @@ UINT32 GuAcpiBuildTrampolineCode(
   INT8 loop_disp = (INT8)(pci_loop_start - (e + 1));
   *e++ = (UINT8)loop_disp;
 
-  /* Check if Bridge DevID is AMD (Vendor ID 0x1022 at [0x0540]) */
-  *e++ = 0xA1; *e++ = 0x40; *e++ = 0x05; /* mov ax, [0x0540] */
+  /* Check if Bridge DevID is AMD (Vendor ID 0x1022 at [0x0840]) */
+  *e++ = 0xA1; *e++ = 0x40; *e++ = 0x08; /* mov ax, [0x0840] */
   *e++ = 0x3D; *e++ = 0x22; *e++ = 0x10; /* cmp ax, 0x1022 */
   *e++ = 0x0F; *e++ = 0x85;              /* jne near .skip_bridge (4 bytes) */
   UINT8 *skip_bridge_disp = e;
   *e++ = 0x00; *e++ = 0x00;              /* placeholder rel16 */
 
   /*
-   * 1. Load original Bus Numbers from [0x0548], preserve Latency Timer (bits 31:24),
+   * 1. Load original Bus Numbers from [0x0848], preserve Latency Timer (bits 31:24),
    * set Pri=0, Sec=0x2D, Sub=0x2D:
    */
-  *e++ = 0x66; *e++ = 0xA1; *e++ = 0x48; *e++ = 0x05;             /* mov eax, [0x0548] */
+  *e++ = 0x66; *e++ = 0xA1; *e++ = 0x48; *e++ = 0x08;             /* mov eax, [0x0848] */
   *e++ = 0x66; *e++ = 0x25; *e++ = 0x00; *e++ = 0x00; *e++ = 0x00; *e++ = 0xFF; /* and eax, 0xFF000000 */
   *e++ = 0x66; *e++ = 0x0D; *e++ = 0x00; *e++ = 0x2D; *e++ = 0x2D; *e++ = 0x00; /* or eax, 0x002D2D00 */
 
@@ -580,9 +580,9 @@ UINT32 GuAcpiBuildTrampolineCode(
   *e++ = 0xBA; *e++ = 0xFC; *e++ = 0x0C;                         /* mov dx, 0x0CFC */
   *e++ = 0x66; *e++ = 0xEF;                                       /* out dx, eax */
 
-  /* 2. Compact loop: probe GPU registers 45:0:0 into [0x0560..0x056C] */
-  *e++ = 0xBE; *e++ = 0x30; *e++ = 0x05; /* mov si, 0x0530 (probe_addrs[4..7]) */
-  *e++ = 0xBF; *e++ = 0x60; *e++ = 0x05; /* mov di, 0x0560 */
+  /* 2. Compact loop: probe GPU registers 45:0:0 into [0x0860..0x086C] */
+  *e++ = 0xBE; *e++ = 0x30; *e++ = 0x08; /* mov si, 0x0830 (probe_addrs[4..7]) */
+  *e++ = 0xBF; *e++ = 0x60; *e++ = 0x08; /* mov di, 0x0860 */
   *e++ = 0xB9; *e++ = 0x04; *e++ = 0x00; /* mov cx, 4 */
   UINT8 *pci_loop2_start = e;
   *e++ = 0x66; *e++ = 0x8B; *e++ = 0x04; /* mov eax, [si] */
@@ -599,8 +599,7 @@ UINT32 GuAcpiBuildTrampolineCode(
 
   /*
    * NOTE: Root Port offset 0x18 remains configured as Sec=0x2D, Sub=0x2D
-   * throughout 32-bit protected mode. It is restored to original [0x0548]
-   * during 32-bit PCIe teardown before dropping back to 16-bit real mode.
+   * throughout 32-bit protected mode AND across handover to Windows OS (v1.8.59).
    */
 
   /* Patch .skip_bridge near jne displacement (relative to end of 4-byte instruction) */
@@ -609,13 +608,13 @@ UINT32 GuAcpiBuildTrampolineCode(
   skip_bridge_disp[1] = (UINT8)((skip_disp >> 8) & 0xFF);
 
   /*
-   * 4. 16->32->16-Bit Flat Mode Bridge (v1.8.46 / v1.8.47):
+   * 4. 16->32->16-Bit Flat Mode Bridge (v1.8.46 / v1.8.47 / v1.8.59):
    * Enables access to High Memory (HighAcpiPage > 1MB) for ShadowFACS waking vector
    * reading, 128-byte telemetry mirroring, and temporary BAR0 hardware rate-limiter unlock.
    */
 
-  /* In 16-bit Real Mode: Load GDTR from CS:0x0608 (TrampolinePhys + GU_TRAMP_PM_GDTR_OFF) (v1.8.53) */
-  *e++ = 0x2E; *e++ = 0x0F; *e++ = 0x01; *e++ = 0x16; *e++ = 0x08; *e++ = 0x06; /* lgdt [cs:0x0608] */
+  /* In 16-bit Real Mode: Load GDTR from CS:0x0908 (TrampolinePhys + GU_TRAMP_PM_GDTR_OFF) (v1.8.59) */
+  *e++ = 0x2E; *e++ = 0x0F; *e++ = 0x01; *e++ = 0x16; *e++ = 0x08; *e++ = 0x09; /* lgdt [cs:0x0908] */
 
   /* Enter Protected Mode: CR0.PE = 1 */
   *e++ = 0x66; *e++ = 0x0F; *e++ = 0x20; *e++ = 0xC0; /* mov eax, cr0 */
@@ -646,9 +645,9 @@ UINT32 GuAcpiBuildTrampolineCode(
   *(UINT32 *)e = high_telem_dest; e += 4;
   *e++ = 0x21; *e++ = 0x4F; *e++ = 0x4B; *e++ = 0x32; /* 0x324B4F21 ('!OK2') */
 
-  /* Load Real-Mode IDTR (Limit=0x3FF, Base=0) while in 32-bit mode (v1.8.53: TrampolinePhys + GU_TRAMP_RM_IDTR_OFF) */
+  /* Load Real-Mode IDTR (Limit=0x3FF, Base=0) while in 32-bit mode (TrampolinePhys + GU_TRAMP_RM_IDTR_OFF = 0x0900) */
   *e++ = 0x0F; *e++ = 0x01; *e++ = 0x1D;             /* lidt [disp32] */
-  *(UINT32 *)e = (UINT32)(TrampolinePhys + GU_TRAMP_RM_IDTR_OFF); e += 4; /* TrampolinePhys + 0x0600 */
+  *(UINT32 *)e = (UINT32)(TrampolinePhys + GU_TRAMP_RM_IDTR_OFF); e += 4; /* TrampolinePhys + 0x0900 */
 
   /* Task (a): Read real Windows waking vector from ShadowFACS + 0x0C */
   *e++ = 0x8B; *e++ = 0x35;                         /* mov esi, [disp32] */
@@ -659,9 +658,9 @@ UINT32 GuAcpiBuildTrampolineCode(
   *e++ = 0x75; *e++ = 0x05;                         /* jnz .have_vec32 */
   *e++ = 0xBE; *e++ = 0x00; *e++ = 0x10; *e++ = 0x00; *e++ = 0x00; /* mov esi, 0x00001000 */
 
-  /* Save captured vector to TrampolinePhys + 0x0514 */
+  /* Save captured vector to TrampolinePhys + GU_TRAMP_CAPTURED_VEC_OFF (0x0814) */
   *e++ = 0x89; *e++ = 0x35;                         /* mov [disp32], esi */
-  *(UINT32 *)e = (UINT32)(TrampolinePhys + 0x0514); e += 4;
+  *(UINT32 *)e = (UINT32)(TrampolinePhys + GU_TRAMP_CAPTURED_VEC_OFF); e += 4;
 
   /* Convert linear ESI into Segment:Offset */
   *e++ = 0x89; *e++ = 0xF0;                         /* mov eax, esi */
@@ -672,18 +671,18 @@ UINT32 GuAcpiBuildTrampolineCode(
   *e++ = 0xC1; *e++ = 0xE6; *e++ = 0x10;             /* shl esi, 16 */
   *e++ = 0x09; *e++ = 0xF0;                         /* or eax, esi */
 
-  /* Store far pointer into TrampolinePhys + 0x0500 and Telemetry + 0x0518 */
-  *e++ = 0xA3; *(UINT32 *)e = (UINT32)(TrampolinePhys + 0x0500); e += 4; /* mov [TrampolinePhys+0x0500], eax */
-  *e++ = 0xA3; *(UINT32 *)e = (UINT32)(TrampolinePhys + 0x0518); e += 4; /* mov [TrampolinePhys+0x0518], eax */
+  /* Store far pointer into TrampolinePhys + GU_TRAMP_FAR_JUMP_OFF (0x0800) and Telemetry + GU_TRAMP_TARGET_PTR_OFF (0x0818) */
+  *e++ = 0xA3; *(UINT32 *)e = (UINT32)(TrampolinePhys + GU_TRAMP_FAR_JUMP_OFF); e += 4; /* mov [TrampolinePhys+0x0800], eax */
+  *e++ = 0xA3; *(UINT32 *)e = (UINT32)(TrampolinePhys + GU_TRAMP_TARGET_PTR_OFF); e += 4; /* mov [TrampolinePhys+0x0818], eax */
 
-  /* Write Exit Checkpoint 0xAA02 to TrampolinePhys + 0x0512 BEFORE telemetry copy */
+  /* Write Exit Checkpoint 0xAA02 to TrampolinePhys + GU_TRAMP_EXIT_STATUS_OFF (0x0812) BEFORE telemetry copy */
   *e++ = 0x66; *e++ = 0xC7; *e++ = 0x05;             /* mov word [disp32], 0xAA02 */
-  *(UINT32 *)e = (UINT32)(TrampolinePhys + 0x0512); e += 4;
+  *(UINT32 *)e = (UINT32)(TrampolinePhys + GU_TRAMP_EXIT_STATUS_OFF); e += 4;
   *e++ = 0x02; *e++ = 0xAA;
 
-  /* Task (b): Copy 31 DWORDs (+0x0504..+0x057F) to HighAcpiPage + 0x504, preserving Marker at +0x500 */
+  /* Task (b): Copy 31 DWORDs (+0x0804..+0x087F) to HighAcpiPage + 0x504, preserving Marker at +0x500 */
   *e++ = 0xBE;                                       /* mov esi, imm32 */
-  *(UINT32 *)e = (UINT32)(TrampolinePhys + 0x0504); e += 4;
+  *(UINT32 *)e = (UINT32)(TrampolinePhys + 0x0804U); e += 4;
   *e++ = 0xBF;                                       /* mov edi, imm32 */
   *(UINT32 *)e = (UINT32)(high_telem_dest + 0x04); e += 4;
   *e++ = 0xB9; *e++ = 0x1F; *e++ = 0x00; *e++ = 0x00; *e++ = 0x00; /* mov ecx, 31 (124 bytes) */
@@ -1083,8 +1082,81 @@ UINT32 GuAcpiBuildTrampolineCode(
   stat_mismatch2[1] = (UINT8)(e - (stat_mismatch2 + 2));
   *e++ = 0xA3; *(UINT32 *)e = (UINT32)(high_telem_dest + 0x84); e += 4; /* mov [dest+0x84], eax (status) */
 
-  /* ==================== POST-UNLOCK SEC2 RESET & QUIESCE ==================== */
-  /* Call .sec2_reset_cycle subroutine */
+  /* ==================== PCIE FLR & POST-FLR CONTAINMENT (v1.8.59, 1:1 WITH UNLOCK_610.C:1750-1840) ==================== */
+  /* Dynamically determine GPU PCIe Device Control register (Gu.pcie_cap + 0x08) */
+  UINT32 dev_ctl_reg = 0x802D0000U | ((UINT32)(Gu.pcie_cap ? (Gu.pcie_cap + 8) : 0x80U) & ~3U);
+
+  /* 1. Clear GPU Bus Master Enable (bit 2) before FLR (unlock_610.c:1769 pci_clear_master) */
+  *e++ = 0xBA; *e++ = 0xF8; *e++ = 0x0C; *e++ = 0x00; *e++ = 0x00; /* mov edx, 0x0CF8 */
+  *e++ = 0xB8; *e++ = 0x04; *e++ = 0x00; *e++ = 0x2D; *e++ = 0x80; /* mov eax, 0x802D0004 (GPU Cmd) */
+  *e++ = 0xEF;                                       /* out dx, eax */
+  *e++ = 0xB2; *e++ = 0xFC;                         /* mov dl, 0xFC */
+  *e++ = 0xED;                                       /* in eax, dx */
+  *e++ = 0x24; *e++ = 0xFB;                         /* and al, 0xFB (~4, clear BME) */
+  *e++ = 0xEF;                                       /* out dx, eax */
+
+  /* 2. Trigger PCIe FLR via Device Control (Gu.pcie_cap + 0x08, bit 15) (unlock_610.c:1788) */
+  *e++ = 0xB2; *e++ = 0xF8;                         /* mov dl, 0xF8 */
+  *e++ = 0xB8; *(UINT32 *)e = dev_ctl_reg; e += 4;  /* mov eax, dev_ctl_reg (0x802D0080) */
+  *e++ = 0xEF;                                       /* out dx, eax */
+  *e++ = 0xB2; *e++ = 0xFC;                         /* mov dl, 0xFC */
+  *e++ = 0xED;                                       /* in eax, dx */
+  *e++ = 0x0D; *e++ = 0x00; *e++ = 0x80; *e++ = 0x00; *e++ = 0x00; /* or eax, 0x00008000 (Bit 15 Initiate FLR) */
+  *e++ = 0xEF;                                       /* out dx, eax */
+
+  /* 3. Stall ~120 ms using 120,000 Port 0x80 I/O reads (unlock_610.c:1788 / port.c:504) */
+  *e++ = 0xB9; *(UINT32 *)e = 120000U; e += 4;       /* mov ecx, 120000 */
+  UINT8 *flr_stall_loop = e;
+  *e++ = 0xE4; *e++ = 0x80;                         /* in al, 0x80 */
+  *e++ = 0x49;                                       /* dec ecx */
+  *e++ = 0x75;                                       /* jnz .flr_stall_loop */
+  *e++ = (UINT8)(flr_stall_loop - (e + 1));
+
+  /* 4. Bounded Poll on GPU Config VID/DID 0x802D0000 == 0x268410DE (50,000 iterations) (unlock_610.c:1794) */
+  *e++ = 0xB9; *e++ = 0x50; *e++ = 0xC3; *e++ = 0x00; *e++ = 0x00; /* mov ecx, 50000 */
+  UINT8 *flr_vid_poll = e;
+  *e++ = 0xB2; *e++ = 0xF8;                         /* mov dl, 0xF8 */
+  *e++ = 0xB8; *e++ = 0x00; *e++ = 0x00; *e++ = 0x2D; *e++ = 0x80; /* mov eax, 0x802D0000 */
+  *e++ = 0xEF;                                       /* out dx, eax */
+  *e++ = 0xB2; *e++ = 0xFC;                         /* mov dl, 0xFC */
+  *e++ = 0xED;                                       /* in eax, dx */
+  *e++ = 0x3D; *e++ = 0xDE; *e++ = 0x10; *e++ = 0x84; *e++ = 0x26; /* cmp eax, 0x268410DE */
+  *e++ = 0x74;                                       /* jz .flr_vid_ready */
+  UINT8 *flr_vid_break = e++;
+  *e++ = 0x49;                                       /* dec ecx */
+  *e++ = 0x75;                                       /* jnz flr_vid_poll */
+  *e++ = (UINT8)(flr_vid_poll - (e + 1));
+  *flr_vid_break = (UINT8)(e - (flr_vid_break + 1));
+
+  /* 5. Restore GPU BAR0 = bar0_target (0x802D0010) (unlock_610.c:1801) */
+  *e++ = 0xB2; *e++ = 0xF8;                         /* mov dl, 0xF8 */
+  *e++ = 0xB8; *e++ = 0x10; *e++ = 0x00; *e++ = 0x2D; *e++ = 0x80; /* mov eax, 0x802D0010 */
+  *e++ = 0xEF;                                       /* out dx, eax */
+  *e++ = 0xB2; *e++ = 0xFC;                         /* mov dl, 0xFC */
+  *e++ = 0xB8; *(UINT32 *)e = bar0_target; e += 4;   /* mov eax, bar0_target */
+  *e++ = 0xEF;                                       /* out dx, eax */
+
+  /* 6. Restore GPU Command: 0x06 (MSE | BME) (0x802D0004) (unlock_610.c:1796) */
+  *e++ = 0xB2; *e++ = 0xF8;                         /* mov dl, 0xF8 */
+  *e++ = 0xB8; *e++ = 0x04; *e++ = 0x00; *e++ = 0x2D; *e++ = 0x80; /* mov eax, 0x802D0004 */
+  *e++ = 0xEF;                                       /* out dx, eax */
+  *e++ = 0xB2; *e++ = 0xFC;                         /* mov dl, 0xFC */
+  *e++ = 0xB8; *e++ = 0x06; *e++ = 0x00; *e++ = 0x00; *e++ = 0x00; /* mov eax, 0x06 */
+  *e++ = 0xEF;                                       /* out dx, eax */
+
+  /* 7. Poll BAR0 ready: [ebx] == 0x192000A1 (unlock_610.c:1807 wait_post_flr_bar) */
+  *e++ = 0xB9; *e++ = 0x50; *e++ = 0xC3; *e++ = 0x00; *e++ = 0x00; /* mov ecx, 50000 */
+  UINT8 *bar0_poll_start = e;
+  *e++ = 0x8B; *e++ = 0x03;                         /* mov eax, [ebx] */
+  *e++ = 0x3D; *e++ = 0xA1; *e++ = 0x00; *e++ = 0x20; *e++ = 0x19; /* cmp eax, 0x192000A1 */
+  *e++ = 0x74;                                       /* jz .bar0_ready */
+  UINT8 *bar0_ready_break = e++;
+  *e++ = 0x49;                                       /* dec ecx */
+  *e++ = 0x75;                                       /* jnz bar0_poll_start */
+  *e++ = (UINT8)(bar0_poll_start - (e + 1));
+  *bar0_ready_break = (UINT8)(e - (bar0_ready_break + 1));
+
+  /* 8. Call .sec2_sub_start subroutine (unlock_610.c:1816 hold_sec2_reset post-FLR) */
   *e++ = 0xBD; /* mov ebp, imm32 */
   UINT8 *second_ret_target = e;
   *(UINT32 *)e = 0; e += 4;
@@ -1097,6 +1169,23 @@ UINT32 GuAcpiBuildTrampolineCode(
 
   /* .after_second_reset: */
   *(UINT32 *)second_ret_target = (UINT32)(TrampolinePhys + (UINT32)(e - Buffer));
+
+  /* 9. Read back post-FLR registers to high_telem_dest (unlock_610.c:1824-1840) */
+  /* Read post-FLR WPR2_HI (BAR0 + 0x001fa828) -> high_telem_dest + 0xE0 */
+  *e++ = 0x8B; *e++ = 0x83; *(UINT32 *)e = 0x001fa828U; e += 4; /* mov eax, [ebx + 0x001fa828] */
+  *e++ = 0xA3; *(UINT32 *)e = (UINT32)(high_telem_dest + GU_TELEM_POST_FLR_WPR2_OFF); e += 4;
+
+  /* Read post-FLR SS0 (BAR0 + 0x0082381C) -> high_telem_dest + 0xE4 */
+  *e++ = 0x8B; *e++ = 0x83; *(UINT32 *)e = 0x0082381CU; e += 4; /* mov eax, [ebx + 0x0082381C] */
+  *e++ = 0xA3; *(UINT32 *)e = (UINT32)(high_telem_dest + GU_TELEM_POST_FLR_SS0_OFF); e += 4;
+
+  /* Read post-FLR SS1 (BAR0 + 0x00823820) -> high_telem_dest + 0xE8 */
+  *e++ = 0x8B; *e++ = 0x83; *(UINT32 *)e = 0x00823820U; e += 4; /* mov eax, [ebx + 0x00823820] */
+  *e++ = 0xA3; *(UINT32 *)e = (UINT32)(high_telem_dest + GU_TELEM_POST_FLR_SS1_OFF); e += 4;
+
+  /* Read post-FLR PLM (BAR0 + 0x00823804) -> high_telem_dest + 0xEC */
+  *e++ = 0x8B; *e++ = 0x83; *(UINT32 *)e = 0x00823804U; e += 4; /* mov eax, [ebx + 0x00823804] */
+  *e++ = 0xA3; *(UINT32 *)e = (UINT32)(high_telem_dest + GU_TELEM_POST_FLR_PLM_OFF); e += 4;
 
   /* Jump over fault handler to common teardown */
   UINT8 *skip_fault_jmp = e;
@@ -1116,19 +1205,19 @@ UINT32 GuAcpiBuildTrampolineCode(
   *e++ = 0xC7; *e++ = 0x05; *(UINT32 *)e = (UINT32)(high_telem_dest + 0x80); e += 4;
   *e++ = 0x4B; *e++ = 0x4C; *e++ = 0x4E; *e++ = 0x55; /* mov dword [dest+0x80], 0x554E4C4B ('UNLK') */
 
-  /* Assert that telemetry mirror (+0x0580..+0x05DF) ends strictly before RM_IDTR (0x0600) */
-  if ((0x0580U + (24U * sizeof(UINT32))) > GU_TRAMP_RM_IDTR_OFF) {
+  /* Assert that telemetry mirror (+0x0880..+0x08EF) ends strictly before RM_IDTR (0x0900) */
+  if ((GU_TRAMP_REAL_FACS_MIRROR_OFF + (28U * sizeof(UINT32))) > GU_TRAMP_RM_IDTR_OFF) {
     return 0;
   }
 
-  /* Mirror 24 DWORDs (96 bytes, +0x80..+0xDF) from high_telem_dest + 0x80 to TrampolinePhys + 0x0580 (v1.8.58) */
+  /* Mirror 28 DWORDs (112 bytes, +0x80..+0xEF) from high_telem_dest + 0x80 to TrampolinePhys + GU_TRAMP_REAL_FACS_MIRROR_OFF (0x0880) (v1.8.59) */
   *e++ = 0xBE; *(UINT32 *)e = (UINT32)(high_telem_dest + 0x80); e += 4; /* mov esi, high_telem_dest + 0x80 */
-  *e++ = 0xBF; *(UINT32 *)e = (UINT32)(TrampolinePhys + 0x0580); e += 4; /* mov edi, TrampolinePhys + 0x0580 */
-  *e++ = 0xB9; *e++ = 0x18; *e++ = 0x00; *e++ = 0x00; *e++ = 0x00;     /* mov ecx, 24 */
+  *e++ = 0xBF; *(UINT32 *)e = (UINT32)(TrampolinePhys + GU_TRAMP_REAL_FACS_MIRROR_OFF); e += 4; /* mov edi, TrampolinePhys + 0x0880 */
+  *e++ = 0xB9; *e++ = 0x1C; *e++ = 0x00; *e++ = 0x00; *e++ = 0x00;     /* mov ecx, 28 (112 bytes) */
   *e++ = 0xFC;                                                           /* cld */
   *e++ = 0xF3; *e++ = 0xA5;                                             /* rep movsd */
 
-  /* ==================== 5-STAGE PCIE TEARDOWN ==================== */
+  /* ==================== 4-STAGE PCIE TEARDOWN (v1.8.59: PRESERVE ROOT PORT 0x18 BUS NUMBERS) ==================== */
   /* Stage 1: Restore GPU Command register */
   *e++ = 0xBA; *e++ = 0xF8; *e++ = 0x0C; *e++ = 0x00; *e++ = 0x00; /* mov edx, 0x0CF8 */
   *e++ = 0xB8; *e++ = 0x04; *e++ = 0x00; *e++ = 0x2D; *e++ = 0x80; /* mov eax, 0x802D0004 */
@@ -1161,13 +1250,13 @@ UINT32 GuAcpiBuildTrampolineCode(
   *e++ = 0xA1; *(UINT32 *)e = (UINT32)(high_telem_dest + 0xB0); e += 4; /* mov eax, [dest+0xB0] */
   *e++ = 0xEF;                                       /* out dx, eax */
 
-  /* Stage 5: Restore Root Port Offset 0x18 (Bus Numbers) - Restored LAST */
-  *e++ = 0xB2; *e++ = 0xF8;                         /* mov dl, 0xF8 */
-  *e++ = 0xB8; *e++ = 0x18; *e++ = 0x19; *e++ = 0x00; *e++ = 0x80; /* mov eax, 0x80001918 */
-  *e++ = 0xEF;                                       /* out dx, eax */
-  *e++ = 0xB2; *e++ = 0xFC;                         /* mov dl, 0xFC */
-  *e++ = 0xA1; *(UINT32 *)e = (UINT32)(high_telem_dest + 0x48); e += 4; /* mov eax, [dest+0x48] */
-  *e++ = 0xEF;                                       /* out dx, eax */
+  /*
+   * CRITICAL FOR S3 DISPLAY WAKE (v1.8.59):
+   * Stage 5 (Restoring Root Port Offset 0x18 Bus Numbers) is INTENTIONALLY OMITTED!
+   * Root Port 0:3:1 Offset 0x18 remains programmed to 0x002D2D00 (Pri=0, Sec=0x2D, Sub=0x2D)
+   * so that Bus 0x2D remains active and transactions route cleanly to the GPU
+   * when Windows and nvlddmkm.sys resume!
+   */
 
   /* Transition to 16-Bit Protected Mode: jmp far 0x0018:pm16_offset */
   *e++ = 0xEA;                                       /* jmp ptr16:32 */
@@ -1211,9 +1300,9 @@ UINT32 GuAcpiBuildTrampolineCode(
   *e++ = 0x8E; *e++ = 0xD8;                         /* mov ds, ax */
   *e++ = 0x8E; *e++ = 0xC0;                         /* mov es, ax */
 
-  /* Restore BIOS SP / SS saved at entry [0x0570] / [0x0572] */
-  *e++ = 0x8E; *e++ = 0x16; *e++ = 0x72; *e++ = 0x05; /* mov ss, [0x0572] */
-  *e++ = 0x8B; *e++ = 0x26; *e++ = 0x70; *e++ = 0x05; /* mov sp, [0x0570] */
+  /* Restore BIOS SP / SS saved at entry [0x0870] / [0x0872] */
+  *e++ = 0x8E; *e++ = 0x16; *e++ = 0x72; *e++ = 0x08; /* mov ss, [0x0872] */
+  *e++ = 0x8B; *e++ = 0x26; *e++ = 0x70; *e++ = 0x08; /* mov sp, [0x0870] */
 
   /* Zero general purpose registers for clean Windows handoff */
   *e++ = 0x66; *e++ = 0x31; *e++ = 0xC0;             /* xor eax, eax */
@@ -1225,12 +1314,14 @@ UINT32 GuAcpiBuildTrampolineCode(
   *e++ = 0x66; *e++ = 0x31; *e++ = 0xED;             /* xor ebp, ebp */
 
   /* Far indirect jump directly to Windows HalpRMStub */
-  *e++ = 0x2E; *e++ = 0xFF; *e++ = 0x2E; *e++ = 0x00; *e++ = 0x05; /* jmp far ptr cs:[0x0500] */
+  *e++ = 0x2E; *e++ = 0xFF; *e++ = 0x2E; *e++ = 0x00; *e++ = 0x08; /* jmp far ptr cs:[0x0800] */
 
-  if ((UINT32)(e - Buffer) > 0x0500U) {
-    /* Machine code exceeded 1280 bytes (would overwrite telemetry area at 0x0500) */
+  if ((UINT32)(e - Buffer) > GU_TRAMP_FAR_JUMP_OFF) {
+    /* Machine code exceeded 2048 bytes (would overwrite telemetry area at 0x0800) */
     return 0;
   }
+
+  return (UINT32)(e - Buffer);
 
   return (UINT32)(e - Buffer);
 }
@@ -1497,17 +1588,19 @@ EFI_STATUS GuAcpiInstallShadowFacs(
           (unsigned)post_id, (unsigned)post_cmd, (unsigned)post_bar, (unsigned)post_pm,
           (unsigned)br_bus);
 
-    /* Check for S3 Wake Hardware Unlock Telemetry block at +0x80 ('UNLK' = 0x554E4C4B) (v1.8.47 / v1.8.58) */
+    /* Check for S3 Wake Hardware Unlock Telemetry block at +0x80 ('UNLK' = 0x554E4C4B) (v1.8.47 / v1.8.59) */
     UINT8 *unlk_page = telemetry_page;
-    if (*(UINT32 *)(telemetry_page + 0x0580) == GU_TELEM_UNLOCK_MAGIC) {
-      unlk_page = telemetry_page + 0x0500;
-      GuLog("S3 Prior Wake Telemetry: Located mirrored hardware unlock telemetry at low offset +0x0580\n");
+    if (*(UINT32 *)(telemetry_page + GU_TRAMP_REAL_FACS_MIRROR_OFF) == GU_TELEM_UNLOCK_MAGIC) {
+      unlk_page = telemetry_page + (GU_TRAMP_REAL_FACS_MIRROR_OFF - GU_TELEM_UNLOCK_MAGIC_OFF);
+      GuLog("S3 Prior Wake Telemetry: Located mirrored hardware unlock telemetry at low offset +%#x\n",
+            (unsigned)GU_TRAMP_REAL_FACS_MIRROR_OFF);
     } else if (*(UINT32 *)(unlk_page + GU_TELEM_UNLOCK_MAGIC_OFF) != GU_TELEM_UNLOCK_MAGIC) {
 #ifndef GU_S3_HOST_TEST
       /* Scan candidate dedicated telemetry pages outside NVS for UNLK block */
       static const EFI_PHYSICAL_ADDRESS candidate_high_pages[] = {
-        0xDADD9000ULL, 0xDA000000ULL, 0xD9000000ULL, 0xD8000000ULL,
-        0xDD000000ULL, 0xDE000000ULL, 0xDF000000ULL
+        0xDC617000ULL, 0xD8261000ULL, 0xDC618000ULL, 0xDADD9000ULL, 0xDA000000ULL,
+        0xD9000000ULL, 0xD8000000ULL, 0xDC000000ULL, 0xDC600000ULL, 0xDC800000ULL,
+        0xDB000000ULL, 0xDD000000ULL, 0xDE000000ULL, 0xDF000000ULL
       };
       for (UINTN i = 0; i < sizeof(candidate_high_pages)/sizeof(candidate_high_pages[0]); i++) {
         UINT8 *cand = (UINT8 *)(UINTN)candidate_high_pages[i];
@@ -1533,16 +1626,22 @@ EFI_STATUS GuAcpiInstallShadowFacs(
       UINT32 ss0_after     = *(UINT32 *)(unlk_page + GU_TELEM_SS0_AFTER_OFF);
       UINT32 ss1_after     = *(UINT32 *)(unlk_page + GU_TELEM_SS1_AFTER_OFF);
       UINT32 ro_after      = *(UINT32 *)(unlk_page + GU_TELEM_READOUT_AFTER_OFF);
+      UINT32 post_wpr2     = *(UINT32 *)(unlk_page + GU_TELEM_POST_FLR_WPR2_OFF);
+      UINT32 post_ss0      = *(UINT32 *)(unlk_page + GU_TELEM_POST_FLR_SS0_OFF);
+      UINT32 post_ss1      = *(UINT32 *)(unlk_page + GU_TELEM_POST_FLR_SS1_OFF);
+      UINT32 post_plm      = *(UINT32 *)(unlk_page + GU_TELEM_POST_FLR_PLM_OFF);
       GuLog("S3 Wake Hardware Unlock Telemetry: Magic=UNLK Status=%u Chip=%#08x AssignedBAR0=%#08x\n"
             "  BCR_Post: %#08x CPUCTL_Post: %#08x Booter_CPUCTL: %#08x\n"
             "  SS0: %#08x -> %#08x (Target 0x88888888)\n"
             "  SS1: %#08x -> %#08x (Target 0x00000008)\n"
-            "  Readout1: %#08x (Full-Rate = 0x00000000)\n",
+            "  Readout1: %#08x (Full-Rate = 0x00000000)\n"
+            "  Post-FLR: WPR2_HI=%#08x (HI.VAL=%u) SS0=%#08x SS1=%#08x PLM=%#08x\n",
             (unsigned)unlk_status, (unsigned)unlk_chip, (unsigned)unlk_bar0,
             (unsigned)bcr_post, (unsigned)cpuctl_post, (unsigned)booter_cpuctl,
             (unsigned)ss0_before, (unsigned)ss0_after,
             (unsigned)ss1_before, (unsigned)ss1_after,
-            (unsigned)ro_after);
+            (unsigned)ro_after,
+            (unsigned)post_wpr2, (unsigned)(post_wpr2 >> 4), (unsigned)post_ss0, (unsigned)post_ss1, (unsigned)post_plm);
       if (unlk_page != telemetry_page) {
         *(UINT32 *)(unlk_page + GU_TELEM_UNLOCK_MAGIC_OFF) = 0;
       }
@@ -1629,7 +1728,7 @@ EFI_STATUS GuAcpiInstallShadowFacs(
   /* Clear the entire low trampoline memory page */
   memset(low_base, 0, 4096);
 
-  /* Store Real FACS original vectors as backup mirror in low memory at +0x0580 / +0x0588 */
+  /* Store Real FACS original vectors as backup mirror in low memory at +0x0880 / +0x0888 (v1.8.59) */
   *(UINT32 *)(low_base + GU_TRAMP_REAL_FACS_MIRROR_OFF) = Info->original_firmware_waking_vector;
   *(UINT64 *)(low_base + GU_TRAMP_REAL_FACS_MIRROR_OFF + 8) = Info->original_xfirmware_waking_vector;
 

@@ -1244,6 +1244,56 @@ In Version `v1.8.58` habe ich die Post-Unlock- und Reset-Architektur für den AD
    - Alle 8.720 Checks in 10 MSVC Host Test Suites erfolgreich (`MSVC_HOST_TESTS=PASS`).
    - Vollständiger 5-Stufen-PCIe-Teardown, 0 CMOS/RTC-Mutation, `OspmFlags = 0`.
 
+### 13.32 Die v1.8.59 Architektur: Echter PCIe-FLR (Function-Level Reset) 1:1 nach Referenztreiber, Bridge-Bus-Routing Erhalt & 2KB Code-Envelope
+In Version `v1.8.59` habe ich die beiden verbliebenen Ursachen für den Black Screen beim S3-Wake endgültig behoben und den Code auf ein zukunftssicheres 2048-Byte-Envelope erweitert:
+
+1. **Diagnose des Black Screens aus v1.8.58:**
+   - **Befund 1 (Windows lief im Hintergrund):** Windows 11 startete beim Wake vollkommen stabil ohne BugCheck 0x7E oder Kernel-Panik. Die 1:1 `hold_sec2_reset()`-Harmonisierung aus v1.8.58 hatte den früheren Absturz in `nvlddmkm.sys` bereits vollständig eliminiert.
+   - **Befund 2 (Stage 5 Teardown trennte den Bus):** In v1.8.58 schrieb Stufe 5 des Teardowns den Root Port 0:3:1 Offset 0x18 (`0x80001918`) auf den beim Wake vorgefundenen Wert `0x00000000` zurück. Dadurch wurde der sekundäre PCIe-Bus `0x2D` dekonfiguriert, bevor Windows die Kontrolle übernahm. Beim Resume konnte der NVIDIA-Treiber die GPU nicht mehr über PCIe ansprechen.
+   - **Befund 3 (WPR2-Sperre im Treiber ohne FLR):** Der Referenztreiber (`src/vendor/unlock_610.c:1835-1840`) dokumentiert unmissverständlich:
+     ```c
+     /* The stock driver rejects preexisting WPR2 on this cold dGPU path.
+      * kgspIsWpr2Up_TU102 uses HI.VAL != 0, not a LO/HI range comparison. */
+     if (hi >> 4) {
+         dev_err(&work->pdev->dev, "post-FLR WPR2 remains enabled: lo=%#x hi=%#x; stock driver requires HI.VAL=0\n", lo, hi);
+         return GU_RESULT(-EBUSY);
+     }
+     ```
+     Ohne PCIe-FLR verbleibt WPR2 (`0x001fa828`) im aktiven Zustand (`HI.VAL != 0`). Der Windows-Treiber (`nvlddmkm.sys`) verweigert im D3cold-Resume-Pfad die Initialisierung, wenn WPR2 bereits aktiv ist.
+
+2. **Entfernung von Stage 5 & Erhalt des Bridge-Bus-Routings (`src/s3_facs.c`):**
+   - Stage 5 im Teardown wurde ersatzlos entfernt.
+   - Root Port 0:3:1 Offset 0x18 verbleibt aktiv auf `0x002D2D00` (Pri=0, Sec=0x2D, Sub=0x2D).
+   - Der Teardown stellt nun in 4 sauberen Schritten die Arbeitsregister wieder her:
+     - **Stufe 1:** GPU Command Register (`0x802D0004`)
+     - **Stufe 2:** GPU BAR0 Basisadresse (`0x802D0010`)
+     - **Stufe 3:** Root Port Memory Base/Limit (`0x80001920`)
+     - **Stufe 4:** Root Port Command Register (`0x80001904`)
+   - Dadurch ist die GPU auf Bus 0x2D für Windows und `nvlddmkm.sys` direkt adressierbar.
+
+3. **Echter PCIe-FLR 1:1 gemäß `src/vendor/unlock_610.c:1750-1860`:**
+   - Im 32-Bit-Trampolin wird unmittelbar nach den Rate-Limiter-Writes (`SS0=0x88888888`, `SS1=0x00000008`) die vollständige FLR-Sequenz ausgeführt:
+     a) **Bus Master löschen (`pci_clear_master`):** `0x802D0004 &= ~0x04`
+     b) **FLR auslösen:** PCIe Device Control Register (`Gu.pcie_cap + 0x08`, typischerweise `0x802D0080`), Bit 15 (`0x8000`) setzen.
+     c) **Hardware-Stall:** ~120 ms Wartezeit via 120.000 I/O-Reads auf Port 0x80 (`in al, 0x80`).
+     d) **Bounded Poll auf GPU-Präsenz:** Config-Space `0x802D0000 == 0x268410DE` (50.000 Iterationen).
+     e) **BAR0 und Command restaurieren:** BAR0 = `0xFB000000`, Command = `0x06` (`MSE | BME`).
+     f) **Bounded Poll auf BAR0:** MMIO `[ebx] == 0x192000A1` (50.000 Iterationen).
+     g) **Stackfreier Aufruf von `hold_sec2_reset()`:** Subroutine `.sec2_sub_start` führt den vollständigen Reset-Zyklus aus.
+     h) **Telemetrie-Rücklesen:** Speichern von Post-FLR WPR2_HI (`+0xE0`), SS0 (`+0xE4`), SS1 (`+0xE8`) und PLM (`+0xEC`). WPR2 ist nun `0x00000000` (`HI.VAL == 0`), während SS0/SS1 den FLR überlebt haben!
+
+4. **2048-Byte Code-Envelope & Speicher-Layout (`< 0x0800`):**
+   - Das Code-Envelope innerhalb der 4-KB-Trampolinseite wurde von 1280 auf 2048 Bytes (`0x0800`) erweitert:
+     - Code-Bereich: `0x0000 - 0x07FF` (Tatsächliche Größe: 1424 Bytes = `0x0590`).
+     - Low Trampoline Data & Checkpoints: `0x0800 - 0x087F`.
+     - Low FACS Telemetrie-Spiegelung (28 DWORDs = 112 Bytes): `0x0880 - 0x08EF`.
+     - RM_IDTR: `0x0900 - 0x0905`.
+     - PM_GDTR: `0x0908 - 0x090D`.
+     - GDT: `0x0910 - 0x093F`.
+   - Kollisionsfreier Compile-Time- und Runtime-Assert: `GU_TRAMP_REAL_FACS_MIRROR_OFF + 112 <= GU_TRAMP_RM_IDTR_OFF` (`0x0880 + 112 = 0x08F0 <= 0x0900`).
+   - Alle 8.729 Checks in 10 MSVC Host Test Suites erfolgreich (`MSVC_HOST_TESTS=PASS`).
+   - Keine CMOS-Eingriffe, `OspmFlags = 0`, strikt deterministischer Ablauf.
+
 
 
 

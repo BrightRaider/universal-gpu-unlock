@@ -25,32 +25,32 @@
 #define GU_TRAMP_EXIT_STATUS      0xAA02U
 #define GU_TRAMP_FAULT_STATUS     0xDEADU
 
-/* Telemetry and Table Offsets within Low Trampoline Memory (<1MB) (v1.8.47: 0x0500..0x058F) */
-#define GU_TRAMP_FAR_JUMP_OFF          0x0500U
-#define GU_TRAMP_RESTORED_COUNT_OFF    0x0500U
-#define GU_TRAMP_S3_SAVE_COUNT_OFF     0x0502U
-#define GU_TRAMP_RESTORED_RSDP_OFF     0x0504U
-#define GU_TRAMP_EBS_CALL_COUNT_OFF    0x0508U
-#define GU_TRAMP_EBS_SUCCESS_COUNT_OFF 0x050AU
-#define GU_TRAMP_EBS_LAST_STATUS_OFF   0x050CU
-#define GU_TRAMP_ENTRY_STATUS_OFF      0x0510U
-#define GU_TRAMP_EXIT_STATUS_OFF       0x0512U
-#define GU_TRAMP_CAPTURED_VEC_OFF      0x0514U
-#define GU_TRAMP_TARGET_PTR_OFF        0x0518U
-#define GU_TRAMP_MAGIC_OFF             0x051CU
-#define GU_TRAMP_PCI_PROBE_ADDRS_OFF   0x0520U
-#define GU_TRAMP_PCI_PROBE_RAW_OFF     0x0540U
-#define GU_TRAMP_PCI_PROBE_POST_OFF    0x0560U
-#define GU_TRAMP_BIOS_SP_OFF           0x0570U
-#define GU_TRAMP_BIOS_SS_OFF           0x0572U
-#define GU_TRAMP_REAL_FACS_MIRROR_OFF  0x0580U
+/* Telemetry and Table Offsets within Low Trampoline Memory (<1MB) (v1.8.59: 0x0800..0x08FF) */
+#define GU_TRAMP_FAR_JUMP_OFF          0x0800U
+#define GU_TRAMP_RESTORED_COUNT_OFF    0x0800U
+#define GU_TRAMP_S3_SAVE_COUNT_OFF     0x0802U
+#define GU_TRAMP_RESTORED_RSDP_OFF     0x0804U
+#define GU_TRAMP_EBS_CALL_COUNT_OFF    0x0808U
+#define GU_TRAMP_EBS_SUCCESS_COUNT_OFF 0x080AU
+#define GU_TRAMP_EBS_LAST_STATUS_OFF   0x080CU
+#define GU_TRAMP_ENTRY_STATUS_OFF      0x0810U
+#define GU_TRAMP_EXIT_STATUS_OFF       0x0812U
+#define GU_TRAMP_CAPTURED_VEC_OFF      0x0814U
+#define GU_TRAMP_TARGET_PTR_OFF        0x0818U
+#define GU_TRAMP_MAGIC_OFF             0x081CU
+#define GU_TRAMP_PCI_PROBE_ADDRS_OFF   0x0820U
+#define GU_TRAMP_PCI_PROBE_RAW_OFF     0x0840U
+#define GU_TRAMP_PCI_PROBE_POST_OFF    0x0860U
+#define GU_TRAMP_BIOS_SP_OFF           0x0870U
+#define GU_TRAMP_BIOS_SS_OFF           0x0872U
+#define GU_TRAMP_REAL_FACS_MIRROR_OFF  0x0880U
 
-/* GDT & IDTR Offsets within Low Trampoline Memory (<1MB) (v1.8.53: 0x0600..0x063F) */
-#define GU_TRAMP_RM_IDTR_OFF           0x0600U
-#define GU_TRAMP_PM_GDTR_OFF           0x0608U
-#define GU_TRAMP_GDT_BASE_OFF          0x0610U
+/* GDT & IDTR Offsets within Low Trampoline Memory (<1MB) (v1.8.59: 0x0900..0x093F) */
+#define GU_TRAMP_RM_IDTR_OFF           0x0900U
+#define GU_TRAMP_PM_GDTR_OFF           0x0908U
+#define GU_TRAMP_GDT_BASE_OFF          0x0910U
 
-/* S3 Wake Hardware Unlock Telemetry Offsets within Non-NVS Telemetry Page (v1.8.47) */
+/* S3 Wake Hardware Unlock Telemetry Offsets within Non-NVS Telemetry Page (v1.8.47 / v1.8.59) */
 #define GU_TELEM_UNLOCK_MAGIC          0x554E4C4BU /* "UNLK" */
 #define GU_TELEM_UNLOCK_MAGIC_OFF      0x0080U /* "UNLK" (0x554E4C4B) */
 #define GU_TELEM_UNLOCK_STATUS_OFF     0x0084U /* 1=OK, 2=Mismatch, 3=Fault */
@@ -76,6 +76,10 @@
 #define GU_TELEM_FALCON2_BCR_POST_OFF  0x00D4U /* FALCON2_BCR after switch out of Boot-ROM (BAR0 + 0x00841668) (v1.8.52) */
 #define GU_TELEM_BOOTER_CPUCTL_POST_OFF 0x00D8U /* SEC2_CPUCTL after booter execution (BAR0 + 0x00840100) (v1.8.53) */
 #define GU_TELEM_BOOTER_MARKER_POST_OFF 0x00DCU /* Mailbox 0 / Marker after booter execution (BAR0 + 0x00840040) (v1.8.54) */
+#define GU_TELEM_POST_FLR_WPR2_OFF     0x00E0U /* Post-FLR WPR2_HI (BAR0 + 0x001fa828) (v1.8.59) */
+#define GU_TELEM_POST_FLR_SS0_OFF      0x00E4U /* Post-FLR SS0 (BAR0 + 0x0082381C) (v1.8.59) */
+#define GU_TELEM_POST_FLR_SS1_OFF      0x00E8U /* Post-FLR SS1 (BAR0 + 0x00823820) (v1.8.59) */
+#define GU_TELEM_POST_FLR_PLM_OFF      0x00ECU /* Post-FLR PLM (BAR0 + 0x00823804) (v1.8.59) */
 
 /* Dedicated High (>1MB, <4GB) ACPI NVS Page Offsets for Shadow Tables */
 #define GU_HIGH_SHADOW_RSDP_OFF        0x0000U

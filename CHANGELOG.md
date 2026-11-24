@@ -6,6 +6,36 @@ For packaged binaries and downloads, visit [GitHub Releases](https://github.com/
 
 ---
 
+## [v1.8.59] - 2026-11-24
+### Added & Fixed
+- **Echter PCIe-FLR (Function-Level Reset) 1:1 nach `src/vendor/unlock_610.c:1750-1860`, Erhalt des Bridge-Bus-Routings & 2KB Code-Envelope (addresses #19):**
+  - **Diagnose des Black Screens aus v1.8.58:**
+    - Windows 11 lief im Hintergrund voll funktionsfähig hoch (kein BugCheck 0x7E mehr!).
+    - Der Black Screen hatte zwei konkrete Hardware-Ursachen:
+      1. In v1.8.58 schrieb Stage 5 des Teardowns den Root Port 0:3:1 Offset 0x18 (`0x80001918`) auf den Wake-Wert `0x00000000` zurück, wodurch der sekundäre PCIe-Bus `0x2D` für Windows und `nvlddmkm.sys` unzugänglich wurde.
+      2. Nach dem Rate-Limiter-Unlock blieb die WPR2-Region im GPU-Speichercontroller aktiv (`HI.VAL != 0`). Der NVIDIA-Treiber verweigert beim S3-Resume auf dem Desktop-Pfad die Initialisierung, wenn WPR2 bereits aktiv ist (`kgspIsWpr2Up_TU102` prüft `HI.VAL != 0`).
+  - **Entfernung von Stage 5 & Erhalt des Bridge-Bus-Routings (`src/s3_facs.c`):**
+    - Stage 5 im Teardown wurde vollständig entfernt. Root Port 0:3:1 Offset 0x18 verbleibt aktiv auf `0x002D2D00` (Pri=0, Sec=0x2D, Sub=0x2D), sodass Bus 0x2D für Windows und den Treiber nahtlos erreichbar bleibt.
+    - Der Teardown ist wieder ein sauberer 4-Stufen-Teardown (GPU Cmd, GPU BAR0, RP MemBase/Limit, RP Cmd).
+  - **Echter PCIe-FLR (Function-Level Reset) 1:1 gemäß `unlock_610.c:1750-1860`:**
+    - BME auf der GPU löschen (`pci_clear_master`, `0x802D0004 &= ~4`).
+    - FLR via DevCtl (Bit 15 von `Gu.pcie_cap + 0x08`, `0x802D0080 |= 0x8000`) auslösen.
+    - Echter ~120 ms PCIe-Stall via 120.000 Port-0x80-Reads (`in al, 0x80`).
+    - Bounded Poll auf Config-Space VID/DID (`0x802D0000 == 0x268410DE`).
+    - BAR0 (`0xFB000000`) und Command (`0x06`) nach dem FLR restaurieren.
+    - Bounded Poll auf BAR0-Bereitschaft (`[ebx] == 0x192000A1`).
+    - Stackfreier Aufruf von `hold_sec2_reset()` (`.sec2_sub_start`) nach dem FLR (wie in `unlock_610.c:1816` gefordert).
+    - Telemetrie-Rücklesen von Post-FLR-Werten: WPR2_HI (`0x001fa828` an `+0xE0`), SS0 (`0x0082381C` an `+0xE4`), SS1 (`0x00823820` an `+0xE8`) und PLM (`0x00823804` an `+0xEC`). WPR2_HI ist nun `0x00000000` (`HI.VAL == 0`), während SS0/SS1 den FLR überlebt haben.
+  - **Erweiterung des Code-Envelopes auf 2048 Bytes (`< 0x0800`):**
+    - Da v1.8.58 bei 1277/1280 Bytes am Limit war, wurde das Code-Envelope innerhalb der 4-KB-Trampolinseite sauber auf 2048 Bytes (`0x0800`) erweitert.
+    - Trampolin-Datenoffsets nach `0x0800..0x087F` verschoben.
+    - Low-FACS-Telemetriespiegelung (28 DWORDs = 112 Bytes) nach `0x0880..0x08EF` gelegt.
+    - IDTR und GDT sauber nach `0x0900..0x093F` platziert.
+    - Gesamtgröße des Trampolincodes: 1424 Bytes (`0x0590`), weit unter dem 2048-Byte-Limit.
+  - **Test-Suite & Regressionsschutz (`tests/test_s3_resume.c`):**
+    - Disassembler-Asserts für alle PCIe-FLR-Instruktionen, Post-FLR-Telemetrie und Ausschluss von Stage 5 im Teardown.
+    - Alle 10 Test-Suites PASS (8.729 Checks).
+
 ## [v1.8.58] - 2026-11-24
 ### Added & Fixed
 - **1:1 SEC2 Engine Reset Cycle (`src/vendor/unlock_610.c:1614-1674`), 5-Stufen-PCIe-Teardown & S3-Wake Crash-Dump Forensik (addresses #19):**
