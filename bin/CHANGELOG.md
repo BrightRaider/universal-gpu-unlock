@@ -6,6 +6,20 @@ For packaged binaries and downloads, visit [GitHub Releases](https://github.com/
 
 ---
 
+## [v1.8.66] - 2026-11-24
+### Added & Fixed
+- **Sauberes Port-`0x80`-getaktetes GSP-HALT-Gate & Diagnose-Telemetrie +0x120..+0x148 (addresses #19):**
+  - **GSP-HALT-Gate im 32-Bit-Trampolin (`src/s3_facs.c`):**
+    - Nach FWSEC-FRTS-Kickoff (`[0x00110100] = 2`) verhindert eine kurze Anlaufpause (~100 `in al, 0x80` Reads) ein verfrühtes Anschlagen auf ein ggf. noch anliegendes Halt-Bit `0x10`.
+    - Anschließend pollt `gsp_halt_poll` mit `in al, 0x80`-Taktung pro Iteration über bis zu `1.000.000` Iterationen (~500–1000 ms Budget) sauber bis `(BAR0 + 0x00110100) & 0x10 != 0`, bevor der SEC2-Booter startet.
+  - **Erweiterung des Code-Envelopes auf `0x0A00` (2560 Bytes) (`src/s3_facs.h`, `src/s3_facs.c`):**
+    - Low-Data / Telemetrie / Mirror um `+0x0200` auf `0x0A00..0x0AEF` sowie `RM_IDTR`/`PM_GDTR`/`GDT` auf `0x0B00..0x0B37` verschoben; alle Offsets über Makros und Compile-Time-Layout-Asserts abgesichert (Trampolingröße: 2.098 Bytes).
+  - **Diagnose-Snapshots + Kaltstart-Referenz (`src/s3_facs.h`, `src/s3_facs.c`, `src/vendor/unlock_610.c`):**
+    - Im S3-Trampolin zusätzlich `SEC2_DEBUGINFO` (`0x00840094`, `+0x120`), `SEC2_IRQSTAT` (`0x00840008`, `+0x124`), `SEC2_TRACEPC` (`0x0084140C`, `+0x128`), `SEC2_PRIV_ERR` (`0x00841500`, `+0x12C`), `SEC2_HUB_ERR` (`0x00841510`, `+0x130`), `PMC_DEVICE_ENABLE` (`0x00000600`, `+0x134`), `GSP_RISCV_CPUCTL` (`0x00111388`, `+0x138`), `GSP_BCR` (`0x00111668`, `+0x13C`), `SEC2_PRIV_INFO` (`0x00841504`, `+0x140`), `SEC2_PRIV_ADDR` (`0x00841508`, `+0x144`) und `GSP_DEBUGINFO` (`0x00110094`, `+0x148`) erfasst (`L58` in `C:\S3Dumps\capture_s3_telem.ps1` deckt bis `+0x15C` ab).
+    - Im Kaltstart (`src/vendor/unlock_610.c`, `log_coldboot_gsp_pmc_diag`) werden `0x00000200`, `0x00000600`, `0x001100F4`, `0x00110100`, `0x00111388` und `0x00111668` nach FWSEC-FRTS (`post-fwsec`) sowie vor SEC2-Booter (`pre-booter`) in `RUN*.TXT` protokolliert.
+  - **Bewährte Basis unverändert:** Arena-Konsolidierung (`DMA_live = 0`, 1 `EfiReservedMemoryType`-Deskriptor), SEC2-Booter-Registersequenz, PCIe-FLR, post-FLR `hold_sec2_reset()` und 4-Stufen-Teardown (Root Port `0x18 = 0x002D2D00`) bleiben unverändert.
+  - **Host-Tests:** Alle 8.791 Checks in `test_s3_resume.c` sowie das komplette `MSVC_HOST_TESTS`-Paket erfolgreich bestanden (`MSVC_HOST_TESTS=PASS`).
+
 ## [v1.8.65] - 2026-11-24
 ### Added & Fixed
 - **Vollständige Konsolidierung aller 6 GPU-DMA-Puffer in EfiReservedMemoryType-Arena & DMA_live = 0 (addresses #19):**

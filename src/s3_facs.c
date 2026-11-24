@@ -4,6 +4,9 @@
 #include "compat/compat.h"
 
 typedef char gu_s3_ctx_size_assert[(sizeof(GU_S3_RESUME_CONTEXT) == 108) ? 1 : -1];
+typedef char gu_tramp_envelope_assert[(GU_TRAMP_ENVELOPE_SIZE == 0x0A00U && GU_TRAMP_FAR_JUMP_OFF == GU_TRAMP_ENVELOPE_SIZE) ? 1 : -1];
+typedef char gu_tramp_mirror_gdt_assert[(GU_TRAMP_REAL_FACS_MIRROR_OFF + (28U * 4U) <= GU_TRAMP_RM_IDTR_OFF) ? 1 : -1];
+typedef char gu_tramp_gdt_layout_assert[((GU_TRAMP_RM_IDTR_OFF + 8U <= GU_TRAMP_PM_GDTR_OFF) && (GU_TRAMP_PM_GDTR_OFF + 8U <= GU_TRAMP_GDT_BASE_OFF) && (GU_TRAMP_GDT_BASE_OFF + 40U <= 4096U)) ? 1 : -1];
 
 static const EFI_GUID mAcpi20TableGuid = GU_EFI_ACPI_20_TABLE_GUID;
 static const EFI_GUID mAcpi10TableGuid = GU_EFI_ACPI_10_TABLE_GUID;
@@ -535,19 +538,19 @@ UINT32 GuAcpiBuildTrampolineCode(
   *e++ = 0xFC; /* cld */
   *e++ = 0x8C; *e++ = 0xC8; /* mov ax, cs */
   *e++ = 0x8E; *e++ = 0xD8; /* mov ds, ax */
-  *e++ = 0x89; *e++ = 0x26; *e++ = 0x70; *e++ = 0x08; /* mov [0x0870], sp */
-  *e++ = 0x8C; *e++ = 0x16; *e++ = 0x72; *e++ = 0x08; /* mov [0x0872], ss */
+  *e++ = 0x89; *e++ = 0x26; *e++ = (UINT8)(GU_TRAMP_BIOS_SP_OFF & 0xFFU); *e++ = (UINT8)(GU_TRAMP_BIOS_SP_OFF >> 8); /* mov [GU_TRAMP_BIOS_SP_OFF], sp */
+  *e++ = 0x8C; *e++ = 0x16; *e++ = (UINT8)(GU_TRAMP_BIOS_SS_OFF & 0xFFU); *e++ = (UINT8)(GU_TRAMP_BIOS_SS_OFF >> 8); /* mov [GU_TRAMP_BIOS_SS_OFF], ss */
 
-  /* Set Telemetry Magic: mov dword [0x081C], 0x53335F54 ('S3_T') */
-  *e++ = 0x66; *e++ = 0xC7; *e++ = 0x06; *e++ = 0x1C; *e++ = 0x08;
+  /* Set Telemetry Magic: mov dword [GU_TRAMP_MAGIC_OFF], 0x53335F54 ('S3_T') */
+  *e++ = 0x66; *e++ = 0xC7; *e++ = 0x06; *e++ = (UINT8)(GU_TRAMP_MAGIC_OFF & 0xFFU); *e++ = (UINT8)(GU_TRAMP_MAGIC_OFF >> 8);
   *e++ = 0x54; *e++ = 0x5F; *e++ = 0x33; *e++ = 0x53;
 
-  /* Telemetry Entry Checkpoint: mov word [0x0810], 0xAA01 */
-  *e++ = 0xC7; *e++ = 0x06; *e++ = 0x10; *e++ = 0x08; *e++ = 0x01; *e++ = 0xAA;
+  /* Telemetry Entry Checkpoint: mov word [GU_TRAMP_ENTRY_STATUS_OFF], 0xAA01 */
+  *e++ = 0xC7; *e++ = 0x06; *e++ = (UINT8)(GU_TRAMP_ENTRY_STATUS_OFF & 0xFFU); *e++ = (UINT8)(GU_TRAMP_ENTRY_STATUS_OFF >> 8); *e++ = 0x01; *e++ = 0xAA;
 
-  /* Probe loop: si=0x0820, di=0x0840, cx=8 */
-  *e++ = 0xBE; *e++ = 0x20; *e++ = 0x08; /* mov si, 0x0820 */
-  *e++ = 0xBF; *e++ = 0x40; *e++ = 0x08; /* mov di, 0x0840 */
+  /* Probe loop: si=GU_TRAMP_PCI_PROBE_ADDRS_OFF, di=GU_TRAMP_PCI_PROBE_RAW_OFF, cx=8 */
+  *e++ = 0xBE; *e++ = (UINT8)(GU_TRAMP_PCI_PROBE_ADDRS_OFF & 0xFFU); *e++ = (UINT8)(GU_TRAMP_PCI_PROBE_ADDRS_OFF >> 8); /* mov si, probe_addrs */
+  *e++ = 0xBF; *e++ = (UINT8)(GU_TRAMP_PCI_PROBE_RAW_OFF & 0xFFU); *e++ = (UINT8)(GU_TRAMP_PCI_PROBE_RAW_OFF >> 8);     /* mov di, probe_raw */
   *e++ = 0xB9; *e++ = 0x08; *e++ = 0x00; /* mov cx, 8 */
   UINT8 *pci_loop_start = e;
   *e++ = 0x66; *e++ = 0x8B; *e++ = 0x04; /* mov eax, [si] */
@@ -563,7 +566,7 @@ UINT32 GuAcpiBuildTrampolineCode(
   *e++ = (UINT8)loop_disp;
 
   /* Check if Bridge DevID is AMD (Vendor ID 0x1022 at [0x0840]) */
-  *e++ = 0xA1; *e++ = 0x40; *e++ = 0x08; /* mov ax, [0x0840] */
+  *e++ = 0xA1; *e++ = (UINT8)(GU_TRAMP_PCI_PROBE_RAW_OFF & 0xFFU); *e++ = (UINT8)(GU_TRAMP_PCI_PROBE_RAW_OFF >> 8); /* mov ax, [GU_TRAMP_PCI_PROBE_RAW_OFF] */
   *e++ = 0x3D; *e++ = 0x22; *e++ = 0x10; /* cmp ax, 0x1022 */
   *e++ = 0x0F; *e++ = 0x85;              /* jne near .skip_bridge (4 bytes) */
   UINT8 *skip_bridge_disp = e;
@@ -573,7 +576,7 @@ UINT32 GuAcpiBuildTrampolineCode(
    * 1. Load original Bus Numbers from [0x0848], preserve Latency Timer (bits 31:24),
    * set Pri=0, Sec=0x2D, Sub=0x2D:
    */
-  *e++ = 0x66; *e++ = 0xA1; *e++ = 0x48; *e++ = 0x08;             /* mov eax, [0x0848] */
+  *e++ = 0x66; *e++ = 0xA1; *e++ = (UINT8)((GU_TRAMP_PCI_PROBE_RAW_OFF + 8U) & 0xFFU); *e++ = (UINT8)((GU_TRAMP_PCI_PROBE_RAW_OFF + 8U) >> 8); /* mov eax, [probe_raw+8] */
   *e++ = 0x66; *e++ = 0x25; *e++ = 0x00; *e++ = 0x00; *e++ = 0x00; *e++ = 0xFF; /* and eax, 0xFF000000 */
   *e++ = 0x66; *e++ = 0x0D; *e++ = 0x00; *e++ = 0x2D; *e++ = 0x2D; *e++ = 0x00; /* or eax, 0x002D2D00 */
 
@@ -587,8 +590,8 @@ UINT32 GuAcpiBuildTrampolineCode(
   *e++ = 0x66; *e++ = 0xEF;                                       /* out dx, eax */
 
   /* 2. Compact loop: probe GPU registers 45:0:0 into [0x0860..0x086C] */
-  *e++ = 0xBE; *e++ = 0x30; *e++ = 0x08; /* mov si, 0x0830 (probe_addrs[4..7]) */
-  *e++ = 0xBF; *e++ = 0x60; *e++ = 0x08; /* mov di, 0x0860 */
+  *e++ = 0xBE; *e++ = (UINT8)((GU_TRAMP_PCI_PROBE_ADDRS_OFF + 0x10U) & 0xFFU); *e++ = (UINT8)((GU_TRAMP_PCI_PROBE_ADDRS_OFF + 0x10U) >> 8); /* mov si, probe_addrs[4..7] */
+  *e++ = 0xBF; *e++ = (UINT8)(GU_TRAMP_PCI_PROBE_POST_OFF & 0xFFU); *e++ = (UINT8)(GU_TRAMP_PCI_PROBE_POST_OFF >> 8);                         /* mov di, probe_post */
   *e++ = 0xB9; *e++ = 0x04; *e++ = 0x00; /* mov cx, 4 */
   UINT8 *pci_loop2_start = e;
   *e++ = 0x66; *e++ = 0x8B; *e++ = 0x04; /* mov eax, [si] */
@@ -619,8 +622,8 @@ UINT32 GuAcpiBuildTrampolineCode(
    * reading, 128-byte telemetry mirroring, and temporary BAR0 hardware rate-limiter unlock.
    */
 
-  /* In 16-bit Real Mode: Load GDTR from CS:0x0908 (TrampolinePhys + GU_TRAMP_PM_GDTR_OFF) (v1.8.59) */
-  *e++ = 0x2E; *e++ = 0x0F; *e++ = 0x01; *e++ = 0x16; *e++ = 0x08; *e++ = 0x09; /* lgdt [cs:0x0908] */
+  /* In 16-bit Real Mode: Load GDTR from CS:GU_TRAMP_PM_GDTR_OFF (v1.8.66) */
+  *e++ = 0x2E; *e++ = 0x0F; *e++ = 0x01; *e++ = 0x16; *e++ = (UINT8)(GU_TRAMP_PM_GDTR_OFF & 0xFFU); *e++ = (UINT8)(GU_TRAMP_PM_GDTR_OFF >> 8); /* lgdt [cs:PM_GDTR] */
 
   /* Enter Protected Mode: CR0.PE = 1 */
   *e++ = 0x66; *e++ = 0x0F; *e++ = 0x20; *e++ = 0xC0; /* mov eax, cr0 */
@@ -686,9 +689,9 @@ UINT32 GuAcpiBuildTrampolineCode(
   *(UINT32 *)e = (UINT32)(TrampolinePhys + GU_TRAMP_EXIT_STATUS_OFF); e += 4;
   *e++ = 0x02; *e++ = 0xAA;
 
-  /* Task (b): Copy 31 DWORDs (+0x0804..+0x087F) to HighAcpiPage + 0x504, preserving Marker at +0x500 */
+  /* Task (b): Copy 31 DWORDs (+0x0A04..+0x0A7F) to TelemetryPage + 0x04, preserving +0x00 */
   *e++ = 0xBE;                                       /* mov esi, imm32 */
-  *(UINT32 *)e = (UINT32)(TrampolinePhys + 0x0804U); e += 4;
+  *(UINT32 *)e = (UINT32)(TrampolinePhys + GU_TRAMP_RESTORED_RSDP_OFF); e += 4;
   *e++ = 0xBF;                                       /* mov edi, imm32 */
   *(UINT32 *)e = (UINT32)(high_telem_dest + 0x04); e += 4;
   *e++ = 0xB9; *e++ = 0x1F; *e++ = 0x00; *e++ = 0x00; *e++ = 0x00; /* mov ecx, 31 (124 bytes) */
@@ -958,18 +961,27 @@ UINT32 GuAcpiBuildTrampolineCode(
   /* Mailbox 1: [ebx + 0x00110044] = 0 */
   *e++ = 0x89; *e++ = 0x83; *(UINT32 *)e = 0x00110044U; e += 4; /* mov [ebx + 0x00110044], eax */
 
-  /* 6. Start GSP CPU & Bounded Poll on GSP Halt */
+  /* 6. Start GSP CPU & Port-0x80 Paced Gate on GSP Halt (v1.8.66) */
   /* [ebx + 0x00110100] = 2 */
   *e++ = 0xC7; *e++ = 0x83; *(UINT32 *)e = 0x00110100U; e += 4;
   *(UINT32 *)e = 2U; e += 4;
 
-  /* Bounded Poll on GSP Halt (Bit 4) == 0x10 (100,000 iterations) (unlock_610.c:377) */
-  *e++ = 0xB9; *e++ = 0xA0; *e++ = 0x86; *e++ = 0x01; *e++ = 0x00; /* mov ecx, 100000 */
+  /* Initial ~100 Port-0x80 Reads (~100us) so Falcon clears any stale HALT bit 0x10 before polling */
+  *e++ = 0xB9; *(UINT32 *)e = 100U; e += 4;                    /* mov ecx, 100 */
+  UINT8 *gsp_kick_delay = e;
+  *e++ = 0xE4; *e++ = 0x80;                                     /* in al, 0x80 (~1us I/O pacing) */
+  *e++ = 0x49;                                                 /* dec ecx */
+  *e++ = 0x75;                                                 /* jnz gsp_kick_delay */
+  *e++ = (UINT8)(gsp_kick_delay - (e + 1));
+
+  /* Bounded Poll on GSP Halt (Bit 4) == 0x10: up to 1,000,000 Port-0x80 paced iterations (~500-1000ms) */
+  *e++ = 0xB9; *(UINT32 *)e = 1000000U; e += 4;                /* mov ecx, 1000000 (0x000F4240) */
   UINT8 *gsp_halt_poll = e;
-  *e++ = 0x8B; *e++ = 0x83; *(UINT32 *)e = 0x00110100U; e += 4;   /* mov eax, [ebx + 0x00110100] */
+  *e++ = 0x8B; *e++ = 0x83; *(UINT32 *)e = 0x00110100U; e += 4; /* mov eax, [ebx + 0x00110100] */
   *e++ = 0xA8; *e++ = 0x10;                                     /* test al, 0x10 */
   *e++ = 0x75;                                                 /* jnz .gsp_halt_done */
   UINT8 *gsp_halt_break = e++;
+  *e++ = 0xE4; *e++ = 0x80;                                     /* in al, 0x80 (~1us I/O pacing) */
   *e++ = 0x49;                                                 /* dec ecx */
   *e++ = 0x75;                                                 /* jnz gsp_halt_poll */
   *e++ = (UINT8)(gsp_halt_poll - (e + 1));
@@ -995,6 +1007,22 @@ UINT32 GuAcpiBuildTrampolineCode(
   /* +0x118: Post-FWSEC Scratch (BAR0 + 0x00001438) */
   *e++ = 0x8B; *e++ = 0x83; *(UINT32 *)e = 0x00001438U; e += 4; /* mov eax, [ebx + 0x00001438] */
   *e++ = 0xA3; *(UINT32 *)e = (UINT32)(high_telem_dest + GU_TELEM_POST_FWSEC_SCRATCH_OFF); e += 4; /* mov [dest+0x118], eax */
+
+  /* +0x134: PMC_DEVICE_ENABLE (BAR0 + 0x00000600) (v1.8.66) */
+  *e++ = 0x8B; *e++ = 0x83; *(UINT32 *)e = 0x00000600U; e += 4;
+  *e++ = 0xA3; *(UINT32 *)e = (UINT32)(high_telem_dest + GU_TELEM_PMC_DEV_ENABLE_OFF); e += 4;
+
+  /* +0x138: GSP_RISCV_CPUCTL (BAR0 + 0x00111388) (v1.8.66) */
+  *e++ = 0x8B; *e++ = 0x83; *(UINT32 *)e = 0x00111388U; e += 4;
+  *e++ = 0xA3; *(UINT32 *)e = (UINT32)(high_telem_dest + GU_TELEM_GSP_RISCV_CPUCTL_OFF); e += 4;
+
+  /* +0x13C: GSP_BCR (BAR0 + 0x00111668) (v1.8.66) */
+  *e++ = 0x8B; *e++ = 0x83; *(UINT32 *)e = 0x00111668U; e += 4;
+  *e++ = 0xA3; *(UINT32 *)e = (UINT32)(high_telem_dest + GU_TELEM_GSP_BCR_OFF); e += 4;
+
+  /* +0x148: GSP_DEBUGINFO (BAR0 + 0x00110094) (v1.8.66) */
+  *e++ = 0x8B; *e++ = 0x83; *(UINT32 *)e = 0x00110094U; e += 4;
+  *e++ = 0xA3; *(UINT32 *)e = (UINT32)(high_telem_dest + GU_TELEM_GSP_DEBUGINFO_OFF); e += 4;
 
   /* ==================== SEC2 DIAGNOSTICS & RESET CYCLE (v1.8.51) ==================== */
   /* 1. Capture initial telemetry starting at +0xC0 */
@@ -1301,6 +1329,34 @@ UINT32 GuAcpiBuildTrampolineCode(
   *e++ = 0x8B; *e++ = 0x83; *(UINT32 *)e = 0x00840044U; e += 4;   /* mov eax, [ebx + 0x00840044] */
   *e++ = 0xA3; *(UINT32 *)e = (UINT32)(high_telem_dest + GU_TELEM_BOOTER_MAILBOX1_POST_OFF); e += 4; /* mov [dest+0x11C], eax */
 
+  /* +0x120: SEC2_DEBUGINFO (BAR0 + 0x00840094) (v1.8.66) */
+  *e++ = 0x8B; *e++ = 0x83; *(UINT32 *)e = 0x00840094U; e += 4;
+  *e++ = 0xA3; *(UINT32 *)e = (UINT32)(high_telem_dest + GU_TELEM_SEC2_DEBUGINFO_OFF); e += 4;
+
+  /* +0x124: SEC2_IRQSTAT (BAR0 + 0x00840008) (v1.8.66) */
+  *e++ = 0x8B; *e++ = 0x83; *(UINT32 *)e = 0x00840008U; e += 4;
+  *e++ = 0xA3; *(UINT32 *)e = (UINT32)(high_telem_dest + GU_TELEM_SEC2_IRQSTAT_OFF); e += 4;
+
+  /* +0x128: SEC2_TRACEPC (BAR0 + 0x0084140C) (v1.8.66) */
+  *e++ = 0x8B; *e++ = 0x83; *(UINT32 *)e = 0x0084140CU; e += 4;
+  *e++ = 0xA3; *(UINT32 *)e = (UINT32)(high_telem_dest + GU_TELEM_SEC2_TRACEPC_OFF); e += 4;
+
+  /* +0x12C: SEC2_PRIV_ERR (BAR0 + 0x00841500) (v1.8.66) */
+  *e++ = 0x8B; *e++ = 0x83; *(UINT32 *)e = 0x00841500U; e += 4;
+  *e++ = 0xA3; *(UINT32 *)e = (UINT32)(high_telem_dest + GU_TELEM_SEC2_PRIV_ERR_OFF); e += 4;
+
+  /* +0x130: SEC2_HUB_ERR (BAR0 + 0x00841510) (v1.8.66) */
+  *e++ = 0x8B; *e++ = 0x83; *(UINT32 *)e = 0x00841510U; e += 4;
+  *e++ = 0xA3; *(UINT32 *)e = (UINT32)(high_telem_dest + GU_TELEM_SEC2_HUB_ERR_OFF); e += 4;
+
+  /* +0x140: SEC2_PRIV_INFO (BAR0 + 0x00841504) (v1.8.66) */
+  *e++ = 0x8B; *e++ = 0x83; *(UINT32 *)e = 0x00841504U; e += 4;
+  *e++ = 0xA3; *(UINT32 *)e = (UINT32)(high_telem_dest + GU_TELEM_SEC2_PRIV_INFO_OFF); e += 4;
+
+  /* +0x144: SEC2_PRIV_ADDR (BAR0 + 0x00841508) (v1.8.66) */
+  *e++ = 0x8B; *e++ = 0x83; *(UINT32 *)e = 0x00841508U; e += 4;
+  *e++ = 0xA3; *(UINT32 *)e = (UINT32)(high_telem_dest + GU_TELEM_SEC2_PRIV_ADDR_OFF); e += 4;
+
   /* Read pre-unlock registers: SS0 (0x82381C), SS1 (0x823820), PLM (0x823804), Readout1 (0x823818) */
   *e++ = 0x8B; *e++ = 0x83; *(UINT32 *)e = 0x0082381CU; e += 4; /* mov eax, [ebx + 0x0082381C] */
   *e++ = 0xA3; *(UINT32 *)e = (UINT32)(high_telem_dest + 0x90); e += 4; /* mov [dest+0x90], eax */
@@ -1572,9 +1628,9 @@ UINT32 GuAcpiBuildTrampolineCode(
   *e++ = 0x8E; *e++ = 0xD8;                         /* mov ds, ax */
   *e++ = 0x8E; *e++ = 0xC0;                         /* mov es, ax */
 
-  /* Restore BIOS SP / SS saved at entry [0x0870] / [0x0872] */
-  *e++ = 0x8E; *e++ = 0x16; *e++ = 0x72; *e++ = 0x08; /* mov ss, [0x0872] */
-  *e++ = 0x8B; *e++ = 0x26; *e++ = 0x70; *e++ = 0x08; /* mov sp, [0x0870] */
+  /* Restore BIOS SP / SS saved at entry [GU_TRAMP_BIOS_SP_OFF] / [GU_TRAMP_BIOS_SS_OFF] */
+  *e++ = 0x8E; *e++ = 0x16; *e++ = (UINT8)(GU_TRAMP_BIOS_SS_OFF & 0xFFU); *e++ = (UINT8)(GU_TRAMP_BIOS_SS_OFF >> 8); /* mov ss, [GU_TRAMP_BIOS_SS_OFF] */
+  *e++ = 0x8B; *e++ = 0x26; *e++ = (UINT8)(GU_TRAMP_BIOS_SP_OFF & 0xFFU); *e++ = (UINT8)(GU_TRAMP_BIOS_SP_OFF >> 8); /* mov sp, [GU_TRAMP_BIOS_SP_OFF] */
 
   /* Zero general purpose registers for clean Windows handoff */
   *e++ = 0x66; *e++ = 0x31; *e++ = 0xC0;             /* xor eax, eax */
@@ -1586,10 +1642,10 @@ UINT32 GuAcpiBuildTrampolineCode(
   *e++ = 0x66; *e++ = 0x31; *e++ = 0xED;             /* xor ebp, ebp */
 
   /* Far indirect jump directly to Windows HalpRMStub */
-  *e++ = 0x2E; *e++ = 0xFF; *e++ = 0x2E; *e++ = 0x00; *e++ = 0x08; /* jmp far ptr cs:[0x0800] */
+  *e++ = 0x2E; *e++ = 0xFF; *e++ = 0x2E; *e++ = (UINT8)(GU_TRAMP_FAR_JUMP_OFF & 0xFFU); *e++ = (UINT8)(GU_TRAMP_FAR_JUMP_OFF >> 8); /* jmp far ptr cs:[GU_TRAMP_FAR_JUMP_OFF] */
 
   if ((UINT32)(e - Buffer) > GU_TRAMP_FAR_JUMP_OFF) {
-    /* Machine code exceeded 2048 bytes (would overwrite telemetry area at 0x0800) */
+    /* Machine code exceeded GU_TRAMP_ENVELOPE_SIZE (2560 bytes, would overwrite telemetry area at 0x0A00) */
     return 0;
   }
 

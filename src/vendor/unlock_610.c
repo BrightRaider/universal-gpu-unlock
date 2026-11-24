@@ -1297,6 +1297,27 @@ static int unlock_transaction_dma(struct unlock_transaction_work *work)
 	}
 }
 
+static void log_coldboot_gsp_pmc_diag(struct unlock_transaction_work *work,
+				      const char *stage)
+{
+	static const u32 regs[6] = {
+		0x00000200U, 0x00000600U, 0x001100F4U,
+		0x00110100U, 0x00111388U, 0x00111668U
+	};
+	u32 vals[6];
+	unsigned int i;
+
+	for (i = 0; i < 6; i++) {
+		u32 v = ~0u;
+		if (read_bar(work, regs[i], &v))
+			v = ~0u;
+		vals[i] = v;
+	}
+	dev_info(&work->pdev->dev,
+		 "%s diag: pmc_en=%#x pmc_dev=%#x gsp_hwcfg2=%#x gsp_cpuctl=%#x gsp_riscv=%#x gsp_bcr=%#x\n",
+		 stage, vals[0], vals[1], vals[2], vals[3], vals[4], vals[5]);
+}
+
 static int unlock_transaction_fwsec(struct unlock_transaction_work *work)
 {
 	size_t mapped = 0;
@@ -1419,6 +1440,7 @@ static int unlock_transaction_fwsec(struct unlock_transaction_work *work)
 	dev_info(&work->pdev->dev, "FWSEC WPR2: low=%#x high=%#x expected_page=%#llx end=%#llx\n",
 		wpr_lo, wpr_hi, (unsigned long long)(frts >> 12),
 		(unsigned long long)work->layout.wpr_end);
+	log_coldboot_gsp_pmc_diag(work, "post-fwsec");
 	/* Match NVIDIA's initialized-WPR2 check as well as the expected low
 	 * address. Never publish Booter metadata for disabled/alien WPR2.
 	 * On Turing (TU102), WPR2 is populated during GSP Booter execution,
@@ -1520,6 +1542,7 @@ static int unlock_transaction_boot(struct unlock_transaction_work *work)
 		return GU_RESULT(-EINVAL);
 	if (is_ad102(work) && !work->permission_saved)
 		return GU_RESULT(-EINVAL);
+	log_coldboot_gsp_pmc_diag(work, "pre-booter");
 	ret = falcon_hs(work, &gu_sec2, h->app_code_off, h->app_code_size,
 			h->app_code_off, 0, h->os_data_off, h->os_data_size, 0,
 			h->patch_loc - h->os_data_off, h->engine_id, h->ucode_id,

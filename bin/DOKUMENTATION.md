@@ -1,7 +1,7 @@
 # Technische Dokumentation: Universal GPU Unlock (Multi-Gen)
 
 > **Tool:** Universal GPU Unlock  
-> **Version:** v1.8.65  
+> **Version:** v1.8.66  
 > **Architekturen:** NVIDIA Ada Lovelace (RTX 40), Ampere (RTX 30), Turing (RTX 20 / CMP)  
 > **Unterstützte Betriebssysteme:** Windows 10, Windows 11, WSL2 / Ubuntu CUDA Container  
 
@@ -160,6 +160,10 @@ Für Grafikkarten der Ada Lovelace-Reihe (RTX 4090 / AD102) mit GSP-Firmware und
    - **Schutz vor Kaltstart-Metadaten-Modifikation:** `publish_v67()` sichert vor dem Kaltstart-Run eine unberührte Kopie `Gu.s3_meta_cpu` (`Gu.s3_meta_dma`) in der Arena, um das spätere Überschreiben von `meta + 72` durch `unlock_transaction_signature()` abzuwehren.
    - **Mini-Telemetrie (+0x11C):** Direkt nach dem SEC2-Booter-Halt sichert das Trampolin zusätzlich SEC2 Mailbox 1 (`BAR0 + 0x00840044`) an Telemetrie `+0x11C`. Trampolingröße: 1965 Bytes (<2048 Bytes Limit).
    - **Dynamische meta_dma-Erkennung:** `C:\S3Dumps\capture_s3_telem.ps1` ermittelt `meta_dma` dynamisch aus `RUN*.TXT` statt des statischen Werts `dc642000`.
+7. **GSP-HALT-Gate, Code-Envelope 0x0A00 & Diagnose-Snapshots +0x120..+0x148 (v1.8.66):**
+   - **Port-`0x80`-getaktetes GSP-Halt-Gate:** Nach FWSEC-Kickoff (`0x00110100 = 2`) wartet das 32-Bit-Trampolin zunächst ~100 `in al, 0x80` Anlauf-Reads (~100 µs), bevor `gsp_halt_poll` mit 1.000.000 `in al, 0x80`-getakteten Iterationen (~500–1000 ms Budget) sauber bis `(BAR0 + 0x00110100) & 0x10 != 0` blockiert.
+   - **Erweitertes Code-Envelope (`0x0A00` / 2560 Bytes):** Low-Data/Telemetrie/Mirror wandern auf `0x0A00..0x0AEF` und `RM_IDTR`/`PM_GDTR`/`GDT` auf `0x0B00..0x0B37`, abgesichert durch Compile-Time-Asserts (Trampolin-Codegröße: 2.098 Bytes).
+   - **Erweiterte S3-Telemetrie (`+0x120..+0x148`) & Kaltstart-Referenz:** Neben Post-Booter SEC2-Diagnosen (`SEC2_DEBUGINFO`, `SEC2_IRQSTAT`, `SEC2_TRACEPC`, `SEC2_PRIV_ERR`, `SEC2_HUB_ERR`, `SEC2_PRIV_INFO`, `SEC2_PRIV_ADDR`) sowie `PMC_DEVICE_ENABLE`, `GSP_RISCV_CPUCTL`, `GSP_BCR` und `GSP_DEBUGINFO` werden `0x200`/`0x600`/`0x1100F4`/`0x110100`/`0x111388`/`0x111668` auch im Kaltstart (`RUN*.TXT`) protokolliert; `C:\S3Dumps\capture_s3_telem.ps1` liest über `!dd <Addr> L58` den vollständigen Bereich bis `+0x15C`.
 
 ---
 
