@@ -6,6 +6,50 @@ For packaged binaries and downloads, visit [GitHub Releases](https://github.com/
 
 ---
 
+## [v1.8.62] - 2026-11-24
+### Added & Fixed
+- **EfiRuntimeServicesData Telemetrie-Sichtbarkeit & Dynamischer Prior-Wake-Suchpfad (addresses #19):**
+  - **Live-Check-Befund in Windows per `kd.exe -kl`:**
+    - Per Live-Kernel-Debugger-Dump habe ich das persistente 256-Byte `wpr_meta`-Paket an `meta_dma` (`0xdc642000`) ausgelesen:
+      - Magic `0xdc3aae21371a60b3` ist 100 % intakt.
+      - `radix_dma` an +0x10 zeigt exakt auf die persistente 82-MB-Arena an `0x00000000c4de6000` (`image_size = 0x05053000`).
+      - `boot_dma` (`0xdc639000`) und `sig_dma` (`0xdc629000`) verweisen sauber auf den persistenten ACPI-NVS-Bereich.
+    - Physische Lesezugriffe auf `EfiReservedMemoryType` (`0xdad43000` / `0xc4de6000`) und Low-Memory unter 1 MB (`0x9E880`) wurden von Windows NT / `kldbgdrv.sys` blockiert (`Physical memory read failed`), da NT für reservierten Speicher keine System-PTEs erzeugt.
+  - **Wiederherstellung der Telemetrie-Sichtbarkeit (`src/s3_facs.c`):**
+    - Umstellung der 4-KB-`TelemetryPage` in `GuAcpiAllocateTelemetryPage()` zurück auf `EfiRuntimeServicesData` (unterhalb der 27MB NVS-Grenze, z. B. `0xDADD9000`).
+    - Windows NT bindet `EfiRuntimeServicesData` per `SetVirtualAddressMap()` in die Kernel-Page-Tables ein, sodass `capture_s3_telem.ps1` via WinDbg (`kd.exe -kl`) die S3-Wake-Telemetrie sofort im laufenden Betrieb erfassen kann.
+    - Die 82-MB-Arena (`radix_dma` / GSP-Image) und `DMA_live = 0` bleiben strikt in `EfiReservedMemoryType` (single descriptor) erhalten.
+  - **Dynamischer Suchpfad für Prior-Wake-Telemetrie (`src/s3_facs.c`):**
+    - Ergänzung eines dynamischen 512-KB-Abwärtsscans (128 Pages in 4-KB-Schritten von `0xDADD9000` bis `0xDAB00000`) in `GuAcpiInstallShadowFacs()`.
+    - Dadurch erkennt `BOOTX64.EFI` auch bei Warmstarts nach S3-Wake jede Telemetrie-Seite, selbst wenn `AllocateMaxAddress` eine dynamische Adresse wie `0xdad43000` gewählt hat.
+    - Aufnahme von `Mailbox0/Marker` (+0xDC) in das Log-Format von `RUN*.TXT`.
+  - **Strikt unverändertes Trampolin:**
+    - Das bewährte 1424-Byte-Trampolin, der 4-Stufen-Teardown (mit aktivem `0x002D2D00`) und der PCIe-FLR bleiben exakt erhalten.
+  - **Test-Suite & Regressionsschutz (`tests/test_s3_resume.c`):**
+    - Alle 8.749 Checks in 10 MSVC Host Test Suites erfolgreich (`MSVC_HOST_TESTS=PASS`).
+
+## [v1.8.61] - 2026-11-24
+### Added & Fixed
+- **Contiguous Reserved Memory Arena & Saubere DMA-Entflechtung (`DMA_live = 0`) über S3 Sleep (addresses #19):**
+  - **Diagnose der Windows-Übergabe-Ursache in v1.8.60 (`DMA_live = 20612`):**
+    - In v1.8.60 blieben durch das vorzeitige Beenden von `free_coherent()` 20.612 DMA-Allokationen in der UEFI-Schnittstelle gemappt (`DMA_live = 20612`).
+    - Gemäß UEFI-Spezifikation (Abschnitt 13.4.2) und AMI Aptio V Firmware blockierte `PciBusDxe` den Zugriff auf den GPU-Knoten (`EFI_ACCESS_DENIED`), woraufhin `StartImage(bootmgfw.efi)` abbrach und der Safeguard einen Hardware-Kaltreset auslöste.
+  - **Zusammenhängende Reserved-Arena (Single-Descriptor-Architektur in `src/port.c`, `src/vendor/unlock_610.c`):**
+    - Um die UEFI Memory Map vor Fragmentierung durch bis zu 20.604 Einzel-Deskriptoren zu schützen, allokiert `GuS3AllocateArena()` einmalig eine zusammenhängende Arena von 21.000 Pages (~86 MB) in `EfiReservedMemoryType` unter 4 GB via `gBS->AllocatePages(AllocateMaxAddress, EfiReservedMemoryType, ...)`.
+    - Alle 20.604 Radix- und GSP-Image-Allokationen werden linear aus dieser Arena sub-allokiert (`is_arena == TRUE`), sodass die UEFI Memory Map um genau 1 Deskriptor wächst.
+    - `PciIo->Map()` verifiziert striktes Identity-Mapping (`DeviceAddress == HostAddress`, kein Bounce-Buffer).
+  - **Vollständige Entflechtung von `PciIo->Unmap()` und DRAM-Retention (`DMA_live = 0`):**
+    - In `GuDmaFree()` wird für jeden Eintrag zwingend `Gu.pci->Unmap(Gu.pci, Entry->mapping)` aufgerufen, der Eintrag aus `Gu.allocations` ausgehängt und `Gu.dma_count` dekrementiert -> Ziel: `DMA_live = 0` vor `StartImage(bootmgfw.efi)`.
+    - Für Seiten aus der Reserved-Arena wird kein `FreePages()` / `FreeBuffer()` aufgerufen; die Arena bleibt dauerhaft im DRAM reserviert.
+    - Alle temporären Cold-Boot-Scratch-Puffer (`booter_cpu`, `v67_cpu`, `stock_cpu`, `boot_cpu`, `fwsec_cpu`, `meta_cpu`) werden regulär vollständig freigegeben.
+  - **`TelemetryPage` Schutz vor Windows-Rekrutierung (`src/s3_facs.c`):**
+    - Strategie 1 in `GuAcpiAllocateTelemetryPage()` wurde von `EfiRuntimeServicesData` auf `EfiReservedMemoryType` umgestellt, sodass Windows NT die Telemetrie-Seite niemals mit DLL-Caches oder Treibern überschreibt.
+  - **Diagnose-Logging bei StartImage-Fehlern (`src/boot_io.c`, `src/app.c`):**
+    - Protokollierung des StartImage-Aufrufs in `RUN*.TXT`. Falls `StartImage(Windows)` fehlschlägt, wird der exakte `EFI_STATUS` über `GuBootLogError()` in die Log-Datei geschrieben und auf der Konsole angezeigt.
+  - **Test-Suite & Regressionsschutz (`tests/test_s3_resume.c`):**
+    - Test `[9]` `TestGuS3PersistentMemoryRetention` verifiziert die Arena-Allokation, Single-Descriptor-Retention, `DMA_live = 0` Anforderung und Host-RAM-Pointer im `wpr_meta`-Paket.
+    - Alle 8.749 Checks in 10 Test-Suites erfolgreich (`MSVC_HOST_TESTS=PASS`).
+
 ## [v1.8.60] - 2026-11-24
 ### Added & Fixed
 - **EfiReservedMemoryType Radix-Table- & GSP-Firmware-Retention über S3 Sleep (addresses #19):**

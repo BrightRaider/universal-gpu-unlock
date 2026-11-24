@@ -6,6 +6,28 @@ For packaged binaries and downloads, visit [GitHub Releases](https://github.com/
 
 ---
 
+## [v1.8.62] - 2026-11-24
+### Added & Fixed
+- **EfiRuntimeServicesData Telemetrie-Sichtbarkeit & Dynamischer Prior-Wake-Suchpfad (addresses #19):**
+  - **Live-Check-Befund in Windows per `kd.exe -kl`:**
+    - Per Live-Kernel-Debugger-Dump habe ich das persistente 256-Byte `wpr_meta`-Paket an `meta_dma` (`0xdc642000`) ausgelesen:
+      - Magic `0xdc3aae21371a60b3` ist 100 % intakt.
+      - `radix_dma` an +0x10 zeigt exakt auf die persistente 82-MB-Arena an `0x00000000c4de6000` (`image_size = 0x05053000`).
+      - `boot_dma` (`0xdc639000`) und `sig_dma` (`0xdc629000`) verweisen sauber auf den persistenten ACPI-NVS-Bereich.
+    - Physische Lesezugriffe auf `EfiReservedMemoryType` (`0xdad43000` / `0xc4de6000`) und Low-Memory unter 1 MB (`0x9E880`) wurden von Windows NT / `kldbgdrv.sys` blockiert (`Physical memory read failed`), da NT für reservierten Speicher keine System-PTEs erzeugt.
+  - **Wiederherstellung der Telemetrie-Sichtbarkeit (`src/s3_facs.c`):**
+    - Umstellung der 4-KB-`TelemetryPage` in `GuAcpiAllocateTelemetryPage()` zurück auf `EfiRuntimeServicesData` (unterhalb der 27MB NVS-Grenze, z. B. `0xDADD9000`).
+    - Windows NT bindet `EfiRuntimeServicesData` per `SetVirtualAddressMap()` in die Kernel-Page-Tables ein, sodass `capture_s3_telem.ps1` via WinDbg (`kd.exe -kl`) die S3-Wake-Telemetrie sofort im laufenden Betrieb erfassen kann.
+    - Die 82-MB-Arena (`radix_dma` / GSP-Image) und `DMA_live = 0` bleiben strikt in `EfiReservedMemoryType` (single descriptor) erhalten.
+  - **Dynamischer Suchpfad für Prior-Wake-Telemetrie (`src/s3_facs.c`):**
+    - Ergänzung eines dynamischen 512-KB-Abwärtsscans (128 Pages in 4-KB-Schritten von `0xDADD9000` bis `0xDAB00000`) in `GuAcpiInstallShadowFacs()`.
+    - Dadurch erkennt `BOOTX64.EFI` auch bei Warmstarts nach S3-Wake jede Telemetrie-Seite, selbst wenn `AllocateMaxAddress` eine dynamische Adresse wie `0xdad43000` gewählt hat.
+    - Aufnahme von `Mailbox0/Marker` (+0xDC) in das Log-Format von `RUN*.TXT`.
+  - **Strikt unverändertes Trampolin:**
+    - Das bewährte 1424-Byte-Trampolin, der 4-Stufen-Teardown (mit aktivem `0x002D2D00`) und der PCIe-FLR bleiben exakt erhalten.
+  - **Test-Suite & Regressionsschutz (`tests/test_s3_resume.c`):**
+    - Alle 8.749 Checks in 10 MSVC Host Test Suites erfolgreich (`MSVC_HOST_TESTS=PASS`).
+
 ## [v1.8.61] - 2026-11-24
 ### Added & Fixed
 - **Contiguous Reserved Memory Arena & Saubere DMA-Entflechtung (`DMA_live = 0`) über S3 Sleep (addresses #19):**

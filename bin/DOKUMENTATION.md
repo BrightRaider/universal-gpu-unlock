@@ -1324,6 +1324,65 @@ In Version `v1.8.60` habe ich die Ursache für den Booter-Fehlercode `0x00000091
    - Das bewährte 1424-Byte-Trampolin aus v1.8.59, der 4-Stufen-Teardown mit aktivem Root Port 0x18 Bus-Routing (`0x002D2D00`) und der PCIe-FLR mit Port-0x80-Stall bleiben 1:1 erhalten.
    - Alle 8.743 Checks in den MSVC Host Tests laufen fehlerfrei (`MSVC_HOST_TESTS=PASS`).
 
+### 13.34 Die v1.8.61 Architektur: Contiguous Reserved Memory Arena & Saubere DMA-Entflechtung (`DMA_live = 0`)
+In Version `v1.8.61` habe ich die beiden wesentlichen Probleme von v1.8.60 gelöst und die OS-Übergabe an Windows perfektioniert:
+
+1. **Diagnose des StartImage-Fehlschlags in v1.8.60 (`DMA_live = 20612`):**
+   - **Befund:** In `RUN0078.TXT` schloss die Transaktion zwar mit `TRANSACTION OK`, wies aber `DMA_live = 20612` aus. Alle 20.612 DMA-Allokationen blieben in der UEFI-Schnittstelle aktiv gemappt, weil `free_coherent()` vorzeitig mit `if (Gu.s3_persist_armed) return;` beendet wurde.
+   - **Auswirkung:** Gemäß UEFI Spec 13.4.2 und AMI Aptio V Firmware blockierte `PciBusDxe` den exklusiven Zugriff für den Windows Boot Manager (`bootmgfw.efi`), oder `winload.efi` scheiterte an den ungelösten DMA-Mappings. `StartImage(bootmgfw.efi)` kehrte mit Fehler zurück, woraufhin der Safeguard in `GuBootHalt()` griff und einen Kaltreset auslöste.
+
+2. **Zusammenhängende Reserved-Arena (Schutz vor UEFI-Memory-Map-Fragmentierung):**
+   - Das Allokieren von 20.604 Einzel-Pages (jeweils 4 KB) hätte die UEFI Memory Map um bis zu 20.604 separate Deskriptoren fragmentiert. Manche `winload.efi`-Versionen begrenzen den internen Memory-Map-Puffer, was zu Ladefehlern führt.
+   - **Lösung:** `GuS3AllocateArena()` allokiert bei aktivem S3-Modus einmalig EINE zusammenhängende Arena von 21.000 Pages (~86 MB) in `EfiReservedMemoryType` unter 4 GB (`AllocateMaxAddress = 0xFFFFFFFFULL`) über einen einzigen Aufruf von `gBS->AllocatePages()`.
+   - Alle 20.604 Radix- und GSP-Image-Allokationen werden linear aus dieser Arena sub-allokiert (`Entry->is_arena = TRUE`).
+   - Die UEFI Memory Map wächst dadurch um genau 1 Deskriptor statt bis zu 20.604 Einzel-Deskriptoren!
+   - `PciIo->Map()` verifiziert per Log/Assert striktes Identity-Mapping (`Entry->dma == (UINT64)(UINTN)Entry->cpu`, kein Bounce-Buffer).
+
+3. **Vollständige Entflechtung von `PciIo->Unmap()` und DRAM-Retention (`DMA_live = 0`):**
+   - In `GuDmaFree()` wird für ausnahmslos JEDEN Eintrag zwingend `Gu.pci->Unmap(Gu.pci, Entry->mapping)` aufgerufen. Dadurch werden alle UEFI DMA-Mapping-Tokens ordnungsgemäß freigegeben.
+   - Für Arena-Allokationen (`is_arena == TRUE`) wird `PciIo->FreeBuffer()` / `FreePages()` NICHT aufgerufen. Die Arena bleibt dauerhaft im DRAM reserviert.
+   - Alle temporären Cold-Boot-Scratch-Puffer (`booter_cpu`, `v67_cpu`, `stock_cpu`, `boot_cpu`, `fwsec_cpu`, `meta_cpu`) werden regulär vollständig freigegeben.
+   - Jeder Eintrag wird aus `Gu.allocations` ausgehängt und `Gu.dma_count` dekrementiert -> `DMA_live = 0` vor `StartImage(bootmgfw.efi)`.
+   - `GuSafeToReturn()` bestätigt den sauberen Zustand (`!Gu.allocations && !Gu.dma_count`), sodass Windows ohne jeden UEFI-Konflikt startet.
+
+4. **Schutz der `TelemetryPage` vor Windows-Überschreibung:**
+   - Strategie 1 in `GuAcpiAllocateTelemetryPage()` wurde von `EfiRuntimeServicesData` auf `EfiReservedMemoryType` umgestellt.
+   - Dadurch ist die Telemetrie-Seite dauerhaft vor einer Rekrutierung durch Windows NT für DLL-Caches oder Kernel-Pools geschützt.
+
+5. **Diagnose-Logging bei StartImage-Fehlern:**
+   - In `src/boot_io.c` wird `StartImage(Windows)` protokolliert und die Log-Datei unmittelbar vor dem Sprung ins OS geschlossen.
+   - Sollte `StartImage()` jemals zurückkehren, öffnet `GuBootLogError()` die Log-Datei erneut, hängt den konkreten `EFI_STATUS` an `RUN*.TXT` an und zeigt ihn auf dem Bildschirm an.
+
+6. **Test-Suite & Regressionsschutz:**
+   - Alle 8.749 Checks in 10 MSVC Host Test Suites laufen erfolgreich durch (`MSVC_HOST_TESTS=PASS`).
+
+### 13.35 Die v1.8.62 Architektur: EfiRuntimeServicesData Telemetrie-Sichtbarkeit & Dynamischer Prior-Wake-Suchpfad
+In Version `v1.8.62` habe ich die Telemetrie-Sichtbarkeit für den Windows Kernel Debugger wiederhergestellt und den Prior-Wake-Suchpfad in `BOOTX64.EFI` dynamisiert:
+
+1. **Live-Check-Befund in Windows per `kd.exe -kl`:**
+   - Per Live-Kernel-Debugger-Dump habe ich das persistente 256-Byte `wpr_meta`-Paket an `meta_dma` (`0xdc642000`) ausgelesen:
+     - Magic `0xdc3aae21371a60b3` ist 100 % intakt.
+     - `radix_dma` an +0x10 zeigt exakt auf die persistente 82-MB-Arena an `0x00000000c4de6000` (`image_size = 0x05053000`).
+     - `boot_dma` (`0xdc639000`) und `sig_dma` (`0xdc629000`) verweisen sauber auf den persistenten ACPI-NVS-Bereich.
+   - Physische Lesezugriffe auf `EfiReservedMemoryType` (`0xdad43000` / `0xc4de6000`) und Low-Memory unter 1 MB (`0x9E880`) wurden von Windows NT / `kldbgdrv.sys` blockiert (`Physical memory read failed`), da NT für reservierten Speicher keine System-PTEs erzeugt.
+
+2. **Wiederherstellung der Telemetrie-Sichtbarkeit (`src/s3_facs.c`):**
+   - Umstellung der 4-KB-`TelemetryPage` in `GuAcpiAllocateTelemetryPage()` zurück auf `EfiRuntimeServicesData` (unterhalb der 27MB NVS-Grenze, z. B. `0xDADD9000`).
+   - Windows NT bindet `EfiRuntimeServicesData` per `SetVirtualAddressMap()` in die Kernel-Page-Tables ein, sodass `capture_s3_telem.ps1` via WinDbg (`kd.exe -kl`) die S3-Wake-Telemetrie sofort im laufenden Betrieb erfassen kann.
+   - Die 82-MB-Arena (`radix_dma` / GSP-Image) und `DMA_live = 0` bleiben strikt in `EfiReservedMemoryType` (single descriptor) erhalten.
+
+3. **Dynamischer Suchpfad für Prior-Wake-Telemetrie (`src/s3_facs.c`):**
+   - Ergänzung eines dynamischen 512-KB-Abwärtsscans (128 Pages in 4-KB-Schritten von `0xDADD9000` bis `0xDAB00000`) in `GuAcpiInstallShadowFacs()`.
+   - Dadurch erkennt `BOOTX64.EFI` auch bei Warmstarts nach S3-Wake jede Telemetrie-Seite, selbst wenn `AllocateMaxAddress` eine dynamische Adresse wie `0xdad43000` gewählt hat.
+   - Aufnahme von `Mailbox0/Marker` (+0xDC) in das Log-Format von `RUN*.TXT`.
+
+4. **Strikt unverändertes Trampolin:**
+   - Das bewährte 1424-Byte-Trampolin, der 4-Stufen-Teardown (mit aktivem `0x002D2D00`) und der PCIe-FLR bleiben exakt erhalten.
+
+5. **Test-Suite & Regressionsschutz:**
+   - Alle 8.749 Checks in 10 MSVC Host Test Suites erfolgreich (`MSVC_HOST_TESTS=PASS`).
+
+
 
 
 

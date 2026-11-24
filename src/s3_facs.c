@@ -1438,10 +1438,10 @@ static UINT32 GuFindGpuPmcsrReg(EFI_BOOT_SERVICES *bs, EFI_PCI_IO_PROTOCOL *gpu_
 }
 
 /*
- * Allocates a dedicated 4KB telemetry page of EfiReservedMemoryType
+ * Allocates a dedicated 4KB telemetry page of EfiRuntimeServicesData
  * strictly OUTSIDE the 27MB NVS zone (0xDADDA000..0xDC8DA000) so that nt!HalpRestoreNvsArea
- * does NOT overwrite it during S3 wake (v1.8.46c), and Windows NT does NOT recruit it
- * for DLL loading or kernel pools (v1.8.61).
+ * does NOT overwrite it during S3 wake (v1.8.46c), and Windows NT maps it via SetVirtualAddressMap()
+ * so that kd.exe can read it via !dd in Windows (v1.8.62).
  */
 static EFI_PHYSICAL_ADDRESS GuAcpiAllocateTelemetryPage(
     IN EFI_BOOT_SERVICES *bs
@@ -1451,39 +1451,39 @@ static EFI_PHYSICAL_ADDRESS GuAcpiAllocateTelemetryPage(
   EFI_PHYSICAL_ADDRESS telem_phys = 0;
   EFI_STATUS s;
 
-  /* Strategy 1: AllocateMaxAddress <= 0xDADD9000 (below 27MB NVS block) as EfiReservedMemoryType (v1.8.61) */
+  /* Strategy 0: Try fixed clean address below 27MB NVS zone (v1.8.62) */
   telem_phys = 0xDADD9000ULL;
-  s = bs->AllocatePages(AllocateMaxAddress, EfiReservedMemoryType, 1, &telem_phys);
+  s = bs->AllocatePages(AllocateAddress, EfiRuntimeServicesData, 1, &telem_phys);
+  if (!EFI_ERROR(s)) {
+    memset((VOID *)(UINTN)telem_phys, 0, 4096);
+    return telem_phys;
+  }
+
+  /* Strategy 1: AllocateMaxAddress <= 0xDADD9000 (below 27MB NVS block) as EfiRuntimeServicesData */
+  telem_phys = 0xDADD9000ULL;
+  s = bs->AllocatePages(AllocateMaxAddress, EfiRuntimeServicesData, 1, &telem_phys);
   if (!EFI_ERROR(s) && telem_phys >= 0x00100000ULL && (telem_phys < 0xDADDA000ULL || telem_phys >= 0xDC8DA000ULL)) {
     memset((VOID *)(UINTN)telem_phys, 0, 4096);
     return telem_phys;
   }
 
-  /* Strategy 2: AllocateMaxAddress <= 0xDADD9000 as EfiReservedMemoryType */
-  telem_phys = 0xDADD9000ULL;
-  s = bs->AllocatePages(AllocateMaxAddress, EfiReservedMemoryType, 1, &telem_phys);
-  if (!EFI_ERROR(s) && telem_phys >= 0x00100000ULL && (telem_phys < 0xDADDA000ULL || telem_phys >= 0xDC8DA000ULL)) {
-    memset((VOID *)(UINTN)telem_phys, 0, 4096);
-    return telem_phys;
-  }
-
-  /* Strategy 3: Try candidate physical addresses outside the NVS zone */
+  /* Strategy 2: Try candidate physical addresses outside the NVS zone */
   static const EFI_PHYSICAL_ADDRESS candidate_addrs[] = {
-    0xDA000000ULL, 0xD9000000ULL, 0xD8000000ULL,
+    0xD8261000ULL, 0xDA000000ULL, 0xD9000000ULL, 0xD8000000ULL,
     0xDD000000ULL, 0xDE000000ULL, 0xDF000000ULL
   };
   for (UINTN i = 0; i < sizeof(candidate_addrs)/sizeof(candidate_addrs[0]); i++) {
     telem_phys = candidate_addrs[i];
-    s = bs->AllocatePages(AllocateAddress, EfiReservedMemoryType, 1, &telem_phys);
+    s = bs->AllocatePages(AllocateAddress, EfiRuntimeServicesData, 1, &telem_phys);
     if (!EFI_ERROR(s)) {
       memset((VOID *)(UINTN)telem_phys, 0, 4096);
       return telem_phys;
     }
   }
 
-  /* Strategy 4: AllocateMaxAddress 4GB with NVS bounds check as EfiReservedMemoryType */
+  /* Strategy 3: AllocateMaxAddress 4GB with NVS bounds check as EfiRuntimeServicesData */
   telem_phys = 0xFFFFFFFFULL;
-  s = bs->AllocatePages(AllocateMaxAddress, EfiReservedMemoryType, 1, &telem_phys);
+  s = bs->AllocatePages(AllocateMaxAddress, EfiRuntimeServicesData, 1, &telem_phys);
   if (!EFI_ERROR(s)) {
     if (telem_phys < 0xDADDA000ULL || telem_phys >= 0xDC8DA000ULL) {
       memset((VOID *)(UINTN)telem_phys, 0, 4096);
@@ -1599,7 +1599,7 @@ EFI_STATUS GuAcpiInstallShadowFacs(
 #ifndef GU_S3_HOST_TEST
       /* Scan candidate dedicated telemetry pages outside NVS for UNLK block */
       static const EFI_PHYSICAL_ADDRESS candidate_high_pages[] = {
-        0xDC617000ULL, 0xD8261000ULL, 0xDC618000ULL, 0xDADD9000ULL, 0xDA000000ULL,
+        0xDADD9000ULL, 0xDC617000ULL, 0xD8261000ULL, 0xDC618000ULL, 0xDA000000ULL,
         0xD9000000ULL, 0xD8000000ULL, 0xDC000000ULL, 0xDC600000ULL, 0xDC800000ULL,
         0xDB000000ULL, 0xDD000000ULL, 0xDE000000ULL, 0xDF000000ULL
       };
@@ -1612,6 +1612,18 @@ EFI_STATUS GuAcpiInstallShadowFacs(
           break;
         }
       }
+      /* Dynamic scan: If not found in candidate list, scan 128 pages (512 KB) downwards from 0xDADD9000 (v1.8.62) */
+      if (*(UINT32 *)(unlk_page + GU_TELEM_UNLOCK_MAGIC_OFF) != GU_TELEM_UNLOCK_MAGIC) {
+        for (EFI_PHYSICAL_ADDRESS scan_addr = 0xDADD9000ULL; scan_addr >= 0xDAB00000ULL; scan_addr -= 4096) {
+          UINT8 *cand = (UINT8 *)(UINTN)scan_addr;
+          if (*(UINT32 *)(cand + GU_TELEM_UNLOCK_MAGIC_OFF) == GU_TELEM_UNLOCK_MAGIC) {
+            unlk_page = cand;
+            GuLog("S3 Prior Wake Telemetry: Located high hardware unlock telemetry at %#llx (dynamic scan)\n",
+                  (unsigned long long)scan_addr);
+            break;
+          }
+        }
+      }
 #endif
     }
 
@@ -1622,6 +1634,7 @@ EFI_STATUS GuAcpiInstallShadowFacs(
       UINT32 bcr_post      = *(UINT32 *)(unlk_page + GU_TELEM_FALCON2_BCR_POST_OFF);
       UINT32 cpuctl_post   = *(UINT32 *)(unlk_page + GU_TELEM_SEC2_CPUCTL_POST_OFF);
       UINT32 booter_cpuctl = *(UINT32 *)(unlk_page + GU_TELEM_BOOTER_CPUCTL_POST_OFF);
+      UINT32 booter_marker = *(UINT32 *)(unlk_page + GU_TELEM_BOOTER_MARKER_POST_OFF);
       UINT32 ss0_before    = *(UINT32 *)(unlk_page + GU_TELEM_SS0_BEFORE_OFF);
       UINT32 ss1_before    = *(UINT32 *)(unlk_page + GU_TELEM_SS1_BEFORE_OFF);
       UINT32 ss0_after     = *(UINT32 *)(unlk_page + GU_TELEM_SS0_AFTER_OFF);
@@ -1632,13 +1645,13 @@ EFI_STATUS GuAcpiInstallShadowFacs(
       UINT32 post_ss1      = *(UINT32 *)(unlk_page + GU_TELEM_POST_FLR_SS1_OFF);
       UINT32 post_plm      = *(UINT32 *)(unlk_page + GU_TELEM_POST_FLR_PLM_OFF);
       GuLog("S3 Wake Hardware Unlock Telemetry: Magic=UNLK Status=%u Chip=%#08x AssignedBAR0=%#08x\n"
-            "  BCR_Post: %#08x CPUCTL_Post: %#08x Booter_CPUCTL: %#08x\n"
+            "  BCR_Post: %#08x CPUCTL_Post: %#08x Booter_CPUCTL: %#08x Mailbox0/Marker: %#08x\n"
             "  SS0: %#08x -> %#08x (Target 0x88888888)\n"
             "  SS1: %#08x -> %#08x (Target 0x00000008)\n"
             "  Readout1: %#08x (Full-Rate = 0x00000000)\n"
             "  Post-FLR: WPR2_HI=%#08x (HI.VAL=%u) SS0=%#08x SS1=%#08x PLM=%#08x\n",
             (unsigned)unlk_status, (unsigned)unlk_chip, (unsigned)unlk_bar0,
-            (unsigned)bcr_post, (unsigned)cpuctl_post, (unsigned)booter_cpuctl,
+            (unsigned)bcr_post, (unsigned)cpuctl_post, (unsigned)booter_cpuctl, (unsigned)booter_marker,
             (unsigned)ss0_before, (unsigned)ss0_after,
             (unsigned)ss1_before, (unsigned)ss1_after,
             (unsigned)ro_after,
