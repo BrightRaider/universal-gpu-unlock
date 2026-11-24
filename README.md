@@ -31,7 +31,7 @@
    - *(Existing USB sticks can be updated by running `Update-USB.bat`).*
 2. **Boot & Unlock:** Restart your PC, open your boot menu (`F8` / `F11` / `F12`), boot from the USB drive, and select:
    - `[U]` **Standard Unlock:** RAM-only, temporary unlock (reverts cleanly to factory stock on power off). Multi-GPU systems unlock all cards sequentially.
-   - `[P]` **S3 Persistence:** Experimental sleep-aware unlock mode (Boot-Script).
+   - `[P]` **S3 Persistence:** Verified sleep-aware unlock mode via ACPI FACS Trampoline & Reserved Arena (preserves Tensor Core unlock across S3 Suspend-to-RAM cycles).
    - `[I]` **Install to NVRAM:** Permanent, stickless auto-unlock on every cold boot via internal ESP & NVRAM.
    - `[R]` **Remove DXE Driver:** Cleanly uninstalls and deregisters the driver from UEFI NVRAM & internal ESP.
    - `[S]` **Stock Windows:** Diagnostic hardware scan, logs to USB, normal boot without unlock.  

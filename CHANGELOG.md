@@ -16,6 +16,9 @@ For packaged binaries and downloads, visit [GitHub Releases](https://github.com/
   - **Zusatz-Telemetrie `+0x14C` (`src/s3_facs.h`, `src/s3_facs.c`):**
     - Sichert das erste DWORD direkt aus Host-RAM `[meta_dma]` (erwartetes Low-DWORD `0x371a60b3` von `GU_WPR_META_MAGIC`) an Telemetrie `+0x14C` (mit `L58` in `C:\S3Dumps\capture_s3_telem.ps1` automatisch im Dump erfasst; Trampolingröße `2.140` Bytes im `0x0A00`-Envelope).
   - **Bewährte Basis unverändert:** GSP-FWSEC-Sequenz (inkl. GSP-Halt-Gate), 6-Puffer-Arena (`EfiReservedMemoryType`, 1 Deskriptor, `DMA_live = 0`), PCIe-FLR, post-FLR `hold_sec2_reset()`, 4-Stufen-Teardown (`0x002D2D00`) sowie `0x0A00`-Envelope-Layout.
+  - **Live Hardware-Verifikation (RTX 4090 AD102, Windows 10, NVIDIA-Treiber `621.14`):**
+    - Zwei aufeinanderfolgende S3-Sleep/Wake-Zyklen innerhalb derselben Windows-Sitzung bestanden (`wake #1` & `wake #2`): Telemetrie `+0x14C` `[meta_dma] = 0x371a60b3`, `WPR2 = 0x05ff2000:0x05ff2e00`, `GSP_CPUCTL = 0x10`, `SEC2_MAILBOX0 = 0x67b00001`, `SEC2_CPUCTL = 0x10`, `Status = 1` (`SS0 = 0x88888888`, `SS1 = 0x00000008`, `PLM = 0xffffffff`, `READOUT1 = 0x0`).
+    - Windows-Live-Register (`kdX64.exe -kl`) und PyTorch/CUDA-Benchmark (`torch 2.1.0+cu121`) nach S3-Wake #2 bestätigt: `#fb82381c = 88888888`, `#fb823820 = 00000008`, `#fb823818 = 0`, `290.51` TFLOPS FP16 / `291.99` TFLOPS BF16 (`4096x4096`), `288.21` TFLOPS BF16 (`16384x16384`).
   - **Host-Tests:** Alle `8.795` Checks in `test_s3_resume.c` (inkl. Disassembler- und Bytecode-Asserts für SEC2-Port-`0x80`-Pacing, Post-Marker-Halt-Wait und `+0x14C`) sowie das komplette `MSVC_HOST_TESTS`-Paket bestanden (`MSVC_HOST_TESTS=PASS`).
 
 ## [v1.8.66] - 2026-11-24

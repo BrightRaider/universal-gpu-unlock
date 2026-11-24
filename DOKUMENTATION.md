@@ -167,6 +167,7 @@ Für Grafikkarten der Ada Lovelace-Reihe (RTX 4090 / AD102) mit GSP-Firmware und
 8. **Port-`0x80`-getakteter SEC2-Booter-Poll & `[meta_dma]`-Probe `+0x14C` (v1.8.67):**
    - **Port-`0x80`-SEC2-Gate:** Unmittelbar nach SEC2-Kickoff (`0x00840100 = 2`) wartet das 32-Bit-Trampolin zunächst ~100 `in al, 0x80`-Anlauftakte, pollt anschließend über bis zu `6.000.000` Port-`0x80`-getaktete Iterationen (~5–6 s Budget) auf `MAILBOX0 == 0x67b00001` oder `(CPUCTL & 0x10) != 0 && MAILBOX0 != meta_dma` und wartet nach Erreichen des Markers noch per kurzem Port-`0x80`-Poll (`100.000` Iterationen) sauber auf `SEC2_CPUCTL & 0x10 != 0`, bevor `SS0`/`SS1` geschrieben werden.
    - **Host-RAM-Verifikation (`+0x14C`):** Direkt vor dem SEC2-Start sichert das Trampolin das erste DWORD an `[meta_dma]` (erwartet: `0x371a60b3`, Low-DWORD von `GU_WPR_META_MAGIC`) in Telemetrie `+0x14C` (Trampolin-Codegröße: `2.140` Bytes im `0x0A00`-Envelope).
+   - **Verifizierter Mehrfach-S3-Erfolg (RTX 4090, Windows 10, Treiber `621.14`):** Über zwei aufeinanderfolgende S3-Sleep/Wake-Zyklen hinweg bestätigt (`[meta_dma] = 0x371a60b3`, `SEC2_MAILBOX0 = 0x67b00001`, `Status = 1`, `SS0 = 0x88888888`, `SS1 = 0x00000008`, `PLM = 0xffffffff`, `READOUT1 = 0x0`), gefolgt von einem PyTorch/CUDA-GEMM-Benchmark mit `290.51` TFLOPS (FP16) bzw. `291.99` TFLOPS (BF16).
 
 ---
 
