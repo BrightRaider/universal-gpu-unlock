@@ -1299,7 +1299,11 @@ static int unlock_transaction_fwsec(struct unlock_transaction_work *work)
 		ret = -EOPNOTSUPP;
 		goto out;
 	}
+	if (Gu.s3_persist_armed && Gu.s3_arena_armed) {
+		Gu.s3_arena_active = TRUE;
+	}
 	image = diag_dma_alloc(work, "fwsec", fw.image_size, &image_dma, GFP_KERNEL);
+	Gu.s3_arena_active = FALSE;
 	if (!image) {
 		ret = -ENOMEM;
 		goto out;
@@ -1333,6 +1337,12 @@ static int unlock_transaction_fwsec(struct unlock_transaction_work *work)
 		if (ret)
 			goto out;
 		memcpy((u8 *)image + fw.data_off + fw.pkc_off, rom + fw.sig_off + sig_at, 384);
+	}
+	if (Gu.s3_persist_armed && Gu.s3_arena_armed) {
+		Gu.s3_fwsec_dma = image_dma;
+		Gu.s3_fwsec_size = fw.image_size;
+		dev_info(&work->pdev->dev, "S3 Persistent FWSEC Arena: dma=%#llx size=%#x (EfiReservedMemoryType)\n",
+			 (unsigned long long)Gu.s3_fwsec_dma, Gu.s3_fwsec_size);
 	}
 	if (check_entry_selectors(work)) { ret=-EIO; goto out; }
 	pci_set_master(work->pdev);

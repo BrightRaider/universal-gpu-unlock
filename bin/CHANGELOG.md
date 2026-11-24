@@ -6,6 +6,34 @@ For packaged binaries and downloads, visit [GitHub Releases](https://github.com/
 
 ---
 
+## [v1.8.64] - 2026-11-24
+### Added & Fixed
+- **GSP FWSEC-FRTS WPR2-Partitionierungs-Sequenz im 32-Bit S3-Trampolin (addresses #19):**
+  - **Hardware-Erkenntnis aus v1.8.63:** Die Pre-Booter-Diagnose hat nachgewiesen, dass beim S3-Wake VRAM (`0x00100ce0` = `0x309`) und GFW-Boot (`0x00118234` = `0x3ff`) fertiggestellt sind, GSP (`0x00110000`) im Halted-Zustand (`0x10`) vorliegt und WPR2 unpartitioniert auf `1ffffe00:00000000` steht. Dies führte dazu, dass der SEC2 Booter mit Mailbox 0 = `0x91` abbrach.
+  - **1:1 FWSEC-FRTS-Sequenz vor dem SEC2 Booter (`src/s3_facs.c`):**
+    - Vor dem SEC2 Booter führt das 32-Bit-Trampolin die komplette, exakt an `src/vendor/unlock_610.c` angelehnte FWSEC-FRTS-Sequenz auf der GSP-Engine (`0x00110000`) aus:
+      1. GSP-Reset-Zyklus: `0x001103C0 |= 1`, 10 Dummy-Reads, Poll Reset-Assert, Release Reset (`&= ~1`), 10 Dummy-Reads, Poll Release, Bounded Poll auf Scrubbing Done (`0x001100F4` Bit 12 == 0).
+      2. GSP-BCR-Umschaltung: `0x00111668 = 0`, Bounded Poll auf `& 0x11 == 1` zum Verlassen des Boot-ROM-Modus.
+      3. GSP Chip-ID: `0x00110084 = [ebx]`.
+      4. GSP FBIF Trans Enable & Trans Mode: `0x00110624 |= 0x80`, Clear Falcon IRQ Status (`0x0011010C = 0`), Trans Mode `0x00110600 = (val & ~7) | 5`.
+      5. GSP Chunked DMA: Base Low `0x00110110 = fwsec_dma >> 8`, Base High `0x00110128 = 0`. IMEM: 242 Chunks à 256 Bytes (`cmd = 0x0614`, 61.952 Bytes). DMEM: 14 Chunks à 256 Bytes (`cmd = 0x0600`, 3.584 Bytes ab Offset `0xF200`).
+      6. GSP Falcon2 Register: `0x00111210 = 0x0B24` (sig_dmem), `0x0011119C = 0x0400` (engine_mask), `0x00111198 = 9` (ucode_id), `0x00111180 = 1`, `0x00110104 = 0` (code_va), Mailbox 0 & 1 = 0.
+      7. GSP CPU Kickoff & Bounded Poll: `0x00110100 = 2`, Bounded Poll auf Halt-Bit (`0x00110100 & 0x10 == 0x10`).
+  - **Post-FWSEC Telemetrie-Snapshot (`src/s3_facs.h`, `src/s3_facs.c`):**
+    - Direkt nach Abschluss von FWSEC-FRTS sichert das Trampolin 5 weitere MMIO-Werte in die Telemetrieseite:
+      * `+0x108`: Post-FWSEC WPR2_LO (`BAR0 + 0x001fa824`)
+      * `+0x10C`: Post-FWSEC WPR2_HI (`BAR0 + 0x001fa828`, erwartet: `0x5ff2e00`)
+      * `+0x110`: Post-FWSEC GSP_CPUCTL (`BAR0 + 0x00110100`)
+      * `+0x114`: Post-FWSEC GSP_MAILBOX0 (`BAR0 + 0x00110040`)
+      * `+0x118`: Post-FWSEC Scratch (`BAR0 + 0x00001438`)
+  - **Persistente FWSEC-Ablage in der Reserved-Arena (`src/vendor/unlock_610.c`, `src/port.h`):**
+    - Beim Kaltstart wird der 64-KB-FWSEC-Puffer (IMEM + DMEM inkl. PKC-Signatur) mit `is_arena = TRUE` in der 82-MB `EfiReservedMemoryType`-Arena allokiert.
+    - `Gu.s3_fwsec_dma` und `Gu.s3_fwsec_size` verweisen auf diesen persistenten Puffer, der bis über S3 hinaus erhalten bleibt.
+    - Nach Kaltstart wird `Unmap()` aufgerufen -> `DMA_live = 0` vor `StartImage(bootmgfw.efi)`.
+  - **Envelope & Host-Tests (`tests/test_s3_resume.c`):**
+    - Gesamte Trampolingröße beträgt 1954 Bytes (strikt innerhalb des 2048-Byte / `<0x0800` Envelope-Limits).
+    - Alle 8.767 Host-Checks erfolgreich bestanden (`MSVC_HOST_TESTS=PASS`).
+
 ## [v1.8.63] - 2026-11-24
 ### Added & Fixed
 - **Pre-Booter MMIO-Diagnose-Snapshot & Telemetrie-Erweiterung im S3-Trampolin (addresses #19):**

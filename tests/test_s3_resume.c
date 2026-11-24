@@ -675,8 +675,9 @@ static void TestGuAcpiBuildTrampolineCode(void) {
   EFI_PHYSICAL_ADDRESS ctx_phys = 0xdc5d8000ULL;
   EFI_PHYSICAL_ADDRESS shadow_facs_phys = 0xdc617400ULL;
   EFI_PHYSICAL_ADDRESS telem_phys = 0xDA000000ULL;
+  EFI_PHYSICAL_ADDRESS fwsec_dma_phys = 0xC7300000ULL;
 
-  UINT32 bytes = GuAcpiBuildTrampolineCode(buffer, sizeof(buffer), tramp_phys, ctx_phys, shadow_facs_phys, telem_phys, 0xFB000000ULL, 0x80001960U, 0x802D0064U);
+  UINT32 bytes = GuAcpiBuildTrampolineCode(buffer, sizeof(buffer), tramp_phys, ctx_phys, shadow_facs_phys, telem_phys, 0xFB000000ULL, 0x80001960U, 0x802D0064U, fwsec_dma_phys);
   CHECK(bytes > 0, "Trampoline builder must generate non-zero bytes");
   CHECK(bytes <= 2048, "Trampoline machine code must fit within 2048 bytes (<0x0800 telemetry area)");
 
@@ -954,6 +955,14 @@ static void TestGuAcpiBuildTrampolineCode(void) {
     else if (buffer[i] == 0x8B && buffer[i+1] == 0x83 && buffer[i+2] == 0x34 && buffer[i+3] == 0x82 && buffer[i+4] == 0x11 && buffer[i+5] == 0x00) { instr_len = 6; desc = "mov eax, [ebx+0x00118234]       ; Read GFW-BOOT Completion"; }
     else if (buffer[i] == 0x8B && buffer[i+1] == 0x83 && buffer[i+2] == 0xF4 && buffer[i+3] == 0x00 && buffer[i+4] == 0x11 && buffer[i+5] == 0x00) { instr_len = 6; desc = "mov eax, [ebx+0x001100f4]       ; Read GSP_HWCFG2"; }
     else if (buffer[i] == 0x8B && buffer[i+1] == 0x83 && buffer[i+2] == 0x00 && buffer[i+3] == 0x01 && buffer[i+4] == 0x11 && buffer[i+5] == 0x00) { instr_len = 6; desc = "mov eax, [ebx+0x00110100]       ; Read GSP_CPUCTL"; }
+    else if (buffer[i] == 0xC7 && buffer[i+1] == 0x83) { instr_len = 10; desc = "mov dword [ebx+disp32], imm32"; }
+    else if (buffer[i] == 0x89 && buffer[i+1] == 0xBB) { instr_len = 6; desc = "mov [ebx+disp32], edi"; }
+    else if (buffer[i] == 0x89 && buffer[i+1] == 0x93) { instr_len = 6; desc = "mov [ebx+disp32], edx"; }
+    else if (buffer[i] == 0x89 && buffer[i+1] == 0xB3) { instr_len = 6; desc = "mov [ebx+disp32], esi"; }
+    else if (buffer[i] == 0x4D) { instr_len = 1; desc = "dec ebp"; }
+    else if (buffer[i] == 0x31 && buffer[i+1] == 0xD2) { instr_len = 2; desc = "xor edx, edx"; }
+    else if (buffer[i] == 0xA8) { instr_len = 2; desc = "test al, imm8"; }
+    else if (buffer[i] == 0xB1) { instr_len = 2; desc = "mov cl, imm8"; }
     else if (buffer[i] == 0x8B && buffer[i+1] == 0x83) { instr_len = 6; desc = "mov eax, [ebx+disp32]          ; Generic MMIO read"; }
     else if (buffer[i] == 0x89 && buffer[i+1] == 0x83) { instr_len = 6; desc = "mov [ebx+disp32], eax          ; Generic MMIO write"; }
     else if (buffer[i] == 0xBB) { instr_len = 5; desc = "mov ebx, bar0_target           ; Set BAR0 Base Pointer"; }
@@ -1192,7 +1201,55 @@ static void TestGuAcpiBuildTrampolineCode(void) {
   BOOLEAN found_telem_gfw_boot = FALSE;
   BOOLEAN found_telem_gsp_hwcfg2 = FALSE;
   BOOLEAN found_telem_gsp_cpuctl = FALSE;
+  BOOLEAN found_gsp_reset = FALSE;
+  BOOLEAN found_gsp_bcr_zero = FALSE;
+  BOOLEAN found_gsp_chip_id = FALSE;
+  BOOLEAN found_gsp_fbif_trans = FALSE;
+  BOOLEAN found_gsp_dma_low = FALSE;
+  BOOLEAN found_gsp_falcon2_sig = FALSE;
+  BOOLEAN found_gsp_cpu_start = FALSE;
+  BOOLEAN found_telem_post_fwsec_wpr2_lo = FALSE;
+  BOOLEAN found_telem_post_fwsec_wpr2_hi = FALSE;
+  BOOLEAN found_telem_post_fwsec_cpuctl = FALSE;
+  BOOLEAN found_telem_post_fwsec_mb0 = FALSE;
+  BOOLEAN found_telem_post_fwsec_scratch = FALSE;
   for (UINT32 i = pm32_offset; i < pm16_offset - 9; i++) {
+    if (buffer[i] == 0x89 && buffer[i+1] == 0x83 && *(UINT32 *)(buffer + i + 2) == 0x001103C0U) {
+      found_gsp_reset = TRUE;
+    }
+    if (buffer[i] == 0x89 && buffer[i+1] == 0x83 && *(UINT32 *)(buffer + i + 2) == 0x00111668U) {
+      found_gsp_bcr_zero = TRUE;
+    }
+    if (buffer[i] == 0x89 && buffer[i+1] == 0x83 && *(UINT32 *)(buffer + i + 2) == 0x00110084U) {
+      found_gsp_chip_id = TRUE;
+    }
+    if (buffer[i] == 0x89 && buffer[i+1] == 0x83 && *(UINT32 *)(buffer + i + 2) == 0x00110624U) {
+      found_gsp_fbif_trans = TRUE;
+    }
+    if (buffer[i] == 0x89 && buffer[i+1] == 0x83 && *(UINT32 *)(buffer + i + 2) == 0x00110110U) {
+      found_gsp_dma_low = TRUE;
+    }
+    if (buffer[i] == 0xC7 && buffer[i+1] == 0x83 && *(UINT32 *)(buffer + i + 2) == 0x00111210U && *(UINT32 *)(buffer + i + 6) == 0x0B24U) {
+      found_gsp_falcon2_sig = TRUE;
+    }
+    if (buffer[i] == 0xC7 && buffer[i+1] == 0x83 && *(UINT32 *)(buffer + i + 2) == 0x00110100U && *(UINT32 *)(buffer + i + 6) == 2U) {
+      found_gsp_cpu_start = TRUE;
+    }
+    if (buffer[i] == 0xA3 && *(UINT32 *)(buffer + i + 1) == (UINT32)(telem_phys + GU_TELEM_POST_FWSEC_WPR2_LO_OFF)) {
+      found_telem_post_fwsec_wpr2_lo = TRUE;
+    }
+    if (buffer[i] == 0xA3 && *(UINT32 *)(buffer + i + 1) == (UINT32)(telem_phys + GU_TELEM_POST_FWSEC_WPR2_HI_OFF)) {
+      found_telem_post_fwsec_wpr2_hi = TRUE;
+    }
+    if (buffer[i] == 0xA3 && *(UINT32 *)(buffer + i + 1) == (UINT32)(telem_phys + GU_TELEM_POST_FWSEC_GSP_CPUCTL_OFF)) {
+      found_telem_post_fwsec_cpuctl = TRUE;
+    }
+    if (buffer[i] == 0xA3 && *(UINT32 *)(buffer + i + 1) == (UINT32)(telem_phys + GU_TELEM_POST_FWSEC_GSP_MAILBOX0_OFF)) {
+      found_telem_post_fwsec_mb0 = TRUE;
+    }
+    if (buffer[i] == 0xA3 && *(UINT32 *)(buffer + i + 1) == (UINT32)(telem_phys + GU_TELEM_POST_FWSEC_SCRATCH_OFF)) {
+      found_telem_post_fwsec_scratch = TRUE;
+    }
     if (buffer[i] == 0x8B && buffer[i+1] == 0x83 && *(UINT32 *)(buffer + i + 2) == 0x00840624U) {
       found_fbif_trans_read = TRUE;
     }
@@ -1305,6 +1362,18 @@ static void TestGuAcpiBuildTrampolineCode(void) {
   CHECK(found_telem_gfw_boot, "Trampoline must save GFW-BOOT Status (0x00118234) to Telemetry +0xFC");
   CHECK(found_telem_gsp_hwcfg2, "Trampoline must save GSP_HWCFG2 (0x001100f4) to Telemetry +0x100");
   CHECK(found_telem_gsp_cpuctl, "Trampoline must save GSP_CPUCTL (0x00110100) to Telemetry +0x104");
+  CHECK(found_gsp_reset, "Trampoline must reset GSP engine (0x001103C0)");
+  CHECK(found_gsp_bcr_zero, "Trampoline must switch GSP BCR to non-secure (0x00111668 = 0)");
+  CHECK(found_gsp_chip_id, "Trampoline must write Chip-ID to GSP (0x00110084)");
+  CHECK(found_gsp_fbif_trans, "Trampoline must enable GSP FBIF Trans (0x00110624 |= 0x80)");
+  CHECK(found_gsp_dma_low, "Trampoline must set GSP DMA base address (0x00110110)");
+  CHECK(found_gsp_falcon2_sig, "Trampoline must set GSP Falcon2 sig_dmem = 0x0B24");
+  CHECK(found_gsp_cpu_start, "Trampoline must start GSP CPU (0x00110100 = 2)");
+  CHECK(found_telem_post_fwsec_wpr2_lo, "Trampoline must save Post-FWSEC WPR2_LO (BAR0 + 0x001fa824) to Telemetry +0x108");
+  CHECK(found_telem_post_fwsec_wpr2_hi, "Trampoline must save Post-FWSEC WPR2_HI (BAR0 + 0x001fa828) to Telemetry +0x10C");
+  CHECK(found_telem_post_fwsec_cpuctl, "Trampoline must save Post-FWSEC GSP_CPUCTL (BAR0 + 0x00110100) to Telemetry +0x110");
+  CHECK(found_telem_post_fwsec_mb0, "Trampoline must save Post-FWSEC GSP_MAILBOX0 (BAR0 + 0x00110040) to Telemetry +0x114");
+  CHECK(found_telem_post_fwsec_scratch, "Trampoline must save Post-FWSEC Scratch (BAR0 + 0x00001438) to Telemetry +0x118");
 
   /* Verify MSE + BME (0x06) programmed into Root Port Command & GPU Command */
   BOOLEAN found_cmd_bme = FALSE;

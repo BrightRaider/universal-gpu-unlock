@@ -1,7 +1,7 @@
 # Technische Dokumentation: Universal GPU Unlock (Multi-Gen)
 
 > **Tool:** Universal GPU Unlock  
-> **Version:** v1.8.63  
+> **Version:** v1.8.64  
 > **Architekturen:** NVIDIA Ada Lovelace (RTX 40), Ampere (RTX 30), Turing (RTX 20 / CMP)  
 > **Unterstützte Betriebssysteme:** Windows 10, Windows 11, WSL2 / Ubuntu CUDA Container  
 
@@ -144,6 +144,15 @@ Für Grafikkarten der Ada Lovelace-Reihe (RTX 4090 / AD102) mit GSP-Firmware und
      * `+0x100`: GSP_HWCFG2 (`BAR0 + 0x001100f4`)
      * `+0x104`: GSP_CPUCTL (`BAR0 + 0x00110100`)
    - Zusammen mit `C:\S3Dumps\capture_s3_telem.ps1` (`!dd <Addr> L50`) ermöglicht dies eine unterbrechungsfreie Hardware-Zustandsanalyse direkt nach dem S3-Aufwachen.
+5. **GSP FWSEC-FRTS WPR2-Partitionierungs-Sequenz (v1.8.64):**
+   - Unmittelbar vor dem Start des SEC2 Booters führt das 32-Bit-Trampolin die komplette 1:1 FWSEC-FRTS-Sequenz auf der GSP-Engine (`0x00110000`) aus:
+     * GSP-Reset & Scrub (`0x001103C0`, `0x001100F4` Bit 12 == 0)
+     * GSP-BCR-Umschaltung in Non-Secure-Modus (`0x00111668 = 0`, Poll `& 0x11 == 1`)
+     * GSP-FBIF & Chunked DMA für IMEM (242 Chunks à 256 Bytes, `cmd = 0x0614`) und DMEM (14 Chunks à 256 Bytes, `cmd = 0x0600`) aus der persistenten `EfiReservedMemoryType`-Arena (`Gu.s3_fwsec_dma`)
+     * GSP Falcon2 Register (`sig_dmem = 0x0B24`, `engine_mask = 0x0400`, `ucode_id = 9`, `config = 1`, `code_va = 0`, Mailboxes = 0)
+     * GSP Start CPU (`0x00110100 = 2`) und Bounded Poll auf Halt-Bit (`0x00110100 & 0x10 == 0x10`)
+     * Post-FWSEC 5-fach Telemetrie-Snapshot ab `+0x108..+0x118` (WPR2_LO, WPR2_HI, GSP_CPUCTL, GSP_MAILBOX0, Scratch `0x00001438`)
+   - Dadurch partitioniert FWSEC den WPR2-Bereich (`low = 0x5ff2000`, `high = 0x5ff2e00`), bevor der SEC2 Booter startet, wodurch der Booter-Fehler `0x91` behoben wird.
 
 ---
 

@@ -454,7 +454,8 @@ UINT32 GuAcpiBuildTrampolineCode(
     IN EFI_PHYSICAL_ADDRESS TelemetryPhys,
     IN EFI_PHYSICAL_ADDRESS GpuBar0Phys,
     IN UINT32 RootPortLinkReg,
-    IN UINT32 GpuPmcsrReg
+    IN UINT32 GpuPmcsrReg,
+    IN EFI_PHYSICAL_ADDRESS FwsecDmaPhys
 ) {
   if (!Buffer || BufferSize < 1024) return 0;
   /* Derive High ACPI base and target addresses */
@@ -465,6 +466,9 @@ UINT32 GuAcpiBuildTrampolineCode(
   UINT32 bar0_target = GpuBar0Phys ? (UINT32)GpuBar0Phys : 0xFB000000U;
   UINT32 booter_dma = ContextPhys ? (UINT32)(ContextPhys + 0x01000U) : 0x00021000U;
   UINT32 meta_dma = ContextPhys ? (UINT32)(ContextPhys + 0x2A000U) : 0x0004A000U;
+  UINT32 fwsec_dma = (FwsecDmaPhys != 0) ? (UINT32)FwsecDmaPhys :
+                     (Gu.s3_fwsec_dma != 0) ? (UINT32)Gu.s3_fwsec_dma :
+                     (ContextPhys ? (UINT32)(ContextPhys + 0x30000U) : 0xC7300000U);
   UINT32 booter_size = (GuAssets[0].firmware.size > 0) ? (UINT32)GuAssets[0].firmware.size : 57672U;
   UINT32 booter_sz_param = (booter_size & ~0xFFU) | 0x10U;
   (VOID)booter_size;
@@ -752,6 +756,243 @@ UINT32 GuAcpiBuildTrampolineCode(
   *e++ = 0x81; *e++ = 0xFA; *e++ = 0xDF; *e++ = 0xBA; *e++ = 0x00; *e++ = 0x00; /* cmp edx, 0x0000BADF */
   UINT8 *fault_jmp2 = e;
   *e++ = 0x0F; *e++ = 0x84; *e++ = 0x00; *e++ = 0x00; *e++ = 0x00; *e++ = 0x00; /* jz near .fault */
+
+  /* ==================== GSP FWSEC-FRTS SEQUENCE (v1.8.64) ==================== */
+  /* 1. GSP Engine Reset & Scrub Cycle (unlock_610.c:474-482) */
+  /* Assert GSP reset: Read 0x001103C0, or al, 1, write back */
+  *e++ = 0x8B; *e++ = 0x83; *(UINT32 *)e = 0x001103C0U; e += 4; /* mov eax, [ebx + 0x001103C0] */
+  *e++ = 0x0C; *e++ = 0x01;                                     /* or al, 0x01 */
+  *e++ = 0x89; *e++ = 0x83; *(UINT32 *)e = 0x001103C0U; e += 4; /* mov [ebx + 0x001103C0], eax */
+
+  /* 10 dummy reads of 0x001103C0 */
+  *e++ = 0x31; *e++ = 0xC9;                         /* xor ecx, ecx */
+  *e++ = 0xB1; *e++ = 0x0A;                         /* mov cl, 10 */
+  UINT8 *gsp_dummy1 = e;
+  *e++ = 0x8B; *e++ = 0x83; *(UINT32 *)e = 0x001103C0U; e += 4; /* mov eax, [ebx + 0x001103C0] */
+  *e++ = 0x49;                                                 /* dec ecx */
+  *e++ = 0x75;                                                 /* jnz gsp_dummy1 */
+  *e++ = (UINT8)(gsp_dummy1 - (e + 1));
+
+  /* Poll reset assert: [ebx + 0x001103C0] & 1 == 1 */
+  *e++ = 0xB1; *e++ = 0x64;                         /* mov cl, 100 */
+  UINT8 *gsp_assert_poll = e;
+  *e++ = 0x8B; *e++ = 0x83; *(UINT32 *)e = 0x001103C0U; e += 4; /* mov eax, [ebx + 0x001103C0] */
+  *e++ = 0xA8; *e++ = 0x01;                                     /* test al, 0x01 */
+  *e++ = 0x75;                                                 /* jnz .gsp_assert_done */
+  UINT8 *gsp_assert_break = e++;
+  *e++ = 0x49;                                                 /* dec ecx */
+  *e++ = 0x75;                                                 /* jnz gsp_assert_poll */
+  *e++ = (UINT8)(gsp_assert_poll - (e + 1));
+  *gsp_assert_break = (UINT8)(e - (gsp_assert_break + 1));
+
+  /* Release reset: read 0x001103C0, and al, ~1, write back */
+  *e++ = 0x8B; *e++ = 0x83; *(UINT32 *)e = 0x001103C0U; e += 4; /* mov eax, [ebx + 0x001103C0] */
+  *e++ = 0x24; *e++ = 0xFE;                                     /* and al, 0xFE */
+  *e++ = 0x89; *e++ = 0x83; *(UINT32 *)e = 0x001103C0U; e += 4; /* mov [ebx + 0x001103C0], eax */
+
+  /* 10 dummy reads of 0x001103C0 */
+  *e++ = 0xB1; *e++ = 0x0A;                         /* mov cl, 10 */
+  UINT8 *gsp_dummy2 = e;
+  *e++ = 0x8B; *e++ = 0x83; *(UINT32 *)e = 0x001103C0U; e += 4; /* mov eax, [ebx + 0x001103C0] */
+  *e++ = 0x49;                                                 /* dec ecx */
+  *e++ = 0x75;                                                 /* jnz gsp_dummy2 */
+  *e++ = (UINT8)(gsp_dummy2 - (e + 1));
+
+  /* Poll reset release: [ebx + 0x001103C0] & 1 == 0 */
+  *e++ = 0xB1; *e++ = 0x64;                         /* mov cl, 100 */
+  UINT8 *gsp_rel_poll = e;
+  *e++ = 0x8B; *e++ = 0x83; *(UINT32 *)e = 0x001103C0U; e += 4; /* mov eax, [ebx + 0x001103C0] */
+  *e++ = 0xA8; *e++ = 0x01;                                     /* test al, 0x01 */
+  *e++ = 0x74;                                                 /* jz .gsp_rel_done */
+  UINT8 *gsp_rel_break = e++;
+  *e++ = 0x49;                                                 /* dec ecx */
+  *e++ = 0x75;                                                 /* jnz gsp_rel_poll */
+  *e++ = (UINT8)(gsp_rel_poll - (e + 1));
+  *gsp_rel_break = (UINT8)(e - (gsp_rel_break + 1));
+
+  /* Poll 0x001100F4 Bit 12 (Scrubbing Active) == 0 (unlock_610.c:480) */
+  *e++ = 0xB9; *e++ = 0x50; *e++ = 0xC3; *e++ = 0x00; *e++ = 0x00; /* mov ecx, 50000 */
+  UINT8 *gsp_scrub_poll = e;
+  *e++ = 0x8B; *e++ = 0x83; *(UINT32 *)e = 0x001100F4U; e += 4; /* mov eax, [ebx + 0x001100F4] */
+  *e++ = 0xA9; *e++ = 0x00; *e++ = 0x10; *e++ = 0x00; *e++ = 0x00; /* test eax, 0x00001000 */
+  *e++ = 0x74;                                                 /* jz .gsp_scrub_done */
+  UINT8 *gsp_scrub_break = e++;
+  *e++ = 0x49;                                                 /* dec ecx */
+  *e++ = 0x75;                                                 /* jnz gsp_scrub_poll */
+  *e++ = (UINT8)(gsp_scrub_poll - (e + 1));
+  *gsp_scrub_break = (UINT8)(e - (gsp_scrub_break + 1));
+
+  /* 2. Switch GSP Falcon out of Boot-ROM mode: write 0 to FALCON2_BCR (BAR0 + 0x00111668) (unlock_610.c:491) */
+  *e++ = 0x31; *e++ = 0xC0;                                     /* xor eax, eax */
+  *e++ = 0x89; *e++ = 0x83; *(UINT32 *)e = 0x00111668U; e += 4; /* mov [ebx + 0x00111668], eax */
+
+  /* Poll [ebx + 0x00111668] & 0x11 == 1 with bounded timeout (50,000 iterations) */
+  *e++ = 0xB9; *e++ = 0x50; *e++ = 0xC3; *e++ = 0x00; *e++ = 0x00; /* mov ecx, 50000 */
+  UINT8 *gsp_bcr_poll = e;
+  *e++ = 0x8B; *e++ = 0x83; *(UINT32 *)e = 0x00111668U; e += 4; /* mov eax, [ebx + 0x00111668] */
+  *e++ = 0x89; *e++ = 0xC2;                                     /* mov edx, eax */
+  *e++ = 0x80; *e++ = 0xE2; *e++ = 0x11;                         /* and dl, 0x11 */
+  *e++ = 0x80; *e++ = 0xFA; *e++ = 0x01;                         /* cmp dl, 0x01 */
+  *e++ = 0x74;                                                 /* jz .gsp_bcr_done */
+  UINT8 *gsp_bcr_break = e++;
+  *e++ = 0x49;                                                 /* dec ecx */
+  *e++ = 0x75;                                                 /* jnz gsp_bcr_poll */
+  *e++ = (UINT8)(gsp_bcr_poll - (e + 1));
+  *gsp_bcr_break = (UINT8)(e - (gsp_bcr_break + 1));
+
+  /* Write Chip-ID to 0x00110084 (unlock_610.c:499) */
+  *e++ = 0x8B; *e++ = 0x03;                                     /* mov eax, [ebx] */
+  *e++ = 0x89; *e++ = 0x83; *(UINT32 *)e = 0x00110084U; e += 4; /* mov [ebx + 0x00110084], eax */
+
+  /* 3. GSP FBIF Trans Enable & Setup (unlock_610.c:651-657) */
+  /* [ebx + 0x00110624] |= 0x80 */
+  *e++ = 0x8B; *e++ = 0x83; *(UINT32 *)e = 0x00110624U; e += 4; /* mov eax, [ebx + 0x00110624] */
+  *e++ = 0x0C; *e++ = 0x80;                                     /* or al, 0x80 */
+  *e++ = 0x89; *e++ = 0x83; *(UINT32 *)e = 0x00110624U; e += 4; /* mov [ebx + 0x00110624], eax */
+
+  /* Clear GSP Falcon IRQ Status: [ebx + 0x0011010C] = 0 */
+  *e++ = 0x31; *e++ = 0xC0;                                     /* xor eax, eax */
+  *e++ = 0x89; *e++ = 0x83; *(UINT32 *)e = 0x0011010CU; e += 4; /* mov [ebx + 0x0011010C], eax */
+
+  /* FBIF Trans Mode: [ebx + 0x00110600] = ([ebx + 0x00110600] & ~7) | 5 */
+  *e++ = 0x8B; *e++ = 0x83; *(UINT32 *)e = 0x00110600U; e += 4; /* mov eax, [ebx + 0x00110600] */
+  *e++ = 0x24; *e++ = 0xF8;                                     /* and al, 0xF8 */
+  *e++ = 0x0C; *e++ = 0x05;                                     /* or al, 0x05 */
+  *e++ = 0x89; *e++ = 0x83; *(UINT32 *)e = 0x00110600U; e += 4; /* mov [ebx + 0x00110600], eax */
+
+  /* 4. GSP DMA Transfers (IMEM: 242 chunks of 256; DMEM: 14 chunks of 256) */
+  /* Base Low: [ebx + 0x00110110] = fwsec_dma >> 8 */
+  *e++ = 0xB8; *(UINT32 *)e = (UINT32)(fwsec_dma >> 8); e += 4; /* mov eax, fwsec_dma >> 8 */
+  *e++ = 0x89; *e++ = 0x83; *(UINT32 *)e = 0x00110110U; e += 4; /* mov [ebx + 0x00110110], eax */
+
+  /* Base High: [ebx + 0x00110128] = 0 */
+  *e++ = 0x31; *e++ = 0xC0;                                     /* xor eax, eax */
+  *e++ = 0x89; *e++ = 0x83; *(UINT32 *)e = 0x00110128U; e += 4; /* mov [ebx + 0x00110128], eax */
+
+  /* Pass 1 Setup (IMEM): EDI=0, EDX=0, EBP=242, ESI=0x0614 */
+  *e++ = 0x31; *e++ = 0xFF;                                     /* xor edi, edi */
+  *e++ = 0x31; *e++ = 0xD2;                                     /* xor edx, edx */
+  *e++ = 0xBD; *(UINT32 *)e = 242U; e += 4;                     /* mov ebp, 242 */
+  *e++ = 0xBE; *(UINT32 *)e = 0x0614U; e += 4;                  /* mov esi, 0x0614 */
+
+  /* .gsp_dma_loop_entry: */
+  UINT8 *gsp_dma_loop_entry = e;
+
+  /* Poll DMA Idle: [ebx + 0x00110118] & 1 == 0 (with bounded timeout 50,000) */
+  *e++ = 0xB9; *e++ = 0x50; *e++ = 0xC3; *e++ = 0x00; *e++ = 0x00; /* mov ecx, 50000 */
+  UINT8 *gsp_dma_idle_poll = e;
+  *e++ = 0x8B; *e++ = 0x83; *(UINT32 *)e = 0x00110118U; e += 4; /* mov eax, [ebx + 0x00110118] */
+  *e++ = 0xA8; *e++ = 0x01;                                     /* test al, 0x01 */
+  *e++ = 0x74;                                                 /* jz .gsp_dma_idle_ready */
+  UINT8 *gsp_dma_idle_break = e++;
+  *e++ = 0x49;                                                 /* dec ecx */
+  *e++ = 0x75;                                                 /* jnz gsp_dma_idle_poll */
+  *e++ = (UINT8)(gsp_dma_idle_poll - (e + 1));
+  *gsp_dma_idle_break = (UINT8)(e - (gsp_dma_idle_break + 1));
+
+  /* Write Dest, Offset, Cmd */
+  *e++ = 0x89; *e++ = 0xBB; *(UINT32 *)e = 0x00110114U; e += 4; /* mov [ebx + 0x00110114], edi */
+  *e++ = 0x89; *e++ = 0x93; *(UINT32 *)e = 0x0011011CU; e += 4; /* mov [ebx + 0x0011011C], edx */
+  *e++ = 0x89; *e++ = 0xB3; *(UINT32 *)e = 0x00110118U; e += 4; /* mov [ebx + 0x00110118], esi */
+
+  /* Advance pointers by 256 bytes per chunk */
+  *e++ = 0x81; *e++ = 0xC7; *(UINT32 *)e = 256U; e += 4;        /* add edi, 256 */
+  *e++ = 0x81; *e++ = 0xC2; *(UINT32 *)e = 256U; e += 4;        /* add edx, 256 */
+  *e++ = 0x4D;                                                 /* dec ebp */
+  *e++ = 0x75;                                                 /* jnz .gsp_dma_loop_entry */
+  *e++ = (UINT8)(gsp_dma_loop_entry - (e + 1));
+
+  /* Poll DMA Complete: [ebx + 0x00110118] & 2 == 2 (bounded timeout 50,000) */
+  *e++ = 0xB9; *e++ = 0x50; *e++ = 0xC3; *e++ = 0x00; *e++ = 0x00; /* mov ecx, 50000 */
+  UINT8 *gsp_dma_comp_poll = e;
+  *e++ = 0x8B; *e++ = 0x83; *(UINT32 *)e = 0x00110118U; e += 4; /* mov eax, [ebx + 0x00110118] */
+  *e++ = 0xA8; *e++ = 0x02;                                     /* test al, 0x02 */
+  *e++ = 0x75;                                                 /* jnz .gsp_dma_comp_done */
+  UINT8 *gsp_dma_comp_break = e++;
+  *e++ = 0x49;                                                 /* dec ecx */
+  *e++ = 0x75;                                                 /* jnz gsp_dma_comp_poll */
+  *e++ = (UINT8)(gsp_dma_comp_poll - (e + 1));
+  *gsp_dma_comp_break = (UINT8)(e - (gsp_dma_comp_break + 1));
+
+  /* Check if IMEM completed (ESI == 0x0614). If so, reload for DMEM (Count=14, Offset=0, Base=fwsec_dma+0xF200, Cmd=0x0600) */
+  *e++ = 0x66; *e++ = 0x81; *e++ = 0xFE; *e++ = 0x14; *e++ = 0x06; /* cmp si, 0x0614 */
+  *e++ = 0x75;                                                 /* jne .gsp_dma_transfers_done */
+  UINT8 *gsp_dma_done_jmp = e++;
+  *e++ = 0xB8; *(UINT32 *)e = (UINT32)((fwsec_dma + 0xF200U) >> 8); e += 4; /* mov eax, (fwsec_dma + 0xF200) >> 8 */
+  *e++ = 0x89; *e++ = 0x83; *(UINT32 *)e = 0x00110110U; e += 4; /* mov [ebx + 0x00110110], eax */
+  *e++ = 0x31; *e++ = 0xFF;                                     /* xor edi, edi */
+  *e++ = 0x31; *e++ = 0xD2;                                     /* xor edx, edx */
+  *e++ = 0xBD; *(UINT32 *)e = 14U; e += 4;                      /* mov ebp, 14 */
+  *e++ = 0xBE; *(UINT32 *)e = 0x0600U; e += 4;                  /* mov esi, 0x0600 */
+  *e++ = 0xEB;                                                 /* jmp short .gsp_dma_loop_entry */
+  *e++ = (UINT8)(gsp_dma_loop_entry - (e + 1));
+  *gsp_dma_done_jmp = (UINT8)(e - (gsp_dma_done_jmp + 1));
+
+  /* 5. GSP Falcon2 Registers (unlock_610.c:669-675) */
+  /* [ebx + 0x00111210] = 0x0B24 (sig_dmem) */
+  *e++ = 0xC7; *e++ = 0x83; *(UINT32 *)e = 0x00111210U; e += 4;
+  *(UINT32 *)e = 0x0B24U; e += 4;
+
+  /* [ebx + 0x0011119C] = 0x0400 (engine_mask) */
+  *e++ = 0xC7; *e++ = 0x83; *(UINT32 *)e = 0x0011119CU; e += 4;
+  *(UINT32 *)e = 0x0400U; e += 4;
+
+  /* [ebx + 0x00111198] = 9 (ucode_id) */
+  *e++ = 0xC7; *e++ = 0x83; *(UINT32 *)e = 0x00111198U; e += 4;
+  *(UINT32 *)e = 9U; e += 4;
+
+  /* [ebx + 0x00111180] = 1 */
+  *e++ = 0xC7; *e++ = 0x83; *(UINT32 *)e = 0x00111180U; e += 4;
+  *(UINT32 *)e = 1U; e += 4;
+
+  /* Entry Point Vector: [ebx + 0x00110104] = 0 (code_va) */
+  *e++ = 0xC7; *e++ = 0x83; *(UINT32 *)e = 0x00110104U; e += 4;
+  *(UINT32 *)e = 0U; e += 4;
+
+  /* Mailbox 0: [ebx + 0x00110040] = 0 */
+  *e++ = 0x31; *e++ = 0xC0;                                     /* xor eax, eax */
+  *e++ = 0x89; *e++ = 0x83; *(UINT32 *)e = 0x00110040U; e += 4; /* mov [ebx + 0x00110040], eax */
+
+  /* Mailbox 1: [ebx + 0x00110044] = 0 */
+  *e++ = 0x89; *e++ = 0x83; *(UINT32 *)e = 0x00110044U; e += 4; /* mov [ebx + 0x00110044], eax */
+
+  /* 6. Start GSP CPU & Bounded Poll on GSP Halt */
+  /* [ebx + 0x00110100] = 2 */
+  *e++ = 0xC7; *e++ = 0x83; *(UINT32 *)e = 0x00110100U; e += 4;
+  *(UINT32 *)e = 2U; e += 4;
+
+  /* Bounded Poll on GSP Halt (Bit 4) == 0x10 (100,000 iterations) (unlock_610.c:377) */
+  *e++ = 0xB9; *e++ = 0xA0; *e++ = 0x86; *e++ = 0x01; *e++ = 0x00; /* mov ecx, 100000 */
+  UINT8 *gsp_halt_poll = e;
+  *e++ = 0x8B; *e++ = 0x83; *(UINT32 *)e = 0x00110100U; e += 4;   /* mov eax, [ebx + 0x00110100] */
+  *e++ = 0xA8; *e++ = 0x10;                                     /* test al, 0x10 */
+  *e++ = 0x75;                                                 /* jnz .gsp_halt_done */
+  UINT8 *gsp_halt_break = e++;
+  *e++ = 0x49;                                                 /* dec ecx */
+  *e++ = 0x75;                                                 /* jnz gsp_halt_poll */
+  *e++ = (UINT8)(gsp_halt_poll - (e + 1));
+  *gsp_halt_break = (UINT8)(e - (gsp_halt_break + 1));
+
+  /* 7. Post-FWSEC 5 Telemetry Reads (+0x108..+0x118) (v1.8.64) */
+  /* +0x108: Post-FWSEC WPR2_LO (BAR0 + 0x001fa824) */
+  *e++ = 0x8B; *e++ = 0x83; *(UINT32 *)e = 0x001fa824U; e += 4; /* mov eax, [ebx + 0x001fa824] */
+  *e++ = 0xA3; *(UINT32 *)e = (UINT32)(high_telem_dest + GU_TELEM_POST_FWSEC_WPR2_LO_OFF); e += 4; /* mov [dest+0x108], eax */
+
+  /* +0x10C: Post-FWSEC WPR2_HI (BAR0 + 0x001fa828) */
+  *e++ = 0x8B; *e++ = 0x83; *(UINT32 *)e = 0x001fa828U; e += 4; /* mov eax, [ebx + 0x001fa828] */
+  *e++ = 0xA3; *(UINT32 *)e = (UINT32)(high_telem_dest + GU_TELEM_POST_FWSEC_WPR2_HI_OFF); e += 4; /* mov [dest+0x10C], eax */
+
+  /* +0x110: Post-FWSEC GSP_CPUCTL (BAR0 + 0x00110100) */
+  *e++ = 0x8B; *e++ = 0x83; *(UINT32 *)e = 0x00110100U; e += 4; /* mov eax, [ebx + 0x00110100] */
+  *e++ = 0xA3; *(UINT32 *)e = (UINT32)(high_telem_dest + GU_TELEM_POST_FWSEC_GSP_CPUCTL_OFF); e += 4; /* mov [dest+0x110], eax */
+
+  /* +0x114: Post-FWSEC GSP_MAILBOX0 (BAR0 + 0x00110040) */
+  *e++ = 0x8B; *e++ = 0x83; *(UINT32 *)e = 0x00110040U; e += 4; /* mov eax, [ebx + 0x00110040] */
+  *e++ = 0xA3; *(UINT32 *)e = (UINT32)(high_telem_dest + GU_TELEM_POST_FWSEC_GSP_MAILBOX0_OFF); e += 4; /* mov [dest+0x114], eax */
+
+  /* +0x118: Post-FWSEC Scratch (BAR0 + 0x00001438) */
+  *e++ = 0x8B; *e++ = 0x83; *(UINT32 *)e = 0x00001438U; e += 4; /* mov eax, [ebx + 0x00001438] */
+  *e++ = 0xA3; *(UINT32 *)e = (UINT32)(high_telem_dest + GU_TELEM_POST_FWSEC_SCRATCH_OFF); e += 4; /* mov [dest+0x118], eax */
 
   /* ==================== SEC2 DIAGNOSTICS & RESET CYCLE (v1.8.51) ==================== */
   /* 1. Capture initial telemetry starting at +0xC0 */
@@ -1814,13 +2055,17 @@ EFI_STATUS GuAcpiInstallShadowFacs(
       telem_page_phys,
       gpu_bar0_phys,
       root_port_link_reg,
-      gpu_pmcsr_reg
+      gpu_pmcsr_reg,
+      Gu.s3_fwsec_dma
   );
 
   if (tramp_bytes == 0) {
     GuLog("GuAcpiInstallShadowFacs: Failed to build trampoline machine code\n");
     return EFI_DEVICE_ERROR;
   }
+  GuLog("S3 Resume Trampoline: Built %u bytes at %#llx (HighTelem=%#llx, FWSEC_DMA=%#llx)\n",
+        (unsigned)tramp_bytes, (unsigned long long)trampoline_phys,
+        (unsigned long long)telem_page_phys, (unsigned long long)Gu.s3_fwsec_dma);
 
   Info->shadow_facs_phys = shadow_facs_phys;
   Info->trampoline_phys = trampoline_phys;

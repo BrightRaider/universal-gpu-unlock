@@ -132,6 +132,8 @@ typedef struct {
   UINT8 wpr_meta[256];
   BOOLEAN wpr_meta_valid;
   UINT32 fuse_version;
+  EFI_PHYSICAL_ADDRESS s3_fwsec_dma;
+  UINT32 s3_fwsec_size;
 } GU_PLATFORM;
 extern GU_PLATFORM Gu;
 

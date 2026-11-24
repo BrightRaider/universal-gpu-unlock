@@ -245,6 +245,10 @@ EFI_STATUS GuS3PrepareAndRegister(EFI_SYSTEM_TABLE *t) {
           (unsigned long long)img_size_val,
           (unsigned long long)boot_dma_val,
           (unsigned long long)sig_dma_val);
+    if (Gu.s3_fwsec_dma) {
+      GuLog("GuS3PrepareAndRegister: Persistent FWSEC: dma=%#llx sz=%#x (EfiReservedMemoryType)\n",
+            (unsigned long long)Gu.s3_fwsec_dma, (unsigned)Gu.s3_fwsec_size);
+    }
   } else if (GuAssets[4].firmware.data && GuAssets[4].firmware.size) {
     ctx->meta_size = (UINT32)GuAssets[4].firmware.size;
     memcpy(nvs_base + 0x2A000, GuAssets[4].firmware.data, ctx->meta_size);
