@@ -1,7 +1,7 @@
 # Technische Dokumentation: Universal GPU Unlock (Multi-Gen)
 
 > **Tool:** Universal GPU Unlock  
-> **Version:** v1.8.55  
+> **Version:** v1.8.56  
 > **Architekturen:** NVIDIA Ada Lovelace (RTX 40), Ampere (RTX 30), Turing (RTX 20 / CMP)  
 > **Unterstützte Betriebssysteme:** Windows 10, Windows 11, WSL2 / Ubuntu CUDA Container  
 
@@ -1103,37 +1103,34 @@ Mit `v1.8.54` habe ich den Durchbruch für den vollständigen AD102 Tensor Core 
    - Alle 8.714 Checks in 10 MSVC Host Test Suites erfolgreich (`MSVC_HOST_TESTS=PASS`).
    - Vollständiger 4-Stufen-PCIe-Teardown, 0 CMOS/RTC-Mutation, `OspmFlags = 0`.
 
-### 13.27 Die v1.8.55 Architektur: WPR-Metadaten-Persistenz in ACPI NVS, SEC2 Falcon DMA-Präzisierung & Code-Envelope-Optimierung
-In Version `v1.8.55` habe ich die Hardware- und Firmware-Anforderungen des AD102 SEC2 Falcon-Booters beim S3-Wake vollständig adressiert und die S3-Resume-Architektur gehärtet:
+### 13.28 Die v1.8.56 Architektur: Härtung des S3-Wake Falcon DMA Base-Reloads, Completion-Polling & Polling-Guard
+In Version `v1.8.56` habe ich die S3-Resume-Architektur für den AD102 SEC2 Falcon-Booter final verifiziert, gehärtet und im Code-Envelope abgesichert:
 
-1. **WPR-Metadaten-Persistenz in ACPI NVS (`src/port.h`, `src/vendor/unlock_610.c`, `src/s3_resume.c`):**
-   - **Hintergrund:** Bei AD102 (Falcon 2 / RISC-V Architektur) benötigt der Booter an der in Mailbox 0 (`0x00840040`) übergebenen physischen Adresse (`meta_dma`) ein valides 256-Byte WPR-Metadatenpaket mit Magic `0xdc3aae21371a60b3` (`GU_WPR_META_MAGIC`).
-   - **Implementierung:**
-     - In `src/port.h` habe ich `UINT8 wpr_meta[256]` und `BOOLEAN wpr_meta_valid` in `GU_PLATFORM` integriert.
-     - In `src/vendor/unlock_610.c` (`publish_v67`) sichere ich das von `gpu_unlock_wpr_meta_pack` generierte 256-Byte-Paket vollständig nach `Gu.wpr_meta`.
-     - In `src/s3_resume.c` (`GuS3PrepareAndRegister`) wird das Metadatenpaket beim Cold-Boot persistent nach `nvs_base + 0x2A000` (`meta_dma`) geschrieben.
-     - Die internen Puffer-Pointer der Metadaten werden auf die persistenten ACPI NVS Allokationen umgebogen:
-       - `boot_dma` (`+32`) -> `nvs_phys + 0x21000`
-       - `signature_dma` (`+72`) -> `nvs_phys + 0x11000`
-       - `signature_size` (`+80`) -> `64000`
+1. **Präzisierung des 32-Bit Flat-Mode DMA-Interfaces (`src/s3_facs.c`):**
+   - **IMEM DMA:** Basisadresse `0x00840110 = booter_dma >> 8`, 125 Chunks (32.000 Bytes Microcode) ab Offset 256, Cmd `0x0614`.
+   - **DMEM DMA:** Basisadresse neu geladen mit `0x00840110 = (booter_dma + 32256) >> 8`, 96 Chunks (24.576 Bytes Daten) ab Offset 0, Cmd `0x0600`.
+   - **Completion-Polling:** Nach beiden Transfers (IMEM und DMEM) wird zwingend auf DMA Completion `(0x00840118 & 2) == 2` gepollt (analog zu `falcon_dma` in `unlock_610.c`). Die Rückschleife erfolgt stack-free über `.dma_loop_entry`.
 
-2. **Präzisierung des 32-Bit Flat-Mode DMA-Interfaces (`src/s3_facs.c`):**
-   - **Analogie zu `falcon_dma` in `unlock_610.c`:**
-     - IMEM DMA: Basisadresse `[ebx + 0x00840110] = booter_dma >> 8`, 125 Chunks (32.000 Bytes Microcode) ab Offset 256, Cmd `0x0614`. Nach Abschluss des Transfers folgt ein zwingendes Bounded Completion-Polling auf `[ebx + 0x00840118] & 2 == 2`.
-     - DMEM DMA: Basisadresse `[ebx + 0x00840110] = (booter_dma + 32256) >> 8`, 96 Chunks (24.576 Bytes Daten) ab Offset 0, Cmd `0x0600`. Nach Abschluss folgt ebenfalls das Bounded Completion-Polling auf `[ebx + 0x00840118] & 2 == 2`.
+2. **Gehärtete Falcon CPU Start- & Polling-Schleife (`src/s3_facs.c`):**
+   - Start via `[ebx + 0x00840100] = 2` und Mailbox 1 `[ebx + 0x00840044] = 0`.
+   - Die Polling-Schleife prüft primär auf den Erfolgsmarker `0x67B00001` (`GU_AD102_MARKER`) in Mailbox 0 (`0x00840040`).
+   - Das Falcon Halt-Bit (`0x10` in `0x00840100`) wird erst ausgewertet, wenn `Mailbox 0 != meta_dma` ist. Dadurch wird ein vorzeitiger Abbruch durch ein noch anliegendes Halt-Bit aus dem Reset-Zyklus vor dem Falcon-Anlauf zuverlässig verhindert.
 
-3. **Härtung der Falcon CPU Start- & Polling-Logik (`src/s3_facs.c`):**
-   - Startregister: `[ebx + 0x00840100] = 2` und Mailbox 1 `[ebx + 0x00840044] = 0`.
-   - Um einen vorzeitigen Abbruch der Polling-Schleife durch ein noch anliegendes Halt-Bit (`0x10`) im allerersten Takt zu verhindern, prüft die Schleife primär auf den Marker `0x67B00001` in Mailbox 0 (`0x00840040`). Erst wenn `Mailbox 0 != meta_dma` ist (die CPU also angelaufen ist und Mailbox 0 modifiziert hat), wird `CPUCTL & 0x10` als regulärer Abschluss gewertet.
+3. **Analyse zu `0xd81a3000` (Radix DMA bei `+0x10` in `0xdc642000`):**
+   - In `unlock_610.c` wird `radix_dma` zur 3-stufigen Seitentabellen-Adressierung des ~84MB großen GSP-Firmware-Images verwendet.
+   - Der booter walkt diese Tabelle, um die Firmware nach VRAM WPR zu übertragen.
+   - Die bei Cold-Boot im physischen RAM allokierten Radix-Tabellenseiten bei `0xd81a3000` bleiben während des S3 Standby (Suspend-to-RAM) durch den Self-Refresh des Arbeitsspeichers vollständig erhalten.
+   - Da im S3-Trampolin vorab `0x06` (MSE + BME) auf Root Port und GPU programmiert wird, hat der SEC2 Falcon vollen DMA-Zugriff auf den Host-Speicher.
 
-4. **Code-Envelope-Optimierung (< 1280 Bytes):**
-   - Durch Deduplizierung der 'UNLK'-Magic im Teardown, `cmp eax, -1` (`83 F8 FF`), Single-Byte Status-Dekrement (`dec eax`), Byte-Register-Zähler in den Dummy-Loops und optimierte Port-Umschaltung konnte ich den Trampolin-Code von 1288 Bytes auf **1257 Bytes** komprimieren.
-   - Der Code liegt damit 23 Bytes unter dem harten 1280-Byte-Limit (`< 0x0500`), wodurch die Telemetrie- und Vektordaten ab `0x0500` absolut unberührt bleiben.
+4. **Regressionsschutz in Test-Suite (`tests/test_s3_resume.c`):**
+   - Ergänzung expliziter Disassembler- und Byte-Pattern-Asserts für den zweiten `0x00840110`-Write (DMEM Base Reload), die Completion-Polls und den `meta_dma`-Guard.
 
-5. **Desktop Ada Lovelace Whitelist-Erweiterung (RTX 4060 Ti & RTX 4060):**
-   - Ergänzung der PCI-IDs `0x2803`, `0x2805`, `0x2807` (RTX 4060 Ti Desktop AD106) sowie `0x2882`, `0x28a0` (RTX 4060 AD107) in `src/gpu_device_ids.h`.
+5. **Code Envelope & Effizienz:**
+   - Trampolin-Größe liegt bei exakt **1272 Bytes** und damit sicher 8 Bytes unter dem harten 1280-Byte-Limit (`< 0x0500`), ohne die Telemetriedaten ab `0x0500` zu beeinträchtigen.
    - Alle 8.714 Checks in 10 MSVC Host Test Suites erfolgreich (`MSVC_HOST_TESTS=PASS`).
-   - Authenticode-signierte Binaries `BOOTX64.EFI` und `AdaUnlockDxe.efi` erfolgreich gebaut, verifiziert und auf USB-Laufwerk `F:` synchronisiert.
+   - Vollständiger 4-Stufen-PCIe-Teardown, 0 CMOS/RTC-Mutation, `OspmFlags = 0`.
+   - Authenticode-signierte Binaries `BOOTX64.EFI` und `AdaUnlockDxe.efi` erfolgreich gebaut, verifiziert und auf alle 4 Zielpfade auf USB-Laufwerk `F:` synchronisiert.
+
 
 
 

@@ -872,15 +872,20 @@ UINT32 GuAcpiBuildTrampolineCode(
   *e++ = 0x0C; *e++ = 0x05;                                     /* or al, 0x05 */
   *e++ = 0x89; *e++ = 0x83; *(UINT32 *)e = 0x00840600U; e += 4; /* mov [ebx + 0x00840600], eax */
 
-  /* Booter DMA address low: [ebx + 0x00840110] = booter_dma >> 8 */
-  *e++ = 0xC7; *e++ = 0x83; *(UINT32 *)e = 0x00840110U; e += 4; /* mov dword [ebx + 0x00840110], imm32 */
-  *(UINT32 *)e = (UINT32)(booter_dma >> 8); e += 4;
+  /* Pass 1 Setup (IMEM):
+   * [ebx + 0x00840110] = booter_dma >> 8
+   * EDI = 0 (Dest inside IMEM)
+   * EDX = 256 (Offset in buffer ab 256)
+   * EBP = 125 (125 Chunks = 32,000 Bytes)
+   * ESI = 0x0614 (Cmd IMEM)
+   */
+  *e++ = 0xB8; *(UINT32 *)e = (UINT32)(booter_dma >> 8); e += 4; /* mov eax, booter_dma >> 8 */
+  *e++ = 0x89; *e++ = 0x83; *(UINT32 *)e = 0x00840110U; e += 4; /* mov [ebx + 0x00840110], eax */
 
   /* Booter DMA address high: [ebx + 0x00840128] = 0 */
   *e++ = 0x31; *e++ = 0xC0;                                     /* xor eax, eax */
   *e++ = 0x89; *e++ = 0x83; *(UINT32 *)e = 0x00840128U; e += 4; /* mov [ebx + 0x00840128], eax */
 
-  /* Setup IMEM DMA transfer: EDI=0 (Dest), EDX=256 (Offset), EBP=125 (Count), ESI=0x0614 (Cmd) */
   *e++ = 0x31; *e++ = 0xFF;                                     /* xor edi, edi */
   *e++ = 0xBA; *(UINT32 *)e = 256U; e += 4;                     /* mov edx, 256 */
   *e++ = 0xBD; *(UINT32 *)e = 125U; e += 4;                     /* mov ebp, 125 */
@@ -913,19 +918,7 @@ UINT32 GuAcpiBuildTrampolineCode(
   *e++ = 0x75;                                                 /* jnz .dma_loop_entry */
   *e++ = (UINT8)(dma_loop_entry - (e + 1));
 
-  /* Check if IMEM completed (ESI == 0x0614). If so, reload for DMEM (Count=96, Offset=32256, Cmd=0x0600) */
-  *e++ = 0x81; *e++ = 0xFE; *(UINT32 *)e = 0x0614U; e += 4;     /* cmp esi, 0x0614 */
-  *e++ = 0x75;                                                 /* jne .dma_transfers_done */
-  UINT8 *dma_done_jmp = e++;
-  *e++ = 0x31; *e++ = 0xFF;                                     /* xor edi, edi */
-  *e++ = 0xBA; *(UINT32 *)e = 32256U; e += 4;                   /* mov edx, 32256 */
-  *e++ = 0xBD; *(UINT32 *)e = 96U; e += 4;                      /* mov ebp, 96 */
-  *e++ = 0xBE; *(UINT32 *)e = 0x0600U; e += 4;                  /* mov esi, 0x0600 */
-  *e++ = 0xEB;                                                 /* jmp short .dma_loop_entry */
-  *e++ = (UINT8)(dma_loop_entry - (e + 1));
-  *dma_done_jmp = (UINT8)(e - (dma_done_jmp + 1));
-
-  /* Poll DMA Complete: [ebx + 0x00840118] & 2 == 2 (bounded timeout 50,000) */
+  /* Poll DMA Complete: [ebx + 0x00840118] & 2 == 2 (bounded timeout 50,000) (analog to unlock_610.c:556) */
   *e++ = 0xB9; *e++ = 0x50; *e++ = 0xC3; *e++ = 0x00; *e++ = 0x00; /* mov ecx, 50000 */
   UINT8 *dma_comp_poll = e;
   *e++ = 0x8B; *e++ = 0x83; *(UINT32 *)e = 0x00840118U; e += 4; /* mov eax, [ebx + 0x00840118] */
@@ -936,6 +929,20 @@ UINT32 GuAcpiBuildTrampolineCode(
   *e++ = 0x75;                                                 /* jnz dma_comp_poll */
   *e++ = (UINT8)(dma_comp_poll - (e + 1));
   *dma_comp_break = (UINT8)(e - (dma_comp_break + 1));
+
+  /* Check if IMEM completed (ESI == 0x0614). If so, reload for DMEM (Count=96, Offset=0, Cmd=0x0600) */
+  *e++ = 0x66; *e++ = 0x81; *e++ = 0xFE; *e++ = 0x14; *e++ = 0x06; /* cmp si, 0x0614 */
+  *e++ = 0x75;                                                 /* jne .dma_transfers_done */
+  UINT8 *dma_done_jmp = e++;
+  *e++ = 0xB8; *(UINT32 *)e = (UINT32)((booter_dma + 32256U) >> 8); e += 4; /* mov eax, (booter_dma + 32256) >> 8 */
+  *e++ = 0x89; *e++ = 0x83; *(UINT32 *)e = 0x00840110U; e += 4; /* mov [ebx + 0x00840110], eax */
+  *e++ = 0x31; *e++ = 0xFF;                                     /* xor edi, edi */
+  *e++ = 0x31; *e++ = 0xD2;                                     /* xor edx, edx */
+  *e++ = 0xBD; *(UINT32 *)e = 96U; e += 4;                      /* mov ebp, 96 */
+  *e++ = 0xBE; *(UINT32 *)e = 0x0600U; e += 4;                  /* mov esi, 0x0600 */
+  *e++ = 0xEB;                                                 /* jmp short .dma_loop_entry */
+  *e++ = (UINT8)(dma_loop_entry - (e + 1));
+  *dma_done_jmp = (UINT8)(e - (dma_done_jmp + 1));
 
   /* Falcon2 Registers */
   /* [ebx + 0x00841210] = 16 (sig_dmem) */
@@ -970,21 +977,27 @@ UINT32 GuAcpiBuildTrampolineCode(
   *e++ = 0xC7; *e++ = 0x83; *(UINT32 *)e = 0x00840100U; e += 4; /* mov dword [ebx + 0x00840100], 2 */
   *(UINT32 *)e = 2U; e += 4;
 
-  /* Bounded Polling on Mailbox 0 == 0x67b00001 (GU_AD102_MARKER) or Falcon Halt (Bit 4 in CPUCTL) (100,000 iterations) */
+  /* Bounded Polling on Mailbox 0 == 0x67b00001 (GU_AD102_MARKER) (100,000 iterations)
+   * Only sample CPUCTL Halt (Bit 4) if Mailbox 0 != meta_dma to avoid premature abort on stale Halt bit
+   */
   *e++ = 0xB9; *e++ = 0xA0; *e++ = 0x86; *e++ = 0x01; *e++ = 0x00; /* mov ecx, 100000 */
   UINT8 *halt_poll_start = e;
   *e++ = 0x8B; *e++ = 0x83; *(UINT32 *)e = 0x00840040U; e += 4;   /* mov eax, [ebx + 0x00840040] (Mailbox 0) */
   *e++ = 0x3D; *(UINT32 *)e = 0x67B00001U; e += 4;               /* cmp eax, 0x67B00001 */
   *e++ = 0x74;                                                   /* jz .halt_done */
   UINT8 *halt_break1 = e++;
+  *e++ = 0x3D; *(UINT32 *)e = meta_dma; e += 4;                   /* cmp eax, meta_dma */
+  *e++ = 0x74;                                                   /* jz .continue_poll */
+  UINT8 *halt_continue = e++;
   *e++ = 0x8B; *e++ = 0x83; *(UINT32 *)e = 0x00840100U; e += 4;   /* mov eax, [ebx + 0x00840100] (CPUCTL) */
   *e++ = 0xA8; *e++ = 0x10;                                       /* test al, 0x10 */
   *e++ = 0x75;                                                   /* jnz .halt_done */
   UINT8 *halt_break2 = e++;
+  *halt_continue = (UINT8)(e - (halt_continue + 1));              /* .continue_poll target */
   *e++ = 0x49;                                                   /* dec ecx */
   *e++ = 0x75;                                                   /* jnz halt_poll_start */
   *e++ = (UINT8)(halt_poll_start - (e + 1));
-  *halt_break1 = (UINT8)(e - (halt_break1 + 1));
+  *halt_break1 = (UINT8)(e - (halt_break1 + 1));                  /* .halt_done target */
   *halt_break2 = (UINT8)(e - (halt_break2 + 1));
 
   /* Save post-booter SEC2_CPUCTL to +0xD8 */

@@ -6,6 +6,23 @@ For packaged binaries and downloads, visit [GitHub Releases](https://github.com/
 
 ---
 
+## [v1.8.56] - 2026-11-24
+### Added & Fixed
+- **Härtung des S3-Wake Falcon DMA Base-Reloads, Completion-Polling & Polling-Guard (addresses #19):**
+  - **Präzisierung des 32-Bit Flat-Mode DMA-Interfaces (`src/s3_facs.c`):**
+    - IMEM DMA: Basisadresse `0x00840110 = booter_dma >> 8`, 125 Chunks (32.000 Bytes Microcode) ab Offset 256, Cmd `0x0614`.
+    - DMEM DMA: Basisadresse neu geladen mit `0x00840110 = (booter_dma + 32256) >> 8`, 96 Chunks (24.576 Bytes Daten) ab Offset 0, Cmd `0x0600`.
+    - Completion-Polling: Nach beiden Transfers (IMEM und DMEM) wird zwingend auf DMA Completion `(0x00840118 & 2) == 2` gepollt (analog zu `falcon_dma` in `unlock_610.c`).
+  - **Gehärtete Falcon CPU Polling-Schleife (`src/s3_facs.c`):**
+    - Die Schleife pollt primär auf den Erfolgsmarker `0x67B00001` (`GU_AD102_MARKER`) in Mailbox 0 (`0x00840040`).
+    - Das Falcon Halt-Bit (`0x10` in `0x00840100`) wird erst ausgewertet, wenn `Mailbox 0 != meta_dma` ist (verhindert vorzeitigen Abbruch durch ein noch anliegendes Halt-Bit aus dem Reset-Zyklus vor Falcon-Anlauf).
+  - **Regressionsschutz in Test-Suite (`tests/test_s3_resume.c`):**
+    - Neue Disassembler- und Byte-Pattern-Asserts für den zweiten `0x00840110`-Write (DMEM Base Reload), die Completion-Polls und den `meta_dma`-Guard.
+  - **Code Envelope & Effizienz:**
+    - Trampolin-Größe liegt bei exakt **1272 Bytes** und damit sicher 8 Bytes unter dem harten 1280-Byte-Limit (`< 0x0500`), ohne die Telemetriedaten ab `0x0500` zu beeinträchtigen.
+    - Alle 8.714 Checks in 10 MSVC Host Test Suites erfolgreich (`MSVC_HOST_TESTS=PASS`).
+    - Vollständiger 4-Stufen-PCIe-Teardown, 0 CMOS/RTC-Mutation, `OspmFlags = 0`.
+
 ## [v1.8.55] - 2026-11-24
 ### Added & Fixed
 - **WPR-Metadaten-Persistenz in ACPI NVS & Präzisierung des S3-Wake Falcon DMA-Interfaces (addresses #19):**
