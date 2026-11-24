@@ -17,6 +17,7 @@
 #include "../src/s3_resume.h"
 #include "../src/port.h"
 #include "../src/compat/compat.h"
+#include "../src/vendor/prep_610.h"
 #include <stddef.h>
 
 #include <stdarg.h>
@@ -208,17 +209,27 @@ static EFI_STATUS EFIAPI MockCalculateCrc32(VOID *Data, UINTN DataSize, UINT32 *
   return EFI_SUCCESS;
 }
 
+static UINT8 g_mock_nvs_buffer[256 * 1024];
+static UINT8 g_mock_low_tramp[4096];
+
+static EFI_STATUS EFIAPI MockFreePages(EFI_PHYSICAL_ADDRESS Memory, UINTN Pages) {
+  (VOID)Memory; (VOID)Pages;
+  return EFI_SUCCESS;
+}
+
 static EFI_STATUS EFIAPI MockAllocatePages(
     IN EFI_ALLOCATE_TYPE Type,
     IN EFI_MEMORY_TYPE MemoryType,
     IN UINTN Pages,
     IN OUT EFI_PHYSICAL_ADDRESS *Memory
 ) {
-  (VOID)Type;
-  (VOID)Pages;
   if (!Memory) return EFI_INVALID_PARAMETER;
   if (MemoryType == EfiRuntimeServicesData || MemoryType == EfiReservedMemoryType) {
     *Memory = (EFI_PHYSICAL_ADDRESS)(uintptr_t)g_mock_telemetry_page;
+  } else if (MemoryType == EfiACPIMemoryNVS && Pages >= 64) {
+    *Memory = (EFI_PHYSICAL_ADDRESS)(uintptr_t)g_mock_nvs_buffer;
+  } else if (MemoryType == EfiACPIMemoryNVS && Type == AllocateMaxAddress && *Memory <= 0x000FFFFFULL) {
+    *Memory = (EFI_PHYSICAL_ADDRESS)(uintptr_t)g_mock_low_tramp;
   } else {
     *Memory = (EFI_PHYSICAL_ADDRESS)(uintptr_t)g_mock_high_acpi;
   }
@@ -237,6 +248,21 @@ static EFI_STATUS EFIAPI MockOriginalS3Save(
   return EFI_SUCCESS;
 }
 
+static EFI_STATUS EFIAPI MockS3SaveStateWrite(
+    IN CONST EFI_S3_SAVE_STATE_PROTOCOL *This,
+    IN UINTN OpCode,
+    ...
+) {
+  (VOID)This; (VOID)OpCode;
+  return EFI_SUCCESS;
+}
+
+static EFI_S3_SAVE_STATE_PROTOCOL g_mock_s3_save_state_protocol = {
+  MockS3SaveStateWrite,
+  NULL,
+  NULL
+};
+
 static EFI_ACPI_S3_SAVE_PROTOCOL g_mock_s3_save_protocol = {
   MockOriginalS3Save
 };
@@ -251,6 +277,11 @@ static EFI_STATUS EFIAPI MockLocateProtocol(
   static EFI_GUID s3_save_guid = EFI_ACPI_S3_SAVE_PROTOCOL_GUID;
   if (memcmp(Protocol, &s3_save_guid, sizeof(EFI_GUID)) == 0) {
     *Interface = &g_mock_s3_save_protocol;
+    return EFI_SUCCESS;
+  }
+  static EFI_GUID s3_save_state_guid = EFI_S3_SAVE_STATE_PROTOCOL_GUID;
+  if (memcmp(Protocol, &s3_save_state_guid, sizeof(EFI_GUID)) == 0) {
+    *Interface = &g_mock_s3_save_state_protocol;
     return EFI_SUCCESS;
   }
   return EFI_NOT_FOUND;
@@ -1288,6 +1319,97 @@ static void TestGuAcpiBuildTrampolineCode(void) {
   printf("[7] Trampoline Generation (including 0x66 Prefix, Bridge Restore & Disassembly): OK!\n");
 }
 
+static void TestGuS3Prepare_BooterUnpackAndPatch(void) {
+  printf("[8] Testing GuS3PrepareAndRegister Booter container unpacking & fuse signature patching...\n");
+
+  /* Setup mock EFI boot services and system table */
+  EFI_BOOT_SERVICES mock_bs;
+  memset(&mock_bs, 0, sizeof(mock_bs));
+  mock_bs.Hdr.HeaderSize = sizeof(mock_bs);
+  mock_bs.AllocatePages = MockAllocatePages;
+  mock_bs.FreePages = MockFreePages;
+  mock_bs.LocateProtocol = MockLocateProtocol;
+
+  EFI_SYSTEM_TABLE local_st;
+  memset(&local_st, 0, sizeof(local_st));
+  local_st.BootServices = &mock_bs;
+
+  /* Initialize mock GPU platform */
+  Gu.bar_base = 0xFB000000ULL;
+  Gu.device_id = 0x2684;
+  Gu.is_ampere = FALSE;
+  Gu.is_turing = FALSE;
+  Gu.fuse_version = 1;
+
+  /* Build synthetic 57672-byte AD102 booter container (72-byte header + 56832-byte image + 768-byte sigs) */
+  UINT32 image_size = 56832;
+  UINT32 sig_bytes = 768;
+  UINT32 container_size = 72 + image_size + sig_bytes;
+  UINT8 *container = (UINT8 *)malloc(container_size);
+  CHECK(container != NULL, "Mock booter container allocation must succeed");
+  memset(container, 0, container_size);
+
+  /* Container Header */
+  *(UINT32 *)(container + 0) = 0x314C5442U; /* 'BTL1' */
+  *(UINT32 *)(container + 4) = 1;           /* Version 1 */
+
+  struct gpu_unlock_booter_hdr hdr;
+  memset(&hdr, 0, sizeof(hdr));
+  hdr.os_code_off = 0;
+  hdr.os_code_size = 256;
+  hdr.os_data_off = 32256;
+  hdr.os_data_size = 24576;
+  hdr.num_apps = 1;
+  hdr.app_code_off = 256;
+  hdr.app_code_size = 32000;
+  hdr.app_data_off = 256;
+  hdr.app_data_size = 0;
+  hdr.patch_loc = 32272;
+  hdr.ucode_id = 3;
+  hdr.engine_id = 1;
+  hdr.num_sigs = 2;
+  hdr.sig_bytes = 768;
+
+  memcpy(container + 8, &hdr, sizeof(hdr));
+  *(UINT32 *)(container + 8 + sizeof(hdr)) = image_size;
+  *(UINT32 *)(container + 12 + sizeof(hdr)) = sig_bytes;
+
+  /* Image markers: put 0xA5 at app_code_off (offset 256 within image -> 72 + 256 of container) */
+  memset(container + 72, 0x12, image_size);
+  container[72 + 256] = 0xA5;
+
+  /* Signatures: slot 0 (384 bytes of 0x77 for fuse_ver=1), slot 1 (384 bytes of 0x88 for fuse_ver=0) */
+  memset(container + 72 + image_size, 0x77, 384);
+  memset(container + 72 + image_size + 384, 0x88, 384);
+
+  GuAssets[0].firmware.data = container;
+  GuAssets[0].firmware.size = container_size;
+
+  /* Run GuS3PrepareAndRegister */
+  EFI_STATUS status = GuS3PrepareAndRegister(&local_st);
+  CHECK(status == EFI_SUCCESS, "GuS3PrepareAndRegister must return EFI_SUCCESS");
+
+  /* Verify in NVS buffer (g_mock_nvs_buffer) */
+  GU_S3_RESUME_CONTEXT *ctx = (GU_S3_RESUME_CONTEXT *)g_mock_nvs_buffer;
+  CHECK(ctx->magic == GU_S3_CONTEXT_MAGIC, "Context magic in NVS must match");
+  CHECK(ctx->booter_size == image_size, "Booter size in NVS context must be unpacked image_size (56832), NOT container size (57672)");
+
+  UINT8 *nvs_booter = g_mock_nvs_buffer + 0x01000;
+  /* First 4 bytes must NOT be 'BTL1' container header */
+  CHECK(*(UINT32 *)nvs_booter != 0x314C5442U, "NVS booter at +0x01000 must NOT contain 'BTL1' container header");
+
+  /* App code offset 256 must match unpacked image byte */
+  CHECK(nvs_booter[256] == 0xA5, "NVS booter at +0x01000 + 256 must match unpacked app code byte 0xA5");
+
+  /* Patch loc 32272 must have received signature for fuse_ver=1 (0x77) */
+  CHECK(nvs_booter[32272] == 0x77, "NVS booter at patch_loc (32272) must contain patched fuse_ver=1 signature (0x77)");
+
+  free(container);
+  GuAssets[0].firmware.data = NULL;
+  GuAssets[0].firmware.size = 0;
+  printf("[8] GuS3PrepareAndRegister Booter container unpacking & fuse signature patching: OK!\n");
+}
+
 int main(void) {
   setvbuf(stdout, NULL, _IONBF, 0);
   printf("=== Universal S3 Persistence Resume Engine Test Suite ===\n");
@@ -1300,6 +1422,7 @@ int main(void) {
   TestGuS3GuidsAndOpcodes();
   TestGuAcpiFacsDiscoveryAndPatching();
   TestGuAcpiBuildTrampolineCode();
+  TestGuS3Prepare_BooterUnpackAndPatch();
 
   printf("=== ALL S3 RESUME TESTS PASSED (%u checks) [OK] ===\n", g_checks);
   fflush(stdout);

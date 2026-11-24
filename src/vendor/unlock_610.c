@@ -773,6 +773,7 @@ static int patch_booter(struct unlock_transaction_work *work)
 	}
 	dev_info(&work->pdev->dev, "Booter signature: fuse_raw=%#x version=%u signatures=%u size=%u\n",
 		fuse_raw, fuse_ver, work->booter_hdr.num_sigs, work->booter_hdr.sig_bytes);
+	Gu.fuse_version = fuse_ver;
 	return GU_RESULT(gpu_unlock_booter_patch(work->booter_cpu, work->booter_image_size,
 				       &work->booter_hdr,
 				       data + 72 + work->booter_image_size,

@@ -124,6 +124,7 @@ typedef struct {
   EFI_STATUS s3_status;
   UINT8 wpr_meta[256];
   BOOLEAN wpr_meta_valid;
+  UINT32 fuse_version;
 } GU_PLATFORM;
 extern GU_PLATFORM Gu;
 

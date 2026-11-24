@@ -26,7 +26,7 @@ $tests = [ordered]@{
     'test_gpu_topology'  = @('gpu_topology.c', 'gpu_inventory.c')
     'test_gpu_discovery' = @('gpu_inventory.c')
     'test_turing_local'  = @()
-    'test_s3_resume'     = @('s3_resume.c', 's3_facs.c')
+    'test_s3_resume'     = @('s3_resume.c', 's3_facs.c', 'vendor\prep_610.c')
     'test_multi_gpu_second_preflight' = @()
     'test_already_unlocked' = @()
 }

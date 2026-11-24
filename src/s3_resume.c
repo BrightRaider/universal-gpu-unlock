@@ -4,6 +4,9 @@
 #include "port.h"
 #include "profile.h"
 #include "compat/compat.h"
+#include "vendor/prep_610.h"
+
+#define GU_BOOTER_CONTAINER_MAGIC 0x314C5442U /* 'BTL1' */
 
 extern GU_ASSET GuAssets[5];
 
@@ -174,8 +177,39 @@ EFI_STATUS GuS3PrepareAndRegister(EFI_SYSTEM_TABLE *t) {
   ctx->meta_dma = nvs_phys + 0x2A000;
 
   if (GuAssets[0].firmware.data && GuAssets[0].firmware.size) {
-    ctx->booter_size = (UINT32)GuAssets[0].firmware.size;
-    memcpy(nvs_base + 0x01000, GuAssets[0].firmware.data, ctx->booter_size);
+    const UINT8 *bdata = (const UINT8 *)GuAssets[0].firmware.data;
+    UINTN bsize = GuAssets[0].firmware.size;
+    if (bsize >= 72 && *(const UINT32 *)bdata == GU_BOOTER_CONTAINER_MAGIC) {
+      /* BooterLoad container: unpack 72-byte header, extract executable image and patch fuse signature */
+      struct gpu_unlock_booter_hdr hdr;
+      memcpy(&hdr, bdata + 8, sizeof(hdr));
+      UINT32 image_size = *(const UINT32 *)(bdata + 8 + sizeof(hdr));
+      UINT32 sig_bytes = *(const UINT32 *)(bdata + 12 + sizeof(hdr));
+
+      if (image_size && image_size <= 65536 - 4096 &&
+          72 + image_size + sig_bytes <= bsize) {
+        memcpy(nvs_base + 0x01000, bdata + 72, image_size);
+        ctx->booter_size = image_size;
+
+        /* Resolve fuse version: use cold-boot sampled version if available, or read GPU BAR0 */
+        UINT32 fuse_ver = Gu.fuse_version ? Gu.fuse_version : 1;
+        if (!Gu.fuse_version && !Gu.is_turing && Gu.bar_base) {
+          UINT32 index = (hdr.ucode_id > 0) ? (hdr.ucode_id - 1) : 0;
+          UINT32 fuse_raw = *(volatile UINT32 *)(UINTN)(Gu.bar_base + GU_FUSE_SEC2_UCODE1 + index * 4);
+          if (fuse_raw != 0xFFFFFFFFU && (fuse_raw & 0xFFFF0000U) != 0xBADF0000U) {
+            fuse_ver = gpu_unlock_fuse_version(fuse_raw);
+          }
+        }
+        gpu_unlock_booter_patch(nvs_base + 0x01000, image_size, &hdr,
+                                bdata + 72 + image_size, sig_bytes, fuse_ver);
+      } else {
+        ctx->booter_size = (UINT32)bsize;
+        memcpy(nvs_base + 0x01000, bdata, ctx->booter_size);
+      }
+    } else {
+      ctx->booter_size = (UINT32)bsize;
+      memcpy(nvs_base + 0x01000, bdata, ctx->booter_size);
+    }
   }
   if (GuAssets[1].firmware.data && GuAssets[1].firmware.size) {
     ctx->v67_size = (UINT32)GuAssets[1].firmware.size;

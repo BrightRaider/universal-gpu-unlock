@@ -1,7 +1,7 @@
 # Technische Dokumentation: Universal GPU Unlock (Multi-Gen)
 
 > **Tool:** Universal GPU Unlock  
-> **Version:** v1.8.56  
+> **Version:** v1.8.57  
 > **Architekturen:** NVIDIA Ada Lovelace (RTX 40), Ampere (RTX 30), Turing (RTX 20 / CMP)  
 > **Unterstützte Betriebssysteme:** Windows 10, Windows 11, WSL2 / Ubuntu CUDA Container  
 
@@ -1130,6 +1130,30 @@ In Version `v1.8.56` habe ich die S3-Resume-Architektur für den AD102 SEC2 Falc
    - Alle 8.714 Checks in 10 MSVC Host Test Suites erfolgreich (`MSVC_HOST_TESTS=PASS`).
    - Vollständiger 4-Stufen-PCIe-Teardown, 0 CMOS/RTC-Mutation, `OspmFlags = 0`.
    - Authenticode-signierte Binaries `BOOTX64.EFI` und `AdaUnlockDxe.efi` erfolgreich gebaut, verifiziert und auf alle 4 Zielpfade auf USB-Laufwerk `F:` synchronisiert.
+
+### 13.29 Die v1.8.57 Architektur: Entpacken des Booter-Container-Headers & dynamisches Fuse-Signatur-Patching in ACPI NVS
+In Version `v1.8.57` habe ich die finale Ursache für den RISC-V Falcon Halt/Trap während des S3-Wake isoliert und behoben:
+
+1. **Identifikation des 72-Byte Booter-Container-Headers (`booter_load_ad102.bin`):**
+   - Die Firmware-Datei besitzt einen 72-Byte Container-Header (`BOOTER_MAGIC` `0x314C5442` / `BTL1`, Struct `gpu_unlock_booter_hdr`).
+   - In Cold-Boot entpackte `unlock_610.c` das ausführbare Image ab Byte-Offset 72 (`image_size = 56.832`) und patchte die Fuse-Signatur an `patch_loc = 32.272` (DMEM Offset 16).
+   - In S3-Resume vor v1.8.57 wurde fälschlicherweise das rohe Dateipaket inklusive 72-Byte-Header nach `nvs_base + 0x01000` kopiert. Dadurch waren alle DMA-Transfers (IMEM `app_code_off = 256`, DMEM `os_data_off = 32.256`) um 72 Bytes verschoben und die Signatur unkorrigiert, wodurch der RISC-V-Kern im S3-Wake sofort auf ungültige Instruktionen stieß und in den Boot-ROM Reset-Vector trapte (`0x00841380 = 0x00080000`, `0x00841388 = 0x00000010` halted).
+
+2. **Dynamisches Entpacken und Signatur-Patching beim S3-Prepare (`src/s3_resume.c`):**
+   - Beim Cold-Boot wird in `GuS3PrepareAndRegister` der 72-Byte-Header verifiziert (`magic == GU_BOOTER_MAGIC`, `version == 1`).
+   - Das rohe ausführbare Image (`data + 72`, `image_size = 56.832`) wird nach `nvs_base + 0x01000` extrahiert.
+   - Die Fuse-Signatur wird an `nvs_base + 0x01000 + patch_loc` (`32.272`) dynamisch über `gpu_unlock_booter_patch()` anhand der aktiven GPU Fuse-Version gepatcht (identisch zum Cold-Boot).
+   - `ctx->booter_size = image_size` wird exakt auf 56.832 Bytes gesetzt.
+   - Sichern der `Gu.fuse_version` in `src/vendor/unlock_610.c` und `src/port.h`.
+
+3. **Bitgenaue Verifikation & Regressionsschutz (`tests/test_s3_resume.c`):**
+   - Neuer dedizierter Host-Unit-Test `TestGuS3Prepare_BooterUnpackAndPatch` prüft das Entpacken, die Image-Größe (56.832 Bytes) und das Fuse-Signatur-Patching an Offset 32.272.
+   - Alle 8.721 Checks in allen 10 MSVC Host Test Suites erfolgreich (`MSVC_HOST_TESTS=PASS`).
+
+4. **Code Envelope & Effizienz:**
+   - Trampolin-Größe bleibt bei schlanken **1272 Bytes** (`< 1280` Bytes Limit / `< 0x0500`).
+   - Vollständiger 4-Stufen-PCIe-Teardown, 0 CMOS/RTC-Mutation, `OspmFlags = 0`.
+   - Authenticode-signierte Binaries `BOOTX64.EFI` und `AdaUnlockDxe.efi` erfolgreich gebaut, signiert und auf alle 4 Zielpfade auf USB-Laufwerk `F:` synchronisiert.
 
 
 
