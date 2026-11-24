@@ -6,6 +6,26 @@ For packaged binaries and downloads, visit [GitHub Releases](https://github.com/
 
 ---
 
+## [v1.9.0] - 2026-11-24
+### Added & Changed (Universal-S3 Phase 1)
+- **Board-, Chipsatz-, VBIOS- & Ada-Universalität im `[P]`-S3-Trampolin (`addresses #19`):**
+  - **Dynamische PCIe-Brückentopologie (Intel, AMD, beliebige Slots & PCIe-Switches):**
+    - `GuDiscoverUpstreamBridgeChain()` (`src/s3_facs.c`) ermittelt zur UEFI-Bootzeit über `EFI_PCI_IO_PROTOCOL` herstellerunabhängig den kompletten vorgelagerten Brückenpfad zur GPU (`sec <= target_bus <= sub`, sortiert Root -> Leaf, bis `GU_S3_MAX_BRIDGES = 4`) ohne hartes `0x1022`-/AMD-`0:3:1`-/`0x002D2D00`-Hardcoding.
+    - `GU_S3_RESUME_CONTEXT` (`version = 2`, `216` Bytes, `src/s3_save.h`) und die Low-Trampolin-Brückentabelle (`+0x0B40`) versorgen sowohl den 16-Bit-Real-Mode-Restore (`.rm_br_loop`, Root -> Leaf), das 32-Bit-PM-Arming (`.pm_br_arm_loop`, Root -> Leaf) als auch den 4-Stufen-Teardown (Leaf -> Root unter bewusster Beibehaltung der Bridge-Busnummern an Offset `0x18`).
+    - Exakte 16-MB-inklusive Berechnung des Bridge Memory Windows (`0x20`) aus `bar0_target`: `Base = (bar0_target >> 16) & 0xFFF0`, `Limit = ((bar0_target + 0x00FFFFFF) >> 16) & 0xFFF0` (statt statischem `0xFC00FB00`).
+    - Durchgehende Verwendung des dynamischen GPU-BDF (`gpu_bdf_base`) im Trampolin sowie Dev/Func-fähiger `GuFindGpuPmcsrReg()`-Erkennung.
+  - **Dynamische GPU- & VBIOS-Geometrie (alle Ada-Karten & AIB-VBIOSes):**
+    - Übergabe von PCI VID/DID (`ctx->pci_id`), `PMC_BOOT_0` (`Gu.chip_id` -> `ctx->chip_id`) sowie der im Kaltstart geparsten FWSEC- (`fwsec_imem_chunks`, `fwsec_dmem_chunks`, `fwsec_data_off`, `fwsec_sig_dmem`, `fwsec_engine_mask`, `fwsec_ucode_id`) und SEC2-Booter-Geometrie (`booter_app_code_off`, `booter_imem_chunks`, `booter_os_data_off`, `booter_dmem_chunks`, `booter_sig_dmem`, `booter_engine_mask`, `booter_ucode_id`) aus `src/vendor/unlock_610.c` und `src/s3_resume.c` ins 32-Bit-Trampolin (`GuAcpiBuildTrampolineCodeEx`).
+  - **Plattform-Härtung für fremde Mainboards:**
+    - **Pre-FWSEC GFW-BOOT- / VRAM-Gate (`src/s3_facs.c`):** Unmittelbar vor FWSEC-FRTS pollt das Trampolin Port-`0x80`-getaktet (bis `2.000.000` Iterationen / ~2 s Budget) auf `(BAR0 + 0x00118234) != 0xFFFFFFFF && ((BAR0 + 0x00118234) & 0xFF) == 0xFF` sowie `(BAR0 + 0x00100CE0) != 0 && != 0xFFFFFFFF` (auf schnellen Boards Ausstieg beim 1. Read; auf langsamen Boards Schutz gegen D3cold-Races).
+    - **Striktes Conventional-RAM-Limit `< 0x000A0000` (`src/s3_resume.c`):** Fallback-Allokation des 16-Bit-Trampolins in den Legacy-VGA/Option-ROM-Bereich `0xA0000..0xFFFFF` ersatzlos entfernt.
+    - **ACPI FADT Bit 21 (`S0ix`) & `XFirmwareWakingVector` Preflight (`src/s3_facs.c`, `src/s3_resume.c`, `src/app.c`):** Prüfung auf `LOW_POWER_S0_IDLE_CAPABLE` (`1 << 21`) und nicht-null `XFirmwareWakingVector` mit expliziter Warnung im Log und UEFI-Statusmonitor bei Modern-Standby-Boards.
+    - Trampolin-Codegröße: `2.281` Bytes (innerhalb des `0x0A00` / `2.560`-Byte-Envelopes; `279` Bytes Reserve).
+  - **Sicherung & Verifikation:**
+    - Git-Tag `v1.8.67-golden` auf Basis-Commit `f01a74b` angelegt.
+    - `tests/test_s3_resume.c` um Test `[11]` für Mock-Topologien erweitert: Intel Root Port (`0x8086`, Bus `0x01`), 2-stufiger PCIe-Switch (inkl. Ausschluss unbeteiligter Sibling-Ports), `BAR0 = 0xD0000000 -> Window 0xD0F0D000`, `RTX 4080` (`0x270410DE`, custom `ChipID` & FWSEC-/SEC2-Chunks), striktes `< 0x000A0000`-Allokations-Gate und FADT-Bit-21-S0ix-Warnung.
+    - Alle `9.782` Checks in `test_s3_resume.c` sowie das gesamte 12-Suite-Paket erfolgreich bestanden (`MSVC_HOST_TESTS=PASS`).
+
 ## [v1.8.67] - 2026-11-24
 ### Added & Fixed
 - **Port-`0x80`-getakteter SEC2-Booter-Poll & `[meta_dma]`-Probe `+0x14C` (addresses #19):**

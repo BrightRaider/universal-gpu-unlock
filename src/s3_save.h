@@ -61,13 +61,20 @@ struct _EFI_S3_SAVE_STATE_PROTOCOL {
 };
 
 #define GU_S3_CONTEXT_MAGIC 0x53335F50U /* "S3_P" */
+#define GU_S3_MAX_BRIDGES   4U
 
 #pragma pack(push, 1)
 typedef struct {
+  UINT32 bdf_base;  /* 0x80000000 | (bus<<16) | (dev<<11) | (func<<8), or 0 if unused */
+  UINT32 bus_val;   /* Expected 24-bit bus register: Pri | (Sec << 8) | (Sub << 16) */
+  UINT32 link_reg;  /* 0xCF8 address for PCIe Link Ctrl/Status (Cap 0x10 + 0x10) */
+} GU_S3_BRIDGE_DESC;
+
+typedef struct {
   UINT32 magic;             /* GU_S3_CONTEXT_MAGIC */
-  UINT32 version;           /* Context layout version (1) */
+  UINT32 version;           /* Context layout version (2 in v1.9.0) */
   UINT64 bar_base;          /* GPU BAR0 physical base address */
-  UINT32 pci_id;            /* Device / Vendor ID */
+  UINT32 pci_id;            /* Device / Vendor ID (DID<<16 | 0x10DE) */
   UINT16 segment;           /* PCI Segment */
   UINT8  bus;               /* PCI Bus */
   UINT8  device;            /* PCI Device */
@@ -99,8 +106,29 @@ typedef struct {
   /* Dynamically discovered PCIe registers for S3 resume reconnaissance */
   UINT32 root_port_link_reg; /* 0xCF8 address for Root Port PCIe Link Control/Status (Cap 0x10 + 0x10) */
   UINT32 gpu_pmcsr_reg;      /* 0xCF8 address for GPU PMCSR (Cap 0x01 + 0x04) */
+
+  /* v1.9.0: Dynamic chip ID, upstream bridge chain (root->leaf), and VBIOS geometries */
+  UINT32 chip_id;            /* Expected PMC_BOOT_0 Chip ID (e.g. 0x192000A1) */
+  UINT32 bridge_count;       /* Number of valid entries in bridges[] (0..GU_S3_MAX_BRIDGES) */
+  GU_S3_BRIDGE_DESC bridges[GU_S3_MAX_BRIDGES];
+  UINT32 fwsec_imem_chunks;  /* FWSEC IMEM 256-byte chunk count */
+  UINT32 fwsec_dmem_chunks;  /* FWSEC DMEM 256-byte chunk count */
+  UINT32 fwsec_data_off;     /* Offset of DMEM inside fwsec_dma */
+  UINT32 fwsec_sig_dmem;     /* FWSEC PKC signature DMEM offset */
+  UINT32 fwsec_engine_mask;  /* FWSEC target engine mask */
+  UINT32 fwsec_ucode_id;     /* FWSEC ucode ID */
+  UINT32 booter_app_code_off; /* SEC2 Booter IMEM offset / code_va */
+  UINT32 booter_imem_chunks;  /* SEC2 Booter IMEM 256-byte chunk count */
+  UINT32 booter_os_data_off;  /* SEC2 Booter DMEM offset inside booter_dma */
+  UINT32 booter_dmem_chunks;  /* SEC2 Booter DMEM 256-byte chunk count */
+  UINT32 booter_sig_dmem;     /* SEC2 Booter signature offset inside DMEM */
+  UINT32 booter_engine_mask;  /* SEC2 Booter engine mask */
+  UINT32 booter_ucode_id;     /* SEC2 Booter ucode ID */
 } GU_S3_RESUME_CONTEXT;
 #pragma pack(pop)
+
+#define GU_S3_CTX_V1_SIZE           108U
+#define GU_S3_CTX_V2_SIZE           216U
 
 /* Context field byte offsets for machine code generation */
 #define GU_S3_CTX_OFF_MAGIC         0x00
@@ -117,3 +145,6 @@ typedef struct {
 #define GU_S3_CTX_OFF_SEC2_MARKER   0x60
 #define GU_S3_CTX_OFF_ROOT_PORT_LNK 0x64
 #define GU_S3_CTX_OFF_GPU_PMCSR     0x68
+#define GU_S3_CTX_OFF_CHIP_ID       0x6C
+#define GU_S3_CTX_OFF_BRIDGE_CNT    0x70
+#define GU_S3_CTX_OFF_BRIDGES       0x74

@@ -116,7 +116,7 @@ EFI_STATUS GuS3PrepareAndRegister(EFI_SYSTEM_TABLE *t) {
   UINT8 *nvs_base = (UINT8 *)(UINTN)nvs_phys;
   memset(nvs_base, 0, 64 * 4096);
 
-  /* Allocate 1 low page (<1MB) of EfiACPIMemoryNVS for S3 Resume Trampoline */
+  /* Allocate 1 low page strictly below conventional 0x000A0000 (<640KB, never VGA/ROM 0xA0000..0xFFFFF) (v1.9.0) */
   EFI_PHYSICAL_ADDRESS low_tramp_phys = 0x0009FFFFULL;
   EFI_STATUS tramp_alloc = t->BootServices->AllocatePages(
       AllocateMaxAddress,
@@ -124,19 +124,21 @@ EFI_STATUS GuS3PrepareAndRegister(EFI_SYSTEM_TABLE *t) {
       1,
       &low_tramp_phys
   );
-  if (EFI_ERROR(tramp_alloc) || !low_tramp_phys) {
-    low_tramp_phys = 0x000FFFFFULL;
-    tramp_alloc = t->BootServices->AllocatePages(
-        AllocateMaxAddress,
-        EfiACPIMemoryNVS,
-        1,
-        &low_tramp_phys
-    );
+#if !defined(GU_S3_HOST_TEST)
+  if (!EFI_ERROR(tramp_alloc) && (!low_tramp_phys || (low_tramp_phys + 4096ULL) > 0x000A0000ULL)) {
+    if (low_tramp_phys && t->BootServices->FreePages) {
+      t->BootServices->FreePages(low_tramp_phys, 1);
+    }
+    low_tramp_phys = 0;
+    tramp_alloc = EFI_OUT_OF_RESOURCES;
   }
+#endif
   if (EFI_ERROR(tramp_alloc) || !low_tramp_phys) {
-    GuLog("GuS3PrepareAndRegister: Failed to allocate low (<1MB) ACPI NVS page (%#llx)\n",
+    GuLog("GuS3PrepareAndRegister: Failed to allocate conventional (<0x000A0000) ACPI NVS page (%#llx)\n",
           (unsigned long long)tramp_alloc);
-    t->BootServices->FreePages(nvs_phys, 64);
+    if (t->BootServices->FreePages) {
+      t->BootServices->FreePages(nvs_phys, 64);
+    }
     Gu.s3_registered = FALSE;
     Gu.s3_status = tramp_alloc;
     return tramp_alloc;
@@ -146,13 +148,32 @@ EFI_STATUS GuS3PrepareAndRegister(EFI_SYSTEM_TABLE *t) {
 
   GU_S3_RESUME_CONTEXT *ctx = (GU_S3_RESUME_CONTEXT *)nvs_base;
   ctx->magic = GU_S3_CONTEXT_MAGIC;
-  ctx->version = 1;
+  ctx->version = 2;
   ctx->bar_base = Gu.bar_base;
-  ctx->pci_id = Gu.device_id;
+  ctx->pci_id = Gu.device_id ? (((UINT32)Gu.device_id << 16) | 0x10DEU) : 0U;
+  ctx->chip_id = Gu.chip_id;
   ctx->is_ampere = Gu.is_ampere;
   ctx->is_turing = Gu.is_turing;
   ctx->val_ss0 = 0x88888888U;
   ctx->val_ss1 = 0x00000008U;
+
+  if (Gu.s3_fwsec_imem_size || Gu.s3_fwsec_dmem_size) {
+    ctx->fwsec_imem_chunks = (Gu.s3_fwsec_imem_size + 255U) / 256U;
+    ctx->fwsec_dmem_chunks = (Gu.s3_fwsec_dmem_size + 255U) / 256U;
+    ctx->fwsec_data_off = Gu.s3_fwsec_data_off;
+    ctx->fwsec_sig_dmem = Gu.s3_fwsec_pkc_off;
+    ctx->fwsec_engine_mask = Gu.s3_fwsec_engine_mask;
+    ctx->fwsec_ucode_id = Gu.s3_fwsec_ucode_id;
+  }
+  if (Gu.s3_booter_app_code_size || Gu.s3_booter_os_data_size) {
+    ctx->booter_app_code_off = Gu.s3_booter_app_code_off;
+    ctx->booter_imem_chunks = (Gu.s3_booter_app_code_size + 255U) / 256U;
+    ctx->booter_os_data_off = Gu.s3_booter_os_data_off;
+    ctx->booter_dmem_chunks = (Gu.s3_booter_os_data_size + 255U) / 256U;
+    ctx->booter_sig_dmem = Gu.s3_booter_sig_dmem;
+    ctx->booter_engine_mask = Gu.s3_booter_engine_id;
+    ctx->booter_ucode_id = Gu.s3_booter_ucode_id;
+  }
 
   /* Resolve PCI BDF location to configure Command register upon S3 wake */
   if (Gu.pci && Gu.pci->GetLocation) {
@@ -217,6 +238,15 @@ EFI_STATUS GuS3PrepareAndRegister(EFI_SYSTEM_TABLE *t) {
             72 + image_size + sig_bytes <= bsize) {
           memcpy(nvs_base + 0x01000, bdata + 72, image_size);
           ctx->booter_size = image_size;
+          if (!ctx->booter_imem_chunks && hdr.app_code_size) {
+            ctx->booter_app_code_off = hdr.app_code_off;
+            ctx->booter_imem_chunks = (hdr.app_code_size + 255U) / 256U;
+            ctx->booter_os_data_off = hdr.os_data_off;
+            ctx->booter_dmem_chunks = (hdr.os_data_size + 255U) / 256U;
+            ctx->booter_sig_dmem = hdr.patch_loc - hdr.os_data_off;
+            ctx->booter_engine_mask = hdr.engine_id;
+            ctx->booter_ucode_id = hdr.ucode_id;
+          }
 
           /* Resolve fuse version: use cold-boot sampled version if available, or read GPU BAR0 */
           UINT32 fuse_ver = Gu.fuse_version ? Gu.fuse_version : 1;
@@ -334,6 +364,17 @@ EFI_STATUS GuS3PrepareAndRegister(EFI_SYSTEM_TABLE *t) {
   GU_ACPI_FACS_INFO facs_info;
   EFI_STATUS facs_status = GuAcpiInstallShadowFacs(t, ctx, nvs_base, nvs_phys, low_tramp_base, low_tramp_phys, &facs_info);
   if (!EFI_ERROR(facs_status) && facs_info.found) {
+    Gu.s3_s0ix_warning = facs_info.s0ix_warning;
+    Gu.s3_fadt_flags = facs_info.fadt_flags;
+    Gu.s3_xfirmware_waking_vector = facs_info.original_xfirmware_waking_vector;
+    if (facs_info.s0ix_warning) {
+      GuLog("S3 Preflight WARNING: Board advertises Modern Standby (S0ix, FADT Flags=%#08x). Enable classic ACPI S3 in BIOS if wake stays stock.\n",
+            (unsigned)facs_info.fadt_flags);
+    }
+    if (facs_info.original_xfirmware_waking_vector != 0) {
+      GuLog("S3 Preflight WARNING: Real FACS had XFirmwareWakingVector=%#llx (cleared for 16-bit Real Mode wake).\n",
+            (unsigned long long)facs_info.original_xfirmware_waking_vector);
+    }
     GuLog("S3 Persistence: Universal ACPI FACS Trampoline armed successfully!\n");
     Gu.s3_registered = TRUE;
     Gu.s3_status = EFI_SUCCESS;

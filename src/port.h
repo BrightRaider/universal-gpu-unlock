@@ -143,6 +143,23 @@ typedef struct {
   VOID *s3_meta_cpu;
   EFI_PHYSICAL_ADDRESS s3_radix_dma;
   UINT64 s3_image_size;
+  UINT32 chip_id;
+  UINT32 s3_fwsec_imem_size;
+  UINT32 s3_fwsec_dmem_size;
+  UINT32 s3_fwsec_data_off;
+  UINT32 s3_fwsec_pkc_off;
+  UINT32 s3_fwsec_engine_mask;
+  UINT32 s3_fwsec_ucode_id;
+  UINT32 s3_booter_app_code_off;
+  UINT32 s3_booter_app_code_size;
+  UINT32 s3_booter_os_data_off;
+  UINT32 s3_booter_os_data_size;
+  UINT32 s3_booter_sig_dmem;
+  UINT32 s3_booter_engine_id;
+  UINT32 s3_booter_ucode_id;
+  BOOLEAN s3_s0ix_warning;
+  UINT32 s3_fadt_flags;
+  UINT64 s3_xfirmware_waking_vector;
 } GU_PLATFORM;
 extern GU_PLATFORM Gu;
 

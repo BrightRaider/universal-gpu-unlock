@@ -51,6 +51,17 @@
 #define GU_TRAMP_PM_GDTR_OFF           0x0B08U
 #define GU_TRAMP_GDT_BASE_OFF          0x0B10U
 
+/* Multi-Bridge Topology Table within Low Trampoline Memory (v1.9.0: 0x0B40..0x0B8F, 4 entries + sentinel) */
+#define GU_TRAMP_BRIDGE_TBL_OFF        0x0B40U
+#define GU_TRAMP_BRIDGE_ENTRY_SIZE     16U
+#define GU_TRAMP_BRIDGE_BDF_OFF        0x00U
+#define GU_TRAMP_BRIDGE_BUS_OFF        0x04U
+#define GU_TRAMP_BRIDGE_SAVED_CMD_OFF  0x08U
+#define GU_TRAMP_BRIDGE_SAVED_MEM_OFF  0x0CU
+
+/* ACPI FADT Flags Bit 21 (ACPI 5.0+ LOW_POWER_S0_IDLE_CAPABLE) */
+#define GU_ACPI_FADT_FLAG_LOW_POWER_S0_IDLE (1U << 21)
+
 /* S3 Wake Hardware Unlock Telemetry Offsets within Non-NVS Telemetry Page (v1.8.47 / v1.8.59) */
 #define GU_TELEM_UNLOCK_MAGIC          0x554E4C4BU /* "UNLK" */
 #define GU_TELEM_UNLOCK_MAGIC_OFF      0x0080U /* "UNLK" (0x554E4C4B) */
@@ -148,6 +159,8 @@ typedef struct {
   UINT8  shadow_xsdt_checksum;
   BOOLEAN s3_save_hook_installed;
   BOOLEAN ebs_hook_installed;
+  UINT32  fadt_flags;
+  BOOLEAN s0ix_warning;
 } GU_ACPI_FACS_INFO;
 #pragma pack(pop)
 
@@ -178,6 +191,10 @@ EFI_STATUS GuAcpiInstallShadowFacs(
     OUT GU_ACPI_FACS_INFO *Info
 );
 
+#ifdef GU_S3_HOST_TEST
+VOID GuAcpiResetShadowStateForTest(VOID);
+#endif
+
 /*
  * ExitBootServices Sandwich Hook management (Plan C):
  * GuAcpiInstallEbsHook hooks gBS->ExitBootServices right before starting Windows.
@@ -193,6 +210,20 @@ UINT32 GuAcpiRestoreConfigTable(VOID);
  * Assembles the S3 Resume Trampoline machine code into the designated buffer.
  * Returns the size in bytes of the generated trampoline code.
  */
+UINT32 GuAcpiBuildTrampolineCodeEx(
+    OUT UINT8 *Buffer,
+    IN UINT32 BufferSize,
+    IN EFI_PHYSICAL_ADDRESS TrampolinePhys,
+    IN EFI_PHYSICAL_ADDRESS ContextPhys,
+    IN EFI_PHYSICAL_ADDRESS ShadowFacsPhys,
+    IN EFI_PHYSICAL_ADDRESS TelemetryPhys,
+    IN EFI_PHYSICAL_ADDRESS GpuBar0Phys,
+    IN UINT32 RootPortLinkReg,
+    IN UINT32 GpuPmcsrReg,
+    IN EFI_PHYSICAL_ADDRESS FwsecDmaPhys,
+    IN CONST GU_S3_RESUME_CONTEXT *Context OPTIONAL
+);
+
 UINT32 GuAcpiBuildTrampolineCode(
     OUT UINT8 *Buffer,
     IN UINT32 BufferSize,

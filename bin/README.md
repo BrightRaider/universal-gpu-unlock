@@ -4,7 +4,7 @@
 ### High-Performance Tensor Core Rate-Limiter Bypass for NVIDIA GPUs
 
 [![GitHub Release](https://img.shields.io/github/v/release/BrightRaider/universal-gpu-unlock?color=blue&logo=github)](https://github.com/BrightRaider/universal-gpu-unlock/releases/latest)
-[![Release Version](https://img.shields.io/badge/Release-v1.8.67%20(Latest)-blue?logo=github)](https://github.com/BrightRaider/universal-gpu-unlock/releases/tag/v1.8.67)
+[![Release Version](https://img.shields.io/badge/Release-v1.9.0%20(Latest)-blue?logo=github)](https://github.com/BrightRaider/universal-gpu-unlock/releases/tag/v1.9.0)
 [![Downloads](https://img.shields.io/github/downloads/BrightRaider/universal-gpu-unlock/total?color=green&logo=github)](https://github.com/BrightRaider/universal-gpu-unlock/releases)
 [![Stars](https://img.shields.io/github/stars/BrightRaider/universal-gpu-unlock?style=social)](https://github.com/BrightRaider/universal-gpu-unlock)
 [![Safety](https://img.shields.io/badge/Safety-RAM--Only-success.svg)](#-safety--anti-cheat)
@@ -31,7 +31,7 @@
    - *(Existing USB sticks can be updated by running `Update-USB.bat`).*
 2. **Boot & Unlock:** Restart your PC, open your boot menu (`F8` / `F11` / `F12`), boot from the USB drive, and select:
    - `[U]` **Standard Unlock:** RAM-only, temporary unlock (reverts cleanly to factory stock on power off). Multi-GPU systems unlock all cards sequentially.
-   - `[P]` **S3 Persistence:** Verified sleep-aware unlock mode via ACPI FACS Trampoline & Reserved Arena (preserves Tensor Core unlock across S3 Suspend-to-RAM cycles).
+   - `[P]` **S3 Persistence:** Universal sleep-aware unlock mode via ACPI FACS Trampoline & Reserved Arena with dynamic Intel/AMD/PCIe-switch topology, dynamic Ada VBIOS/chip geometry, S0ix preflight check, and D3cold gate (preserves Tensor Core unlock across S3 Suspend-to-RAM cycles).
    - `[I]` **Install to NVRAM:** Permanent, stickless auto-unlock on every cold boot via internal ESP & NVRAM.
    - `[R]` **Remove DXE Driver:** Cleanly uninstalls and deregisters the driver from UEFI NVRAM & internal ESP.
    - `[S]` **Stock Windows:** Diagnostic hardware scan, logs to USB, normal boot without unlock.  

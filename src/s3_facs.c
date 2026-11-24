@@ -3,10 +3,11 @@
 #include "port.h"
 #include "compat/compat.h"
 
-typedef char gu_s3_ctx_size_assert[(sizeof(GU_S3_RESUME_CONTEXT) == 108) ? 1 : -1];
+typedef char gu_s3_ctx_size_assert[(sizeof(GU_S3_RESUME_CONTEXT) == GU_S3_CTX_V2_SIZE) ? 1 : -1];
 typedef char gu_tramp_envelope_assert[(GU_TRAMP_ENVELOPE_SIZE == 0x0A00U && GU_TRAMP_FAR_JUMP_OFF == GU_TRAMP_ENVELOPE_SIZE) ? 1 : -1];
 typedef char gu_tramp_mirror_gdt_assert[(GU_TRAMP_REAL_FACS_MIRROR_OFF + (28U * 4U) <= GU_TRAMP_RM_IDTR_OFF) ? 1 : -1];
-typedef char gu_tramp_gdt_layout_assert[((GU_TRAMP_RM_IDTR_OFF + 8U <= GU_TRAMP_PM_GDTR_OFF) && (GU_TRAMP_PM_GDTR_OFF + 8U <= GU_TRAMP_GDT_BASE_OFF) && (GU_TRAMP_GDT_BASE_OFF + 40U <= 4096U)) ? 1 : -1];
+typedef char gu_tramp_gdt_layout_assert[((GU_TRAMP_RM_IDTR_OFF + 8U <= GU_TRAMP_PM_GDTR_OFF) && (GU_TRAMP_PM_GDTR_OFF + 8U <= GU_TRAMP_GDT_BASE_OFF) && (GU_TRAMP_GDT_BASE_OFF + 40U <= GU_TRAMP_BRIDGE_TBL_OFF)) ? 1 : -1];
+typedef char gu_tramp_bridge_tbl_assert[(GU_TRAMP_BRIDGE_TBL_OFF + ((GU_S3_MAX_BRIDGES + 1U) * GU_TRAMP_BRIDGE_ENTRY_SIZE) <= 4096U) ? 1 : -1];
 
 static const EFI_GUID mAcpi20TableGuid = GU_EFI_ACPI_20_TABLE_GUID;
 static const EFI_GUID mAcpi10TableGuid = GU_EFI_ACPI_10_TABLE_GUID;
@@ -239,6 +240,12 @@ static inline VOID *GuAcpiPaddrToPtr(UINT32 addr32, const VOID *anchor) {
   return (VOID *)addr;
 }
 
+#ifdef GU_S3_HOST_TEST
+VOID GuAcpiResetShadowStateForTest(VOID) {
+  memset(&mShadowState, 0, sizeof(mShadowState));
+}
+#endif
+
 EFI_STATUS GuAcpiLocateFadtAndFacs(
     IN EFI_SYSTEM_TABLE *SystemTable,
     OUT GU_ACPI_FACS_INFO *Info
@@ -376,6 +383,13 @@ EFI_STATUS GuAcpiLocateFadtAndFacs(
   Info->fadt = fadt;
   Info->fadt_phys = fadt_phys;
   Info->fadt_original_checksum = fadt->Header.Checksum;
+  {
+    UINT32 flags_end = (UINT32)((const UINT8 *)&fadt->Flags - (const UINT8 *)fadt + sizeof(fadt->Flags));
+    if (fadt->Header.Length >= flags_end) {
+      Info->fadt_flags = fadt->Flags;
+      Info->s0ix_warning = ((fadt->Flags & GU_ACPI_FADT_FLAG_LOW_POWER_S0_IDLE) != 0U);
+    }
+  }
 
   /*
    * 4. Resolve active Real FACS address:
@@ -448,7 +462,7 @@ EFI_STATUS GuAcpiLocateFadtAndFacs(
   return EFI_SUCCESS;
 }
 
-UINT32 GuAcpiBuildTrampolineCode(
+UINT32 GuAcpiBuildTrampolineCodeEx(
     OUT UINT8 *Buffer,
     IN UINT32 BufferSize,
     IN EFI_PHYSICAL_ADDRESS TrampolinePhys,
@@ -458,7 +472,8 @@ UINT32 GuAcpiBuildTrampolineCode(
     IN EFI_PHYSICAL_ADDRESS GpuBar0Phys,
     IN UINT32 RootPortLinkReg,
     IN UINT32 GpuPmcsrReg,
-    IN EFI_PHYSICAL_ADDRESS FwsecDmaPhys
+    IN EFI_PHYSICAL_ADDRESS FwsecDmaPhys,
+    IN CONST GU_S3_RESUME_CONTEXT *Context OPTIONAL
 ) {
   if (!Buffer || BufferSize < 1024) return 0;
   /* Derive High ACPI base and target addresses */
@@ -466,29 +481,107 @@ UINT32 GuAcpiBuildTrampolineCode(
       (ShadowFacsPhys - GU_HIGH_SHADOW_FACS_OFF) : ShadowFacsPhys;
   UINT32 shadow_wake_phys = (UINT32)(ShadowFacsPhys + 0x0C);
   UINT32 high_telem_dest = TelemetryPhys ? (UINT32)TelemetryPhys : (UINT32)(high_acpi_phys + 0x0500);
-  UINT32 bar0_target = GpuBar0Phys ? (UINT32)GpuBar0Phys : 0xFB000000U;
-  UINT32 booter_dma = (Gu.s3_booter_dma != 0) ? (UINT32)Gu.s3_booter_dma :
+  UINT32 bar0_target = GpuBar0Phys ? (UINT32)GpuBar0Phys :
+                       (Context && Context->bar_base) ? (UINT32)Context->bar_base : 0xFB000000U;
+  UINT32 booter_dma = (Context && Context->booter_dma) ? (UINT32)Context->booter_dma :
+                      (Gu.s3_booter_dma != 0) ? (UINT32)Gu.s3_booter_dma :
                       (ContextPhys ? (UINT32)(ContextPhys + 0x01000U) : 0x00021000U);
-  UINT32 meta_dma = (Gu.s3_meta_dma != 0) ? (UINT32)Gu.s3_meta_dma :
+  UINT32 meta_dma = (Context && Context->meta_dma) ? (UINT32)Context->meta_dma :
+                    (Gu.s3_meta_dma != 0) ? (UINT32)Gu.s3_meta_dma :
                     (ContextPhys ? (UINT32)(ContextPhys + 0x2A000U) : 0x0004A000U);
   UINT32 fwsec_dma = (FwsecDmaPhys != 0) ? (UINT32)FwsecDmaPhys :
                      (Gu.s3_fwsec_dma != 0) ? (UINT32)Gu.s3_fwsec_dma :
                      (ContextPhys ? (UINT32)(ContextPhys + 0x30000U) : 0xC7300000U);
-  UINT32 booter_size = (GuAssets[0].firmware.size > 0) ? (UINT32)GuAssets[0].firmware.size : 57672U;
-  UINT32 booter_sz_param = (booter_size & ~0xFFU) | 0x10U;
-  (VOID)booter_size;
-  (VOID)booter_sz_param;
 
-  /* Pre-populate PCI probe addresses at +0x0820 (8 dwords = 32 bytes) (v1.8.59) */
+  /* Resolve GPU BDF base (0xCF8 aligned to register 0), PCI VID/DID, and Chip ID (v1.9.0) */
+  UINT32 gpu_bdf_base = 0x802D0000U;
+  if (Context && (Context->pci_cmd_port_addr & 0xFFFFFF00U) != 0U &&
+      ((Context->pci_cmd_port_addr & 0x00FF0000U) != 0U || Context->bus == 0)) {
+    gpu_bdf_base = Context->pci_cmd_port_addr & ~0xFFU;
+  } else if (Context && (Context->bus || Context->device || Context->function)) {
+    gpu_bdf_base = 0x80000000U | ((UINT32)Context->bus << 16) | ((UINT32)Context->device << 11) | ((UINT32)Context->function << 8);
+  } else if (GpuPmcsrReg >= 0x80000000U && (GpuPmcsrReg & 0x00FF0000U) != 0U) {
+    gpu_bdf_base = GpuPmcsrReg & 0xFFFFFF00U;
+  }
+  UINT8 gpu_bus = (UINT8)((gpu_bdf_base >> 16) & 0xFFU);
+
+  UINT32 expected_pci_id = 0x268410DEU;
+  if (Context && Context->pci_id) {
+    expected_pci_id = (Context->pci_id > 0xFFFFU) ? Context->pci_id : ((Context->pci_id << 16) | 0x10DEU);
+  } else if (Gu.device_id) {
+    expected_pci_id = ((UINT32)Gu.device_id << 16) | 0x10DEU;
+  }
+  UINT32 expected_chip_id = (Context && Context->chip_id) ? Context->chip_id :
+                            (Gu.chip_id ? Gu.chip_id : 0x192000A1U);
+
+  /* Compute 16MB inclusive Root Port / Switch Memory Base/Limit window (Offset 0x20) from bar0_target (v1.9.0) */
+  UINT32 mem_base_16  = (bar0_target >> 16) & 0xFFF0U;
+  UINT32 mem_limit_16 = ((bar0_target + 0x00FFFFFFU) >> 16) & 0xFFF0U;
+  UINT32 bridge_mem_win = (mem_limit_16 << 16) | mem_base_16;
+
+  /* Resolve dynamic upstream PCI bridge chain (root -> leaf, max GU_S3_MAX_BRIDGES) */
+  GU_S3_BRIDGE_DESC bridges[GU_S3_MAX_BRIDGES];
+  memset(bridges, 0, sizeof(bridges));
+  UINT32 bridge_count = 0;
+  if (Context && Context->bridge_count > 0) {
+    bridge_count = (Context->bridge_count <= GU_S3_MAX_BRIDGES) ? Context->bridge_count : GU_S3_MAX_BRIDGES;
+    for (UINT32 k = 0; k < bridge_count; k++) {
+      bridges[k] = Context->bridges[k];
+    }
+  } else {
+    bridge_count = 1U;
+    bridges[0].bdf_base = (RootPortLinkReg >= 0x80000000U) ? (RootPortLinkReg & 0xFFFFFF00U) : 0x80001900U;
+    bridges[0].bus_val  = ((UINT32)gpu_bus << 8) | ((UINT32)gpu_bus << 16);
+    bridges[0].link_reg = RootPortLinkReg ? RootPortLinkReg : (bridges[0].bdf_base | 0x60U);
+  }
+
+  /* Dynamic FWSEC & SEC2 Booter geometries (v1.9.0, defaults preserve verified AD102 v1.8.67 geometry) */
+  UINT32 fw_imem_chunks = (Context && Context->fwsec_imem_chunks) ? Context->fwsec_imem_chunks :
+                          (Gu.s3_fwsec_imem_size ? ((Gu.s3_fwsec_imem_size + 255U) / 256U) : 242U);
+  UINT32 fw_dmem_chunks = (Context && Context->fwsec_dmem_chunks) ? Context->fwsec_dmem_chunks :
+                          (Gu.s3_fwsec_dmem_size ? ((Gu.s3_fwsec_dmem_size + 255U) / 256U) : 14U);
+  UINT32 fw_data_off    = (Context && Context->fwsec_data_off) ? Context->fwsec_data_off :
+                          (Gu.s3_fwsec_data_off ? Gu.s3_fwsec_data_off : 0xF200U);
+  UINT32 fw_sig_dmem    = (Context && Context->fwsec_sig_dmem) ? Context->fwsec_sig_dmem :
+                          (Gu.s3_fwsec_pkc_off ? Gu.s3_fwsec_pkc_off : 0x0B24U);
+  UINT32 fw_engine_mask = (Context && Context->fwsec_engine_mask) ? Context->fwsec_engine_mask :
+                          (Gu.s3_fwsec_engine_mask ? Gu.s3_fwsec_engine_mask : 0x0400U);
+  UINT32 fw_ucode_id    = (Context && Context->fwsec_ucode_id) ? Context->fwsec_ucode_id :
+                          (Gu.s3_fwsec_ucode_id ? Gu.s3_fwsec_ucode_id : 9U);
+
+  UINT32 bt_app_code_off = (Context && Context->booter_imem_chunks) ? Context->booter_app_code_off :
+                           (Gu.s3_booter_app_code_size ? Gu.s3_booter_app_code_off : 256U);
+  UINT32 bt_imem_chunks  = (Context && Context->booter_imem_chunks) ? Context->booter_imem_chunks :
+                           (Gu.s3_booter_app_code_size ? ((Gu.s3_booter_app_code_size + 255U) / 256U) : 125U);
+  UINT32 bt_os_data_off  = (Context && Context->booter_os_data_off) ? Context->booter_os_data_off :
+                           (Gu.s3_booter_os_data_off ? Gu.s3_booter_os_data_off : 32256U);
+  UINT32 bt_dmem_chunks  = (Context && Context->booter_dmem_chunks) ? Context->booter_dmem_chunks :
+                           (Gu.s3_booter_os_data_size ? ((Gu.s3_booter_os_data_size + 255U) / 256U) : 96U);
+  UINT32 bt_sig_dmem     = (Context && Context->booter_sig_dmem) ? Context->booter_sig_dmem :
+                           (Gu.s3_booter_sig_dmem ? Gu.s3_booter_sig_dmem : 16U);
+  UINT32 bt_engine_mask  = (Context && Context->booter_engine_mask) ? Context->booter_engine_mask :
+                           (Gu.s3_booter_engine_id ? Gu.s3_booter_engine_id : 1U);
+  UINT32 bt_ucode_id     = (Context && Context->booter_ucode_id) ? Context->booter_ucode_id :
+                           (Gu.s3_booter_ucode_id ? Gu.s3_booter_ucode_id : 3U);
+
+  /* Populate null-terminated Multi-Bridge Table at Buffer + GU_TRAMP_BRIDGE_TBL_OFF (0x0B40) */
+  memset(Buffer + GU_TRAMP_BRIDGE_TBL_OFF, 0, (GU_S3_MAX_BRIDGES + 1U) * GU_TRAMP_BRIDGE_ENTRY_SIZE);
+  for (UINT32 k = 0; k < bridge_count; k++) {
+    UINT8 *be = Buffer + GU_TRAMP_BRIDGE_TBL_OFF + (k * GU_TRAMP_BRIDGE_ENTRY_SIZE);
+    *(UINT32 *)(be + GU_TRAMP_BRIDGE_BDF_OFF) = bridges[k].bdf_base;
+    *(UINT32 *)(be + GU_TRAMP_BRIDGE_BUS_OFF) = bridges[k].bus_val & 0x00FFFFFFU;
+  }
+
+  /* Pre-populate PCI probe addresses at GU_TRAMP_PCI_PROBE_ADDRS_OFF (8 dwords = 32 bytes) */
   UINT32 *probe_addrs = (UINT32 *)(Buffer + GU_TRAMP_PCI_PROBE_ADDRS_OFF);
-  probe_addrs[0] = 0x80001900U; /* Bridge 0:3:1 DevID (Expected 0x14831022) */
-  probe_addrs[1] = 0x80001904U; /* Bridge 0:3:1 Cmd/Stat */
-  probe_addrs[2] = 0x80001918U; /* Bridge 0:3:1 Bus Numbers (Pri, Sec, Sub) */
-  probe_addrs[3] = RootPortLinkReg ? RootPortLinkReg : 0x80001960U; /* Bridge 0:3:1 Link Ctrl/Status (Cap 0x10) */
-  probe_addrs[4] = 0x802D0000U; /* GPU 45:0:0 DevID (Expected 0x268410de if up) */
-  probe_addrs[5] = 0x802D0004U; /* GPU 45:0:0 Cmd/Stat */
-  probe_addrs[6] = 0x802D0010U; /* GPU 45:0:0 BAR0 */
-  probe_addrs[7] = GpuPmcsrReg ? GpuPmcsrReg : 0x802D0064U; /* GPU 45:0:0 PMCSR (Cap 0x01) */
+  probe_addrs[0] = bridges[0].bdf_base | 0x00U;
+  probe_addrs[1] = bridges[0].bdf_base | 0x04U;
+  probe_addrs[2] = bridges[0].bdf_base | 0x18U;
+  probe_addrs[3] = bridges[0].link_reg ? bridges[0].link_reg : (RootPortLinkReg ? RootPortLinkReg : (bridges[0].bdf_base | 0x60U));
+  probe_addrs[4] = gpu_bdf_base | 0x00U;
+  probe_addrs[5] = gpu_bdf_base | 0x04U;
+  probe_addrs[6] = gpu_bdf_base | 0x10U;
+  probe_addrs[7] = GpuPmcsrReg ? GpuPmcsrReg : (gpu_bdf_base | 0x64U);
 
   /* Pre-populate GDT & IDTR descriptors at Buffer + GU_TRAMP_RM_IDTR_OFF (0x0900) (v1.8.59) */
   /* +0x0900: RM_IDTR (6 bytes) */
@@ -565,29 +658,44 @@ UINT32 GuAcpiBuildTrampolineCode(
   INT8 loop_disp = (INT8)(pci_loop_start - (e + 1));
   *e++ = (UINT8)loop_disp;
 
-  /* Check if Bridge DevID is AMD (Vendor ID 0x1022 at [0x0840]) */
-  *e++ = 0xA1; *e++ = (UINT8)(GU_TRAMP_PCI_PROBE_RAW_OFF & 0xFFU); *e++ = (UINT8)(GU_TRAMP_PCI_PROBE_RAW_OFF >> 8); /* mov ax, [GU_TRAMP_PCI_PROBE_RAW_OFF] */
-  *e++ = 0x3D; *e++ = 0x22; *e++ = 0x10; /* cmp ax, 0x1022 */
-  *e++ = 0x0F; *e++ = 0x85;              /* jne near .skip_bridge (4 bytes) */
-  UINT8 *skip_bridge_disp = e;
-  *e++ = 0x00; *e++ = 0x00;              /* placeholder rel16 */
-
   /*
-   * 1. Load original Bus Numbers from [0x0848], preserve Latency Timer (bits 31:24),
-   * set Pri=0, Sec=0x2D, Sub=0x2D:
+   * Vendor-independent Upstream PCIe Bridge Chain Restore (v1.9.0):
+   * Walks bridges Root -> Leaf in GU_TRAMP_BRIDGE_TBL_OFF (0x0B40), verifies Ven/DevID != 0xFFFFFFFF,
+   * and restores expected Pri/Sec/Sub bus numbers at offset 0x18 preserving Latency Timer (bits 31:24).
    */
-  *e++ = 0x66; *e++ = 0xA1; *e++ = (UINT8)((GU_TRAMP_PCI_PROBE_RAW_OFF + 8U) & 0xFFU); *e++ = (UINT8)((GU_TRAMP_PCI_PROBE_RAW_OFF + 8U) >> 8); /* mov eax, [probe_raw+8] */
+  *e++ = 0xBE; *e++ = (UINT8)(GU_TRAMP_BRIDGE_TBL_OFF & 0xFFU); *e++ = (UINT8)(GU_TRAMP_BRIDGE_TBL_OFF >> 8); /* mov si, bridge_tbl */
+  UINT8 *rm_br_loop = e;
+  *e++ = 0x66; *e++ = 0x8B; *e++ = 0x04;             /* mov eax, [si] (bdf_base) */
+  *e++ = 0x66; *e++ = 0x85; *e++ = 0xC0;             /* test eax, eax */
+  *e++ = 0x74;                                       /* jz .rm_bridges_done */
+  UINT8 *rm_br_done_jmp = e++;
+  *e++ = 0xBA; *e++ = 0xF8; *e++ = 0x0C;             /* mov dx, 0x0CF8 */
+  *e++ = 0x66; *e++ = 0xEF;                         /* out dx, eax */
+  *e++ = 0xBA; *e++ = 0xFC; *e++ = 0x0C;             /* mov dx, 0x0CFC */
+  *e++ = 0x66; *e++ = 0xED;                         /* in eax, dx */
+  *e++ = 0x66; *e++ = 0x83; *e++ = 0xF8; *e++ = 0xFF; /* cmp eax, -1 */
+  *e++ = 0x74;                                       /* je .rm_br_next */
+  UINT8 *rm_br_skip_jmp = e++;
+  *e++ = 0x66; *e++ = 0x8B; *e++ = 0x04;             /* mov eax, [si] */
+  *e++ = 0xB0; *e++ = 0x18;                         /* mov al, 0x18 */
+  *e++ = 0x66; *e++ = 0x89; *e++ = 0xC1;             /* mov ecx, eax */
+  *e++ = 0xBA; *e++ = 0xF8; *e++ = 0x0C;             /* mov dx, 0x0CF8 */
+  *e++ = 0x66; *e++ = 0xEF;                         /* out dx, eax */
+  *e++ = 0xBA; *e++ = 0xFC; *e++ = 0x0C;             /* mov dx, 0x0CFC */
+  *e++ = 0x66; *e++ = 0xED;                         /* in eax, dx */
   *e++ = 0x66; *e++ = 0x25; *e++ = 0x00; *e++ = 0x00; *e++ = 0x00; *e++ = 0xFF; /* and eax, 0xFF000000 */
-  *e++ = 0x66; *e++ = 0x0D; *e++ = 0x00; *e++ = 0x2D; *e++ = 0x2D; *e++ = 0x00; /* or eax, 0x002D2D00 */
-
-  /* Write new bus numbers to Root Port 0:3:1 offset 0x18 (0x80001918) */
-  *e++ = 0x66; *e++ = 0x89; *e++ = 0xC1;                         /* mov ecx, eax (save in ECX, 100% stack-free) */
-  *e++ = 0x66; *e++ = 0xB8; *e++ = 0x18; *e++ = 0x19; *e++ = 0x00; *e++ = 0x80; /* mov eax, 0x80001918 */
-  *e++ = 0xBA; *e++ = 0xF8; *e++ = 0x0C;                         /* mov dx, 0x0CF8 */
-  *e++ = 0x66; *e++ = 0xEF;                                       /* out dx, eax */
-  *e++ = 0x66; *e++ = 0x89; *e++ = 0xC8;                         /* mov eax, ecx (restore from ECX, 100% stack-free) */
-  *e++ = 0xBA; *e++ = 0xFC; *e++ = 0x0C;                         /* mov dx, 0x0CFC */
-  *e++ = 0x66; *e++ = 0xEF;                                       /* out dx, eax */
+  *e++ = 0x66; *e++ = 0x0B; *e++ = 0x44; *e++ = 0x04; /* or eax, [si+4] */
+  *e++ = 0x66; *e++ = 0x91;                         /* xchg eax, ecx */
+  *e++ = 0xBA; *e++ = 0xF8; *e++ = 0x0C;             /* mov dx, 0x0CF8 */
+  *e++ = 0x66; *e++ = 0xEF;                         /* out dx, eax */
+  *e++ = 0x66; *e++ = 0x91;                         /* xchg eax, ecx */
+  *e++ = 0xBA; *e++ = 0xFC; *e++ = 0x0C;             /* mov dx, 0x0CFC */
+  *e++ = 0x66; *e++ = 0xEF;                         /* out dx, eax */
+  *rm_br_skip_jmp = (UINT8)(e - (rm_br_skip_jmp + 1));
+  *e++ = 0x83; *e++ = 0xC6; *e++ = (UINT8)GU_TRAMP_BRIDGE_ENTRY_SIZE; /* add si, 16 */
+  *e++ = 0xEB;                                       /* jmp short .rm_br_loop */
+  *e++ = (UINT8)(rm_br_loop - (e + 1));
+  *rm_br_done_jmp = (UINT8)(e - (rm_br_done_jmp + 1));
 
   /* 2. Compact loop: probe GPU registers 45:0:0 into [0x0860..0x086C] */
   *e++ = 0xBE; *e++ = (UINT8)((GU_TRAMP_PCI_PROBE_ADDRS_OFF + 0x10U) & 0xFFU); *e++ = (UINT8)((GU_TRAMP_PCI_PROBE_ADDRS_OFF + 0x10U) >> 8); /* mov si, probe_addrs[4..7] */
@@ -607,14 +715,9 @@ UINT32 GuAcpiBuildTrampolineCode(
   *e++ = (UINT8)loop2_disp;
 
   /*
-   * NOTE: Root Port offset 0x18 remains configured as Sec=0x2D, Sub=0x2D
-   * throughout 32-bit protected mode AND across handover to Windows OS (v1.8.59).
+   * NOTE: Upstream Bridge offset 0x18 remains configured with active GPU routing
+   * throughout 32-bit protected mode AND across handover to Windows OS (v1.9.0).
    */
-
-  /* Patch .skip_bridge near jne displacement (relative to end of 4-byte instruction) */
-  INT32 skip_disp = (INT32)(e - (skip_bridge_disp + 2));
-  skip_bridge_disp[0] = (UINT8)(skip_disp & 0xFF);
-  skip_bridge_disp[1] = (UINT8)((skip_disp >> 8) & 0xFF);
 
   /*
    * 4. 16->32->16-Bit Flat Mode Bridge (v1.8.46 / v1.8.47 / v1.8.59):
@@ -704,29 +807,58 @@ UINT32 GuAcpiBuildTrampolineCode(
   *(UINT32 *)e = (UINT32)(high_telem_dest + 0x8C); e += 4;
   *(UINT32 *)e = bar0_target; e += 4;
 
-  /* 1. Read Root Port 0:3:1 Command register (0x80001904) and enable MSE (bit 1) + BME (bit 2) */
-  *e++ = 0xBA; *e++ = 0xF8; *e++ = 0x0C; *e++ = 0x00; *e++ = 0x00; /* mov edx, 0x0CF8 */
-  *e++ = 0xB8; *e++ = 0x04; *e++ = 0x19; *e++ = 0x00; *e++ = 0x80; /* mov eax, 0x80001904 */
-  *e++ = 0xEF;                                       /* out dx, eax */
-  *e++ = 0xBA; *e++ = 0xFC; *e++ = 0x0C; *e++ = 0x00; *e++ = 0x00; /* mov edx, 0x0CFC */
-  *e++ = 0xED;                                       /* in eax, dx */
-  *e++ = 0xA3; *(UINT32 *)e = (UINT32)(high_telem_dest + 0xB0); e += 4; /* mov [dest+0xB0], eax (save rp_cmd) */
-  *e++ = 0x0C; *e++ = 0x06;                         /* or al, 0x06 (MSE | BME) */
-  *e++ = 0xEF;                                       /* out dx, eax */
+  /* 1 & 2. Arm all Upstream Bridges (Root -> Leaf): save Cmd(0x04)/Mem(0x20), enable MSE|BME, set 16MB inclusive BAR0 Window (v1.9.0) */
+  *e++ = 0xBE; *(UINT32 *)e = (UINT32)(TrampolinePhys + GU_TRAMP_BRIDGE_TBL_OFF); e += 4; /* mov esi, bridge_tbl */
+  UINT8 *pm_br_arm_loop = e;
+  *e++ = 0x8B; *e++ = 0x3E;                         /* mov edi, [esi] (bdf_base) */
+  *e++ = 0x85; *e++ = 0xFF;                         /* test edi, edi */
+  *e++ = 0x74;                                       /* jz .pm_br_arm_done */
+  UINT8 *pm_br_arm_done = e++;
 
-  /* 2. Read Root Port 0:3:1 Memory Base/Limit (0x80001920) and assign temporary window 0xFC00FB00 */
-  *e++ = 0xB2; *e++ = 0xF8;                         /* mov dl, 0xF8 */
-  *e++ = 0xB8; *e++ = 0x20; *e++ = 0x19; *e++ = 0x00; *e++ = 0x80; /* mov eax, 0x80001920 */
+  *e++ = 0xBA; *e++ = 0xF8; *e++ = 0x0C; *e++ = 0x00; *e++ = 0x00; /* mov edx, 0x0CF8 */
+  *e++ = 0x89; *e++ = 0xF8;                         /* mov eax, edi */
   *e++ = 0xEF;                                       /* out dx, eax */
   *e++ = 0xB2; *e++ = 0xFC;                         /* mov dl, 0xFC */
   *e++ = 0xED;                                       /* in eax, dx */
-  *e++ = 0xA3; *(UINT32 *)e = (UINT32)(high_telem_dest + 0xB4); e += 4; /* mov [dest+0xB4], eax (save rp_mem) */
-  *e++ = 0xB8; *e++ = 0x00; *e++ = 0xFB; *e++ = 0x00; *e++ = 0xFC; /* mov eax, 0xFC00FB00 */
-  *e++ = 0xEF;                                       /* out dx, eax (unconditionally set window 0xFB00..0xFC00) */
+  *e++ = 0x83; *e++ = 0xF8; *e++ = 0xFF;             /* cmp eax, -1 */
+  *e++ = 0x74;                                       /* je .pm_br_arm_next */
+  UINT8 *pm_br_arm_skip = e++;
 
-  /* 3. Assign GPU BAR0 = bar0_target (0x802D0010) */
   *e++ = 0xB2; *e++ = 0xF8;                         /* mov dl, 0xF8 */
-  *e++ = 0xB8; *e++ = 0x10; *e++ = 0x00; *e++ = 0x2D; *e++ = 0x80; /* mov eax, 0x802D0010 */
+  *e++ = 0x89; *e++ = 0xF8;                         /* mov eax, edi */
+  *e++ = 0x0C; *e++ = 0x04;                         /* or al, 0x04 */
+  *e++ = 0xEF;                                       /* out dx, eax */
+  *e++ = 0xB2; *e++ = 0xFC;                         /* mov dl, 0xFC */
+  *e++ = 0xED;                                       /* in eax, dx */
+  *e++ = 0x89; *e++ = 0x46; *e++ = (UINT8)GU_TRAMP_BRIDGE_SAVED_CMD_OFF; /* mov [esi + 8], eax */
+  *e++ = 0x0C; *e++ = 0x06;                         /* or al, 0x06 (MSE | BME) */
+  *e++ = 0xEF;                                       /* out dx, eax */
+
+  *e++ = 0xB2; *e++ = 0xF8;                         /* mov dl, 0xF8 */
+  *e++ = 0x89; *e++ = 0xF8;                         /* mov eax, edi */
+  *e++ = 0x0C; *e++ = 0x20;                         /* or al, 0x20 */
+  *e++ = 0xEF;                                       /* out dx, eax */
+  *e++ = 0xB2; *e++ = 0xFC;                         /* mov dl, 0xFC */
+  *e++ = 0xED;                                       /* in eax, dx */
+  *e++ = 0x89; *e++ = 0x46; *e++ = (UINT8)GU_TRAMP_BRIDGE_SAVED_MEM_OFF; /* mov [esi + 12], eax */
+  *e++ = 0xB8; *(UINT32 *)e = bridge_mem_win; e += 4; /* mov eax, bridge_mem_win */
+  *e++ = 0xEF;                                       /* out dx, eax */
+
+  *pm_br_arm_skip = (UINT8)(e - (pm_br_arm_skip + 1));
+  *e++ = 0x83; *e++ = 0xC6; *e++ = (UINT8)GU_TRAMP_BRIDGE_ENTRY_SIZE; /* add esi, 16 */
+  *e++ = 0xEB;                                       /* jmp short .pm_br_arm_loop */
+  *e++ = (UINT8)(pm_br_arm_loop - (e + 1));
+  *pm_br_arm_done = (UINT8)(e - (pm_br_arm_done + 1));
+
+  /* Mirror Root Port (bridges[0]) Cmd/Mem into telemetry +0xB0 / +0xB4 */
+  *e++ = 0xA1; *(UINT32 *)e = (UINT32)(TrampolinePhys + GU_TRAMP_BRIDGE_TBL_OFF + GU_TRAMP_BRIDGE_SAVED_CMD_OFF); e += 4;
+  *e++ = 0xA3; *(UINT32 *)e = (UINT32)(high_telem_dest + GU_TELEM_RP_CMD_BEFORE_OFF); e += 4;
+  *e++ = 0xA1; *(UINT32 *)e = (UINT32)(TrampolinePhys + GU_TRAMP_BRIDGE_TBL_OFF + GU_TRAMP_BRIDGE_SAVED_MEM_OFF); e += 4;
+  *e++ = 0xA3; *(UINT32 *)e = (UINT32)(high_telem_dest + GU_TELEM_RP_MEM_BEFORE_OFF); e += 4;
+
+  /* 3. Assign GPU BAR0 = bar0_target (gpu_bdf_base | 0x10) */
+  *e++ = 0xBA; *e++ = 0xF8; *e++ = 0x0C; *e++ = 0x00; *e++ = 0x00; /* mov edx, 0x0CF8 */
+  *e++ = 0xB8; *(UINT32 *)e = (gpu_bdf_base | 0x10U); e += 4;
   *e++ = 0xEF;                                       /* out dx, eax */
   *e++ = 0xB2; *e++ = 0xFC;                         /* mov dl, 0xFC */
   *e++ = 0xED;                                       /* in eax, dx */
@@ -734,9 +866,9 @@ UINT32 GuAcpiBuildTrampolineCode(
   *e++ = 0xB8; *(UINT32 *)e = bar0_target; e += 4;   /* mov eax, bar0_target */
   *e++ = 0xEF;                                       /* out dx, eax */
 
-  /* 4. Enable GPU Command Memory Space Enable (bit 1) + Bus Master Enable (bit 2) (0x802D0004) */
+  /* 4. Enable GPU Command Memory Space Enable (bit 1) + Bus Master Enable (bit 2) (gpu_bdf_base | 0x04) */
   *e++ = 0xB2; *e++ = 0xF8;                         /* mov dl, 0xF8 */
-  *e++ = 0xB8; *e++ = 0x04; *e++ = 0x00; *e++ = 0x2D; *e++ = 0x80; /* mov eax, 0x802D0004 */
+  *e++ = 0xB8; *(UINT32 *)e = (gpu_bdf_base | 0x04U); e += 4;
   *e++ = 0xEF;                                       /* out dx, eax */
   *e++ = 0xB2; *e++ = 0xFC;                         /* mov dl, 0xFC */
   *e++ = 0xED;                                       /* in eax, dx */
@@ -761,6 +893,33 @@ UINT32 GuAcpiBuildTrampolineCode(
   *e++ = 0x81; *e++ = 0xFA; *e++ = 0xDF; *e++ = 0xBA; *e++ = 0x00; *e++ = 0x00; /* cmp edx, 0x0000BADF */
   UINT8 *fault_jmp2 = e;
   *e++ = 0x0F; *e++ = 0x84; *e++ = 0x00; *e++ = 0x00; *e++ = 0x00; *e++ = 0x00; /* jz near .fault */
+
+  /* ==================== PRE-FWSEC GFW-BOOT / VRAM GATE (v1.9.0) ==================== */
+  /* Bounded Port-0x80-paced wait (~2 s max) until (BAR0+0x118234 & 0xFF) == 0xFF && (BAR0+0x100CE0) != 0 */
+  *e++ = 0xB9; *(UINT32 *)e = 2000000U; e += 4;                /* mov ecx, 2000000 */
+  UINT8 *gfw_gate_loop = e;
+  *e++ = 0x8B; *e++ = 0x83; *(UINT32 *)e = 0x00118234U; e += 4; /* mov eax, [ebx + 0x00118234] */
+  *e++ = 0x83; *e++ = 0xF8; *e++ = 0xFF;                        /* cmp eax, -1 */
+  *e++ = 0x74;                                                  /* je .gfw_gate_next */
+  UINT8 *gfw_gate_next1 = e++;
+  *e++ = 0x3C; *e++ = 0xFF;                                     /* cmp al, 0xFF */
+  *e++ = 0x75;                                                  /* jne .gfw_gate_next */
+  UINT8 *gfw_gate_next2 = e++;
+  *e++ = 0x8B; *e++ = 0x83; *(UINT32 *)e = 0x00100CE0U; e += 4; /* mov eax, [ebx + 0x00100CE0] */
+  *e++ = 0x85; *e++ = 0xC0;                                     /* test eax, eax */
+  *e++ = 0x74;                                                  /* jz .gfw_gate_next */
+  UINT8 *gfw_gate_next3 = e++;
+  *e++ = 0x83; *e++ = 0xF8; *e++ = 0xFF;                        /* cmp eax, -1 */
+  *e++ = 0x75;                                                  /* jne .gfw_gate_done */
+  UINT8 *gfw_gate_done = e++;
+  *gfw_gate_next1 = (UINT8)(e - (gfw_gate_next1 + 1));
+  *gfw_gate_next2 = (UINT8)(e - (gfw_gate_next2 + 1));
+  *gfw_gate_next3 = (UINT8)(e - (gfw_gate_next3 + 1));
+  *e++ = 0xE4; *e++ = 0x80;                                     /* in al, 0x80 (~1 us hardware pacing) */
+  *e++ = 0x49;                                                  /* dec ecx */
+  *e++ = 0x75;                                                  /* jnz .gfw_gate_loop */
+  *e++ = (UINT8)(gfw_gate_loop - (e + 1));
+  *gfw_gate_done = (UINT8)(e - (gfw_gate_done + 1));
 
   /* ==================== GSP FWSEC-FRTS SEQUENCE (v1.8.64) ==================== */
   /* 1. GSP Engine Reset & Scrub Cycle (unlock_610.c:474-482) */
@@ -874,10 +1033,10 @@ UINT32 GuAcpiBuildTrampolineCode(
   *e++ = 0x31; *e++ = 0xC0;                                     /* xor eax, eax */
   *e++ = 0x89; *e++ = 0x83; *(UINT32 *)e = 0x00110128U; e += 4; /* mov [ebx + 0x00110128], eax */
 
-  /* Pass 1 Setup (IMEM): EDI=0, EDX=0, EBP=242, ESI=0x0614 */
+  /* Pass 1 Setup (IMEM): EDI=0, EDX=0, EBP=fw_imem_chunks, ESI=0x0614 */
   *e++ = 0x31; *e++ = 0xFF;                                     /* xor edi, edi */
   *e++ = 0x31; *e++ = 0xD2;                                     /* xor edx, edx */
-  *e++ = 0xBD; *(UINT32 *)e = 242U; e += 4;                     /* mov ebp, 242 */
+  *e++ = 0xBD; *(UINT32 *)e = fw_imem_chunks; e += 4;           /* mov ebp, fw_imem_chunks */
   *e++ = 0xBE; *(UINT32 *)e = 0x0614U; e += 4;                  /* mov esi, 0x0614 */
 
   /* .gsp_dma_loop_entry: */
@@ -923,28 +1082,28 @@ UINT32 GuAcpiBuildTrampolineCode(
   *e++ = 0x66; *e++ = 0x81; *e++ = 0xFE; *e++ = 0x14; *e++ = 0x06; /* cmp si, 0x0614 */
   *e++ = 0x75;                                                 /* jne .gsp_dma_transfers_done */
   UINT8 *gsp_dma_done_jmp = e++;
-  *e++ = 0xB8; *(UINT32 *)e = (UINT32)((fwsec_dma + 0xF200U) >> 8); e += 4; /* mov eax, (fwsec_dma + 0xF200) >> 8 */
+  *e++ = 0xB8; *(UINT32 *)e = (UINT32)((fwsec_dma + fw_data_off) >> 8); e += 4; /* mov eax, (fwsec_dma + fw_data_off) >> 8 */
   *e++ = 0x89; *e++ = 0x83; *(UINT32 *)e = 0x00110110U; e += 4; /* mov [ebx + 0x00110110], eax */
   *e++ = 0x31; *e++ = 0xFF;                                     /* xor edi, edi */
   *e++ = 0x31; *e++ = 0xD2;                                     /* xor edx, edx */
-  *e++ = 0xBD; *(UINT32 *)e = 14U; e += 4;                      /* mov ebp, 14 */
+  *e++ = 0xBD; *(UINT32 *)e = fw_dmem_chunks; e += 4;           /* mov ebp, fw_dmem_chunks */
   *e++ = 0xBE; *(UINT32 *)e = 0x0600U; e += 4;                  /* mov esi, 0x0600 */
   *e++ = 0xEB;                                                 /* jmp short .gsp_dma_loop_entry */
   *e++ = (UINT8)(gsp_dma_loop_entry - (e + 1));
   *gsp_dma_done_jmp = (UINT8)(e - (gsp_dma_done_jmp + 1));
 
   /* 5. GSP Falcon2 Registers (unlock_610.c:669-675) */
-  /* [ebx + 0x00111210] = 0x0B24 (sig_dmem) */
+  /* [ebx + 0x00111210] = fw_sig_dmem */
   *e++ = 0xC7; *e++ = 0x83; *(UINT32 *)e = 0x00111210U; e += 4;
-  *(UINT32 *)e = 0x0B24U; e += 4;
+  *(UINT32 *)e = fw_sig_dmem; e += 4;
 
-  /* [ebx + 0x0011119C] = 0x0400 (engine_mask) */
+  /* [ebx + 0x0011119C] = fw_engine_mask */
   *e++ = 0xC7; *e++ = 0x83; *(UINT32 *)e = 0x0011119CU; e += 4;
-  *(UINT32 *)e = 0x0400U; e += 4;
+  *(UINT32 *)e = fw_engine_mask; e += 4;
 
-  /* [ebx + 0x00111198] = 9 (ucode_id) */
+  /* [ebx + 0x00111198] = fw_ucode_id */
   *e++ = 0xC7; *e++ = 0x83; *(UINT32 *)e = 0x00111198U; e += 4;
-  *(UINT32 *)e = 9U; e += 4;
+  *(UINT32 *)e = fw_ucode_id; e += 4;
 
   /* [ebx + 0x00111180] = 1 */
   *e++ = 0xC7; *e++ = 0x83; *(UINT32 *)e = 0x00111180U; e += 4;
@@ -1179,8 +1338,8 @@ UINT32 GuAcpiBuildTrampolineCode(
   *e++ = 0x89; *e++ = 0x83; *(UINT32 *)e = 0x00840128U; e += 4; /* mov [ebx + 0x00840128], eax */
 
   *e++ = 0x31; *e++ = 0xFF;                                     /* xor edi, edi */
-  *e++ = 0xBA; *(UINT32 *)e = 256U; e += 4;                     /* mov edx, 256 */
-  *e++ = 0xBD; *(UINT32 *)e = 125U; e += 4;                     /* mov ebp, 125 */
+  *e++ = 0xBA; *(UINT32 *)e = bt_app_code_off; e += 4;          /* mov edx, bt_app_code_off */
+  *e++ = 0xBD; *(UINT32 *)e = bt_imem_chunks; e += 4;           /* mov ebp, bt_imem_chunks */
   *e++ = 0xBE; *(UINT32 *)e = 0x0614U; e += 4;                  /* mov esi, 0x0614 */
 
   /* .dma_loop_entry: */
@@ -1226,36 +1385,36 @@ UINT32 GuAcpiBuildTrampolineCode(
   *e++ = 0x66; *e++ = 0x81; *e++ = 0xFE; *e++ = 0x14; *e++ = 0x06; /* cmp si, 0x0614 */
   *e++ = 0x75;                                                 /* jne .dma_transfers_done */
   UINT8 *dma_done_jmp = e++;
-  *e++ = 0xB8; *(UINT32 *)e = (UINT32)((booter_dma + 32256U) >> 8); e += 4; /* mov eax, (booter_dma + 32256) >> 8 */
+  *e++ = 0xB8; *(UINT32 *)e = (UINT32)((booter_dma + bt_os_data_off) >> 8); e += 4; /* mov eax, (booter_dma + bt_os_data_off) >> 8 */
   *e++ = 0x89; *e++ = 0x83; *(UINT32 *)e = 0x00840110U; e += 4; /* mov [ebx + 0x00840110], eax */
   *e++ = 0x31; *e++ = 0xFF;                                     /* xor edi, edi */
   *e++ = 0x31; *e++ = 0xD2;                                     /* xor edx, edx */
-  *e++ = 0xBD; *(UINT32 *)e = 96U; e += 4;                      /* mov ebp, 96 */
+  *e++ = 0xBD; *(UINT32 *)e = bt_dmem_chunks; e += 4;           /* mov ebp, bt_dmem_chunks */
   *e++ = 0xBE; *(UINT32 *)e = 0x0600U; e += 4;                  /* mov esi, 0x0600 */
   *e++ = 0xEB;                                                 /* jmp short .dma_loop_entry */
   *e++ = (UINT8)(dma_loop_entry - (e + 1));
   *dma_done_jmp = (UINT8)(e - (dma_done_jmp + 1));
 
   /* Falcon2 Registers */
-  /* [ebx + 0x00841210] = 16 (sig_dmem) */
+  /* [ebx + 0x00841210] = bt_sig_dmem */
   *e++ = 0xC7; *e++ = 0x83; *(UINT32 *)e = 0x00841210U; e += 4;
-  *(UINT32 *)e = 16U; e += 4;
+  *(UINT32 *)e = bt_sig_dmem; e += 4;
 
-  /* [ebx + 0x0084119C] = 1 (engine_mask) */
+  /* [ebx + 0x0084119C] = bt_engine_mask */
   *e++ = 0xC7; *e++ = 0x83; *(UINT32 *)e = 0x0084119CU; e += 4;
-  *(UINT32 *)e = 1U; e += 4;
+  *(UINT32 *)e = bt_engine_mask; e += 4;
 
-  /* [ebx + 0x00841198] = 3 (ucode_id) */
+  /* [ebx + 0x00841198] = bt_ucode_id */
   *e++ = 0xC7; *e++ = 0x83; *(UINT32 *)e = 0x00841198U; e += 4;
-  *(UINT32 *)e = 3U; e += 4;
+  *(UINT32 *)e = bt_ucode_id; e += 4;
 
   /* [ebx + 0x00841180] = 1 */
   *e++ = 0xC7; *e++ = 0x83; *(UINT32 *)e = 0x00841180U; e += 4;
   *(UINT32 *)e = 1U; e += 4;
 
-  /* Entry Point Vector: [ebx + 0x00840104] = 256 (code_va) */
+  /* Entry Point Vector: [ebx + 0x00840104] = bt_app_code_off (code_va) */
   *e++ = 0xC7; *e++ = 0x83; *(UINT32 *)e = 0x00840104U; e += 4;
-  *(UINT32 *)e = 256U; e += 4;
+  *(UINT32 *)e = bt_app_code_off; e += 4;
 
   /* Mailbox 0: [ebx + 0x00840040] = meta_dma */
   *e++ = 0xC7; *e++ = 0x83; *(UINT32 *)e = 0x00840040U; e += 4;
@@ -1437,12 +1596,12 @@ UINT32 GuAcpiBuildTrampolineCode(
   *e++ = 0xA3; *(UINT32 *)e = (UINT32)(high_telem_dest + 0x84); e += 4; /* mov [dest+0x84], eax (status) */
 
   /* ==================== PCIE FLR & POST-FLR CONTAINMENT (v1.8.59, 1:1 WITH UNLOCK_610.C:1750-1840) ==================== */
-  /* Dynamically determine GPU PCIe Device Control register (Gu.pcie_cap + 0x08) */
-  UINT32 dev_ctl_reg = 0x802D0000U | ((UINT32)(Gu.pcie_cap ? (Gu.pcie_cap + 8) : 0x80U) & ~3U);
+  /* Dynamically determine GPU PCIe Device Control register (gpu_bdf_base | (Gu.pcie_cap + 0x08)) */
+  UINT32 dev_ctl_reg = gpu_bdf_base | ((UINT32)(Gu.pcie_cap ? (Gu.pcie_cap + 8) : 0x80U) & ~3U);
 
   /* 1. Clear GPU Bus Master Enable (bit 2) before FLR (unlock_610.c:1769 pci_clear_master) */
   *e++ = 0xBA; *e++ = 0xF8; *e++ = 0x0C; *e++ = 0x00; *e++ = 0x00; /* mov edx, 0x0CF8 */
-  *e++ = 0xB8; *e++ = 0x04; *e++ = 0x00; *e++ = 0x2D; *e++ = 0x80; /* mov eax, 0x802D0004 (GPU Cmd) */
+  *e++ = 0xB8; *(UINT32 *)e = (gpu_bdf_base | 0x04U); e += 4;      /* mov eax, gpu_bdf_base | 0x04 (GPU Cmd) */
   *e++ = 0xEF;                                       /* out dx, eax */
   *e++ = 0xB2; *e++ = 0xFC;                         /* mov dl, 0xFC */
   *e++ = 0xED;                                       /* in eax, dx */
@@ -1451,7 +1610,7 @@ UINT32 GuAcpiBuildTrampolineCode(
 
   /* 2. Trigger PCIe FLR via Device Control (Gu.pcie_cap + 0x08, bit 15) (unlock_610.c:1788) */
   *e++ = 0xB2; *e++ = 0xF8;                         /* mov dl, 0xF8 */
-  *e++ = 0xB8; *(UINT32 *)e = dev_ctl_reg; e += 4;  /* mov eax, dev_ctl_reg (0x802D0080) */
+  *e++ = 0xB8; *(UINT32 *)e = dev_ctl_reg; e += 4;  /* mov eax, dev_ctl_reg */
   *e++ = 0xEF;                                       /* out dx, eax */
   *e++ = 0xB2; *e++ = 0xFC;                         /* mov dl, 0xFC */
   *e++ = 0xED;                                       /* in eax, dx */
@@ -1466,15 +1625,15 @@ UINT32 GuAcpiBuildTrampolineCode(
   *e++ = 0x75;                                       /* jnz .flr_stall_loop */
   *e++ = (UINT8)(flr_stall_loop - (e + 1));
 
-  /* 4. Bounded Poll on GPU Config VID/DID 0x802D0000 == 0x268410DE (50,000 iterations) (unlock_610.c:1794) */
+  /* 4. Bounded Poll on GPU Config VID/DID (gpu_bdf_base) == expected_pci_id (50,000 iterations) */
   *e++ = 0xB9; *e++ = 0x50; *e++ = 0xC3; *e++ = 0x00; *e++ = 0x00; /* mov ecx, 50000 */
   UINT8 *flr_vid_poll = e;
   *e++ = 0xB2; *e++ = 0xF8;                         /* mov dl, 0xF8 */
-  *e++ = 0xB8; *e++ = 0x00; *e++ = 0x00; *e++ = 0x2D; *e++ = 0x80; /* mov eax, 0x802D0000 */
+  *e++ = 0xB8; *(UINT32 *)e = gpu_bdf_base; e += 4; /* mov eax, gpu_bdf_base */
   *e++ = 0xEF;                                       /* out dx, eax */
   *e++ = 0xB2; *e++ = 0xFC;                         /* mov dl, 0xFC */
   *e++ = 0xED;                                       /* in eax, dx */
-  *e++ = 0x3D; *e++ = 0xDE; *e++ = 0x10; *e++ = 0x84; *e++ = 0x26; /* cmp eax, 0x268410DE */
+  *e++ = 0x3D; *(UINT32 *)e = expected_pci_id; e += 4; /* cmp eax, expected_pci_id */
   *e++ = 0x74;                                       /* jz .flr_vid_ready */
   UINT8 *flr_vid_break = e++;
   *e++ = 0x49;                                       /* dec ecx */
@@ -1482,27 +1641,27 @@ UINT32 GuAcpiBuildTrampolineCode(
   *e++ = (UINT8)(flr_vid_poll - (e + 1));
   *flr_vid_break = (UINT8)(e - (flr_vid_break + 1));
 
-  /* 5. Restore GPU BAR0 = bar0_target (0x802D0010) (unlock_610.c:1801) */
+  /* 5. Restore GPU BAR0 = bar0_target (gpu_bdf_base | 0x10) (unlock_610.c:1801) */
   *e++ = 0xB2; *e++ = 0xF8;                         /* mov dl, 0xF8 */
-  *e++ = 0xB8; *e++ = 0x10; *e++ = 0x00; *e++ = 0x2D; *e++ = 0x80; /* mov eax, 0x802D0010 */
+  *e++ = 0xB8; *(UINT32 *)e = (gpu_bdf_base | 0x10U); e += 4; /* mov eax, gpu_bdf_base | 0x10 */
   *e++ = 0xEF;                                       /* out dx, eax */
   *e++ = 0xB2; *e++ = 0xFC;                         /* mov dl, 0xFC */
   *e++ = 0xB8; *(UINT32 *)e = bar0_target; e += 4;   /* mov eax, bar0_target */
   *e++ = 0xEF;                                       /* out dx, eax */
 
-  /* 6. Restore GPU Command: 0x06 (MSE | BME) (0x802D0004) (unlock_610.c:1796) */
+  /* 6. Restore GPU Command: 0x06 (MSE | BME) (gpu_bdf_base | 0x04) (unlock_610.c:1796) */
   *e++ = 0xB2; *e++ = 0xF8;                         /* mov dl, 0xF8 */
-  *e++ = 0xB8; *e++ = 0x04; *e++ = 0x00; *e++ = 0x2D; *e++ = 0x80; /* mov eax, 0x802D0004 */
+  *e++ = 0xB8; *(UINT32 *)e = (gpu_bdf_base | 0x04U); e += 4; /* mov eax, gpu_bdf_base | 0x04 */
   *e++ = 0xEF;                                       /* out dx, eax */
   *e++ = 0xB2; *e++ = 0xFC;                         /* mov dl, 0xFC */
   *e++ = 0xB8; *e++ = 0x06; *e++ = 0x00; *e++ = 0x00; *e++ = 0x00; /* mov eax, 0x06 */
   *e++ = 0xEF;                                       /* out dx, eax */
 
-  /* 7. Poll BAR0 ready: [ebx] == 0x192000A1 (unlock_610.c:1807 wait_post_flr_bar) */
+  /* 7. Poll BAR0 ready: [ebx] == expected_chip_id (unlock_610.c:1807 wait_post_flr_bar) */
   *e++ = 0xB9; *e++ = 0x50; *e++ = 0xC3; *e++ = 0x00; *e++ = 0x00; /* mov ecx, 50000 */
   UINT8 *bar0_poll_start = e;
   *e++ = 0x8B; *e++ = 0x03;                         /* mov eax, [ebx] */
-  *e++ = 0x3D; *e++ = 0xA1; *e++ = 0x00; *e++ = 0x20; *e++ = 0x19; /* cmp eax, 0x192000A1 */
+  *e++ = 0x3D; *(UINT32 *)e = expected_chip_id; e += 4; /* cmp eax, expected_chip_id */
   *e++ = 0x74;                                       /* jz .bar0_ready */
   UINT8 *bar0_ready_break = e++;
   *e++ = 0x49;                                       /* dec ecx */
@@ -1571,10 +1730,10 @@ UINT32 GuAcpiBuildTrampolineCode(
   *e++ = 0xFC;                                                           /* cld */
   *e++ = 0xF3; *e++ = 0xA5;                                             /* rep movsd */
 
-  /* ==================== 4-STAGE PCIE TEARDOWN (v1.8.59: PRESERVE ROOT PORT 0x18 BUS NUMBERS) ==================== */
+  /* ==================== 4-STAGE PCIE TEARDOWN (v1.9.0: DYNAMIC GPU + LEAF->ROOT BRIDGES, PRESERVE 0x18 BUS NUMBERS) ==================== */
   /* Stage 1: Restore GPU Command register */
   *e++ = 0xBA; *e++ = 0xF8; *e++ = 0x0C; *e++ = 0x00; *e++ = 0x00; /* mov edx, 0x0CF8 */
-  *e++ = 0xB8; *e++ = 0x04; *e++ = 0x00; *e++ = 0x2D; *e++ = 0x80; /* mov eax, 0x802D0004 */
+  *e++ = 0xB8; *(UINT32 *)e = (gpu_bdf_base | 0x04U); e += 4;      /* mov eax, gpu_bdf_base | 0x04 */
   *e++ = 0xEF;                                       /* out dx, eax */
   *e++ = 0xB2; *e++ = 0xFC;                         /* mov dl, 0xFC */
   *e++ = 0xA1; *(UINT32 *)e = (UINT32)(high_telem_dest + 0xB8); e += 4; /* mov eax, [dest+0xB8] */
@@ -1582,34 +1741,60 @@ UINT32 GuAcpiBuildTrampolineCode(
 
   /* Stage 2: Restore GPU BAR0 */
   *e++ = 0xB2; *e++ = 0xF8;                         /* mov dl, 0xF8 */
-  *e++ = 0xB8; *e++ = 0x10; *e++ = 0x00; *e++ = 0x2D; *e++ = 0x80; /* mov eax, 0x802D0010 */
+  *e++ = 0xB8; *(UINT32 *)e = (gpu_bdf_base | 0x10U); e += 4;      /* mov eax, gpu_bdf_base | 0x10 */
   *e++ = 0xEF;                                       /* out dx, eax */
   *e++ = 0xB2; *e++ = 0xFC;                         /* mov dl, 0xFC */
   *e++ = 0xA1; *(UINT32 *)e = (UINT32)(high_telem_dest + 0xBC); e += 4; /* mov eax, [dest+0xBC] */
   *e++ = 0xEF;                                       /* out dx, eax */
 
-  /* Stage 3: Restore Root Port Memory Base/Limit register */
-  *e++ = 0xB2; *e++ = 0xF8;                         /* mov dl, 0xF8 */
-  *e++ = 0xB8; *e++ = 0x20; *e++ = 0x19; *e++ = 0x00; *e++ = 0x80; /* mov eax, 0x80001920 */
+  /* Stage 3 & 4: Restore Bridge Memory Base/Limit (0x20) and Command (0x04) Leaf -> Root (0x18 INTENTIONALLY OMITTED) */
+  *e++ = 0xBE; *(UINT32 *)e = (UINT32)(TrampolinePhys + GU_TRAMP_BRIDGE_TBL_OFF + ((bridge_count - 1U) * GU_TRAMP_BRIDGE_ENTRY_SIZE)); e += 4; /* mov esi, last_bridge */
+  *e++ = 0xB9; *(UINT32 *)e = bridge_count; e += 4; /* mov ecx, bridge_count */
+  UINT8 *td_br_loop = e;
+  *e++ = 0x8B; *e++ = 0x3E;                         /* mov edi, [esi] (bdf_base) */
+  *e++ = 0x85; *e++ = 0xFF;                         /* test edi, edi */
+  *e++ = 0x74;                                       /* jz .td_br_next */
+  UINT8 *td_br_skip = e++;
+
+  *e++ = 0xBA; *e++ = 0xF8; *e++ = 0x0C; *e++ = 0x00; *e++ = 0x00; /* mov edx, 0x0CF8 */
+  *e++ = 0x89; *e++ = 0xF8;                         /* mov eax, edi */
   *e++ = 0xEF;                                       /* out dx, eax */
   *e++ = 0xB2; *e++ = 0xFC;                         /* mov dl, 0xFC */
-  *e++ = 0xA1; *(UINT32 *)e = (UINT32)(high_telem_dest + 0xB4); e += 4; /* mov eax, [dest+0xB4] */
+  *e++ = 0xED;                                       /* in eax, dx */
+  *e++ = 0x83; *e++ = 0xF8; *e++ = 0xFF;             /* cmp eax, -1 */
+  *e++ = 0x74;                                       /* je .td_br_next */
+  UINT8 *td_br_skip2 = e++;
+
+  /* Stage 3: Bridge Memory Base/Limit (0x20) */
+  *e++ = 0xB2; *e++ = 0xF8;                         /* mov dl, 0xF8 */
+  *e++ = 0x89; *e++ = 0xF8;                         /* mov eax, edi */
+  *e++ = 0x0C; *e++ = 0x20;                         /* or al, 0x20 */
+  *e++ = 0xEF;                                       /* out dx, eax */
+  *e++ = 0xB2; *e++ = 0xFC;                         /* mov dl, 0xFC */
+  *e++ = 0x8B; *e++ = 0x46; *e++ = (UINT8)GU_TRAMP_BRIDGE_SAVED_MEM_OFF; /* mov eax, [esi + 12] */
   *e++ = 0xEF;                                       /* out dx, eax */
 
-  /* Stage 4: Restore Root Port Command register */
+  /* Stage 4: Bridge Command (0x04) */
   *e++ = 0xB2; *e++ = 0xF8;                         /* mov dl, 0xF8 */
-  *e++ = 0xB8; *e++ = 0x04; *e++ = 0x19; *e++ = 0x00; *e++ = 0x80; /* mov eax, 0x80001904 */
+  *e++ = 0x89; *e++ = 0xF8;                         /* mov eax, edi */
+  *e++ = 0x0C; *e++ = 0x04;                         /* or al, 0x04 */
   *e++ = 0xEF;                                       /* out dx, eax */
   *e++ = 0xB2; *e++ = 0xFC;                         /* mov dl, 0xFC */
-  *e++ = 0xA1; *(UINT32 *)e = (UINT32)(high_telem_dest + 0xB0); e += 4; /* mov eax, [dest+0xB0] */
+  *e++ = 0x8B; *e++ = 0x46; *e++ = (UINT8)GU_TRAMP_BRIDGE_SAVED_CMD_OFF; /* mov eax, [esi + 8] */
   *e++ = 0xEF;                                       /* out dx, eax */
+
+  *td_br_skip  = (UINT8)(e - (td_br_skip + 1));
+  *td_br_skip2 = (UINT8)(e - (td_br_skip2 + 1));
+  *e++ = 0x83; *e++ = 0xEE; *e++ = (UINT8)GU_TRAMP_BRIDGE_ENTRY_SIZE; /* sub esi, 16 */
+  *e++ = 0x49;                                       /* dec ecx */
+  *e++ = 0x75;                                       /* jnz .td_br_loop */
+  *e++ = (UINT8)(td_br_loop - (e + 1));
 
   /*
-   * CRITICAL FOR S3 DISPLAY WAKE (v1.8.59):
-   * Stage 5 (Restoring Root Port Offset 0x18 Bus Numbers) is INTENTIONALLY OMITTED!
-   * Root Port 0:3:1 Offset 0x18 remains programmed to 0x002D2D00 (Pri=0, Sec=0x2D, Sub=0x2D)
-   * so that Bus 0x2D remains active and transactions route cleanly to the GPU
-   * when Windows and nvlddmkm.sys resume!
+   * CRITICAL FOR S3 DISPLAY WAKE (v1.9.0):
+   * Stage 5 (Restoring upstream Bridge Offset 0x18 Bus Numbers) is INTENTIONALLY OMITTED!
+   * Every upstream Root Port / Switch bridge along the GPU chain retains its programmed Pri/Sec/Sub
+   * bus numbers across wake so PCI transactions reach the GPU when Windows and nvlddmkm.sys resume.
    */
 
   /* Transition to 16-Bit Protected Mode: jmp far 0x0018:pm16_offset */
@@ -1676,74 +1861,138 @@ UINT32 GuAcpiBuildTrampolineCode(
   }
 
   return (UINT32)(e - Buffer);
+}
 
-  return (UINT32)(e - Buffer);
+UINT32 GuAcpiBuildTrampolineCode(
+    OUT UINT8 *Buffer,
+    IN UINT32 BufferSize,
+    IN EFI_PHYSICAL_ADDRESS TrampolinePhys,
+    IN EFI_PHYSICAL_ADDRESS ContextPhys,
+    IN EFI_PHYSICAL_ADDRESS ShadowFacsPhys,
+    IN EFI_PHYSICAL_ADDRESS TelemetryPhys,
+    IN EFI_PHYSICAL_ADDRESS GpuBar0Phys,
+    IN UINT32 RootPortLinkReg,
+    IN UINT32 GpuPmcsrReg,
+    IN EFI_PHYSICAL_ADDRESS FwsecDmaPhys
+) {
+  return GuAcpiBuildTrampolineCodeEx(
+      Buffer, BufferSize, TrampolinePhys, ContextPhys, ShadowFacsPhys,
+      TelemetryPhys, GpuBar0Phys, RootPortLinkReg, GpuPmcsrReg, FwsecDmaPhys, NULL
+  );
 }
 
 /*
- * Discovers the PCIe Link Control & Status Register on the upstream bridge for target_bus.
+ * Discovers the complete upstream PCIe bridge chain (Root -> Leaf, up to MaxBridges) leading to target_bus,
+ * independent of chipset vendor (AMD, Intel, VIA) or slot/switch topology.
  */
-static UINT32 GuFindRootPortLinkReg(EFI_BOOT_SERVICES *bs, UINT8 target_bus) {
-  UINT32 fallback_reg = 0x80001960U; /* Default AMD Root Port 0:3:1 Link Ctrl/Status (cap=0x50+0x10) */
-  if (!bs || !bs->LocateHandleBuffer || !bs->HandleProtocol || !bs->FreePool) return fallback_reg;
+static UINT32 GuDiscoverUpstreamBridgeChain(
+    IN EFI_BOOT_SERVICES *bs,
+    IN UINT8 target_bus,
+    OUT GU_S3_BRIDGE_DESC *OutBridges,
+    IN UINT32 MaxBridges
+) {
+  if (!OutBridges || MaxBridges == 0) return 0;
+  memset(OutBridges, 0, sizeof(GU_S3_BRIDGE_DESC) * MaxBridges);
+  if (!bs || !bs->LocateHandleBuffer || !bs->HandleProtocol || !bs->FreePool) return 0;
+
+  typedef struct {
+    UINT8 sec;
+    GU_S3_BRIDGE_DESC desc;
+  } GU_BRIDGE_CAND;
+
+  GU_BRIDGE_CAND cands[64];
+  UINT32 matched = 0;
 
   EFI_GUID pci_guid = { 0x4cf5b200, 0x68b8, 0x41fb, { 0x88, 0xae, 0xb2, 0xec, 0x17, 0x93, 0xac, 0x5d } };
   EFI_HANDLE *handles = NULL;
   UINTN count = 0;
   EFI_STATUS s = bs->LocateHandleBuffer(ByProtocol, &pci_guid, NULL, &count, &handles);
-  if (EFI_ERROR(s) || !handles) return fallback_reg;
+  if (EFI_ERROR(s) || !handles) return 0;
 
-  UINT32 fallback_match_reg = 0;
-
-  for (UINTN i = 0; i < count; i++) {
+  for (UINTN i = 0; i < count && matched < 64U; i++) {
     EFI_PCI_IO_PROTOCOL *io = NULL;
     if (EFI_ERROR(bs->HandleProtocol(handles[i], &pci_guid, (VOID **)&io)) || !io) continue;
 
-    UINT8 hdr_type = 0, sec_bus = 0;
+    UINT8 hdr_type = 0;
     (VOID)io->Pci.Read(io, EfiPciIoWidthUint8, 0x0E, 1, &hdr_type);
-    if ((hdr_type & 0x7FU) == 0x01) { /* PCI-to-PCI Bridge */
-      (VOID)io->Pci.Read(io, EfiPciIoWidthUint8, 0x19, 1, &sec_bus);
-      UINTN seg = 0, bus = 0, dev = 0, func = 0;
-      if (io->GetLocation) {
-        (VOID)io->GetLocation(io, &seg, &bus, &dev, &func);
-      }
-      BOOLEAN is_target = (sec_bus == target_bus);
-      BOOLEAN is_default_bdf = (bus == 0 && dev == 3 && func == 1);
-      if (is_target || (is_default_bdf && fallback_match_reg == 0)) {
-        UINT8 cap_ptr = 0;
-        (VOID)io->Pci.Read(io, EfiPciIoWidthUint8, 0x34, 1, &cap_ptr);
-        UINTN steps = 0;
-        while (cap_ptr >= 0x40 && cap_ptr <= 0xFC && (cap_ptr & 3) == 0 && ++steps < 48) {
-          UINT8 cap_id = 0, next_ptr = 0;
-          (VOID)io->Pci.Read(io, EfiPciIoWidthUint8, cap_ptr, 1, &cap_id);
-          (VOID)io->Pci.Read(io, EfiPciIoWidthUint8, cap_ptr + 1, 1, &next_ptr);
-          if (cap_id == 0x10) { /* PCI Express Capability */
-            UINT32 reg_off = (UINT32)(cap_ptr + 0x10);
-            UINT32 pci_addr = 0x80000000U | ((UINT32)bus << 16) | ((UINT32)dev << 11) | ((UINT32)func << 8) | (reg_off & ~3U);
-            if (is_target) {
-              bs->FreePool(handles);
-              return pci_addr;
-            }
-            fallback_match_reg = pci_addr;
-            break;
-          }
-          cap_ptr = next_ptr;
+    if ((hdr_type & 0x7FU) != 0x01) continue; /* Not a PCI-to-PCI Bridge */
+
+    UINTN seg = 0, bus = 0, dev = 0, func = 0;
+    if (!io->GetLocation || EFI_ERROR(io->GetLocation(io, &seg, &bus, &dev, &func)) || seg != 0) {
+      continue;
+    }
+
+    UINT8 pri = 0, sec = 0, sub = 0;
+    (VOID)io->Pci.Read(io, EfiPciIoWidthUint8, 0x18, 1, &pri);
+    (VOID)io->Pci.Read(io, EfiPciIoWidthUint8, 0x19, 1, &sec);
+    (VOID)io->Pci.Read(io, EfiPciIoWidthUint8, 0x1A, 1, &sub);
+    if (sub < sec) sub = sec;
+
+    if (sec > 0 && sec <= target_bus && target_bus <= sub) {
+      UINT32 bdf_base = 0x80000000U | ((UINT32)bus << 16) | ((UINT32)dev << 11) | ((UINT32)func << 8);
+      UINT32 link_reg = 0;
+      UINT8 cap_ptr = 0;
+      (VOID)io->Pci.Read(io, EfiPciIoWidthUint8, 0x34, 1, &cap_ptr);
+      UINTN steps = 0;
+      while (cap_ptr >= 0x40 && cap_ptr <= 0xFC && (cap_ptr & 3) == 0 && ++steps < 48) {
+        UINT8 cap_id = 0, next_ptr = 0;
+        (VOID)io->Pci.Read(io, EfiPciIoWidthUint8, cap_ptr, 1, &cap_id);
+        (VOID)io->Pci.Read(io, EfiPciIoWidthUint8, cap_ptr + 1, 1, &next_ptr);
+        if (cap_id == 0x10) {
+          link_reg = bdf_base | ((UINT32)(cap_ptr + 0x10U) & ~3U);
+          break;
         }
+        cap_ptr = next_ptr;
       }
+      cands[matched].sec = sec;
+      cands[matched].desc.bdf_base = bdf_base;
+      cands[matched].desc.bus_val  = ((UINT32)sub << 16) | ((UINT32)sec << 8) | (UINT32)pri;
+      cands[matched].desc.link_reg = link_reg;
+      matched++;
     }
   }
   bs->FreePool(handles);
-  return fallback_match_reg ? fallback_match_reg : fallback_reg;
+
+  /* Sort ascending by secondary bus number: Root Port first (index 0), Leaf Bridge last */
+  for (UINT32 a = 0; a < matched; a++) {
+    for (UINT32 b = a + 1; b < matched; b++) {
+      if (cands[b].sec < cands[a].sec) {
+        GU_BRIDGE_CAND tmp = cands[a];
+        cands[a] = cands[b];
+        cands[b] = tmp;
+      }
+    }
+  }
+
+  UINT32 out_count = (matched <= MaxBridges) ? matched : MaxBridges;
+  UINT32 start_idx = (matched > MaxBridges) ? (matched - MaxBridges) : 0U;
+  for (UINT32 k = 0; k < out_count; k++) {
+    OutBridges[k] = cands[start_idx + k].desc;
+  }
+  return out_count;
+}
+
+/*
+ * Discovers the PCIe Link Control & Status Register on the Root Port forwarding to target_bus.
+ */
+static UINT32 GuFindRootPortLinkReg(EFI_BOOT_SERVICES *bs, UINT8 target_bus) {
+  GU_S3_BRIDGE_DESC chain[GU_S3_MAX_BRIDGES];
+  UINT32 n = GuDiscoverUpstreamBridgeChain(bs, target_bus, chain, GU_S3_MAX_BRIDGES);
+  for (UINT32 i = 0; i < n; i++) {
+    if (chain[i].link_reg != 0) return chain[i].link_reg;
+  }
+  return 0x80001960U;
 }
 
 /*
  * Discovers the Power Management Control/Status Register (PMCSR) on the GPU via PCI Cap 0x01.
  */
-static UINT32 GuFindGpuPmcsrReg(EFI_BOOT_SERVICES *bs, EFI_PCI_IO_PROTOCOL *gpu_io, UINT8 gpu_bus) {
-  UINT32 fallback_reg = 0x80000000U | ((UINT32)gpu_bus << 16) | 0x64U; /* Default RTX 4090 pm_cap=0x60 + 0x04 */
+static UINT32 GuFindGpuPmcsrReg(EFI_BOOT_SERVICES *bs, EFI_PCI_IO_PROTOCOL *gpu_io, UINT8 gpu_bus, UINT8 gpu_dev, UINT8 gpu_func) {
+  UINT32 gpu_bdf_base = 0x80000000U | ((UINT32)gpu_bus << 16) | ((UINT32)gpu_dev << 11) | ((UINT32)gpu_func << 8);
+  UINT32 fallback_reg = gpu_bdf_base | 0x64U; /* Default pm_cap=0x60 + 0x04 */
   if (Gu.pm_cap >= 0x40 && Gu.pm_cap <= 0xFC) {
     UINT32 reg_off = (UINT32)(Gu.pm_cap + 0x04);
-    return 0x80000000U | ((UINT32)gpu_bus << 16) | (reg_off & ~3U);
+    return gpu_bdf_base | (reg_off & ~3U);
   }
 
   if (!gpu_io && bs && bs->LocateHandleBuffer && bs->HandleProtocol && bs->FreePool) {
@@ -1756,7 +2005,7 @@ static UINT32 GuFindGpuPmcsrReg(EFI_BOOT_SERVICES *bs, EFI_PCI_IO_PROTOCOL *gpu_
         if (!EFI_ERROR(bs->HandleProtocol(handles[i], &pci_guid, (VOID **)&io)) && io) {
           UINTN seg = 0, bus = 0, dev = 0, func = 0;
           if (io->GetLocation && !EFI_ERROR(io->GetLocation(io, &seg, &bus, &dev, &func))) {
-            if (bus == gpu_bus && dev == 0 && func == 0) {
+            if (bus == gpu_bus && dev == gpu_dev && func == gpu_func) {
               gpu_io = io;
               break;
             }
@@ -2109,17 +2358,44 @@ EFI_STATUS GuAcpiInstallShadowFacs(
   *(UINT32 *)(low_base + GU_TRAMP_REAL_FACS_MIRROR_OFF) = Info->original_firmware_waking_vector;
   *(UINT64 *)(low_base + GU_TRAMP_REAL_FACS_MIRROR_OFF + 8) = Info->original_xfirmware_waking_vector;
 
-  /* Dynamically discover Root Port Link Status and GPU PMCSR register addresses */
-  UINT8 target_gpu_bus = (Context && Context->bus) ? Context->bus : 45U;
-  UINT32 root_port_link_reg = GuFindRootPortLinkReg(SystemTable->BootServices, target_gpu_bus);
-  UINT32 gpu_pmcsr_reg = GuFindGpuPmcsrReg(SystemTable->BootServices, Gu.pci, target_gpu_bus);
+  /* Dynamically discover upstream PCIe bridge chain, Root Port Link Status, and GPU PMCSR (v1.9.0) */
+  UINT8 target_gpu_bus  = (Context && Context->bus) ? Context->bus : 45U;
+  UINT8 target_gpu_dev  = Context ? Context->device : 0U;
+  UINT8 target_gpu_func = Context ? Context->function : 0U;
+
+  if (Context && Context->bridge_count == 0) {
+    Context->bridge_count = GuDiscoverUpstreamBridgeChain(
+        SystemTable->BootServices, target_gpu_bus, Context->bridges, GU_S3_MAX_BRIDGES);
+  }
+  UINT32 root_port_link_reg = (Context && Context->bridge_count > 0 && Context->bridges[0].link_reg != 0)
+      ? Context->bridges[0].link_reg
+      : GuFindRootPortLinkReg(SystemTable->BootServices, target_gpu_bus);
+  UINT32 gpu_pmcsr_reg = GuFindGpuPmcsrReg(
+      SystemTable->BootServices, Gu.pci, target_gpu_bus, target_gpu_dev, target_gpu_func);
 
   if (Context) {
     Context->root_port_link_reg = root_port_link_reg;
     Context->gpu_pmcsr_reg = gpu_pmcsr_reg;
   }
+  if (Context && Context->bridge_count > 0) {
+    for (UINT32 bi = 0; bi < Context->bridge_count && bi < GU_S3_MAX_BRIDGES; bi++) {
+      GuLog("S3 PCIe Bridge[%u]: BDF=%#08x BusCfg=%#08x LinkReg=%#08x\n",
+            (unsigned)bi, (unsigned)Context->bridges[bi].bdf_base,
+            (unsigned)Context->bridges[bi].bus_val, (unsigned)Context->bridges[bi].link_reg);
+    }
+  }
   GuLog("S3 Hardware Recon Config: Root Port LinkReg=%#08x (Cap 0x10+0x10), GPU PMCSR=%#08x (Cap 0x01+0x04)\n",
         (unsigned)root_port_link_reg, (unsigned)gpu_pmcsr_reg);
+
+  /* Preflight warnings for Modern Standby (S0ix) and 64-bit XFirmwareWakingVector (v1.9.0) */
+  if (Info->s0ix_warning) {
+    GuLog("S3 Preflight WARNING: Board FADT Flags (%#08x) advertises LOW_POWER_S0_IDLE_CAPABLE (S0ix/Modern Standby) instead of classic S3!\n",
+          (unsigned)Info->fadt_flags);
+  }
+  if (Info->original_xfirmware_waking_vector != 0) {
+    GuLog("S3 Preflight WARNING: Real FACS had non-zero 64-bit XFirmwareWakingVector=%#llx (cleared for 16-bit Real Mode trampoline).\n",
+          (unsigned long long)Info->original_xfirmware_waking_vector);
+  }
 
   /* Allocate dedicated 4KB telemetry page outside the 27MB NVS zone (v1.8.46c) */
   EFI_PHYSICAL_ADDRESS telem_page_phys = GuAcpiAllocateTelemetryPage(SystemTable->BootServices);
@@ -2134,7 +2410,7 @@ EFI_STATUS GuAcpiInstallShadowFacs(
 
   /* 4. Build Pure 16-bit Real Mode S3 Resume Trampoline machine code in low memory (<1MB) */
   EFI_PHYSICAL_ADDRESS gpu_bar0_phys = (Context && Context->bar_base) ? Context->bar_base : 0xFB000000ULL;
-  UINT32 tramp_bytes = GuAcpiBuildTrampolineCode(
+  UINT32 tramp_bytes = GuAcpiBuildTrampolineCodeEx(
       low_base,
       4096,
       trampoline_phys,
@@ -2144,7 +2420,8 @@ EFI_STATUS GuAcpiInstallShadowFacs(
       gpu_bar0_phys,
       root_port_link_reg,
       gpu_pmcsr_reg,
-      Gu.s3_fwsec_dma
+      Gu.s3_fwsec_dma,
+      Context
   );
 
   if (tramp_bytes == 0) {

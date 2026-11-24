@@ -239,6 +239,15 @@ static EFI_STATUS RunUnlock(EFI_SYSTEM_TABLE *t, EFI_HANDLE image,
         L"\r\n");
   }
 
+  if (enable_s3 && Gu.s3_s0ix_warning) {
+    GuBootSay(
+        L"\r\n"
+        L"  [!] ACPI S3 WARNING: Board advertises Modern Standby (S0ix, FADT Bit 21)!\r\n"
+        L"      Classic ACPI S3 wake may NOT execute the FACS trampoline on this board.\r\n"
+        L"      Check BIOS Power/ACPI settings and enable S3 Sleep if available.\r\n"
+        L"\r\n");
+  }
+
   GuBootSay(L" Handing over control to Windows Boot Manager in 3 seconds...\r\n\r\n");
   t->BootServices->Stall(3000000);
 

@@ -1,7 +1,7 @@
 # Technische Dokumentation: Universal GPU Unlock (Multi-Gen)
 
 > **Tool:** Universal GPU Unlock  
-> **Version:** v1.8.67  
+> **Version:** v1.9.0  
 > **Architekturen:** NVIDIA Ada Lovelace (RTX 40), Ampere (RTX 30), Turing (RTX 20 / CMP)  
 > **Unterstützte Betriebssysteme:** Windows 10, Windows 11, WSL2 / Ubuntu CUDA Container  
 
@@ -169,6 +169,12 @@ Für Grafikkarten der Ada Lovelace-Reihe (RTX 4090 / AD102) mit GSP-Firmware und
    - **Host-RAM-Verifikation (`+0x14C`):** Direkt vor dem SEC2-Start sichert das Trampolin das erste DWORD an `[meta_dma]` (erwartet: `0x371a60b3`, Low-DWORD von `GU_WPR_META_MAGIC`) in Telemetrie `+0x14C` (Trampolin-Codegröße: `2.140` Bytes im `0x0A00`-Envelope).
    - **Verifizierter Mehrfach-S3-Erfolg (RTX 4090, Windows 10, Treiber `621.14`):** Über zwei aufeinanderfolgende S3-Sleep/Wake-Zyklen hinweg bestätigt (`[meta_dma] = 0x371a60b3`, `SEC2_MAILBOX0 = 0x67b00001`, `Status = 1`, `SS0 = 0x88888888`, `SS1 = 0x00000008`, `PLM = 0xffffffff`, `READOUT1 = 0x0`), gefolgt von einem PyTorch/CUDA-GEMM-Benchmark mit `290.51` TFLOPS (FP16) bzw. `291.99` TFLOPS (BF16).
 
+9. **Universal-S3 Phase 1 – Board-, Chipsatz-, VBIOS- & Ada-Universalität (`v1.9.0`):**
+   - **Dynamische PCIe-Brückenkette (Intel, AMD & PCIe-Switches):** `GuDiscoverUpstreamBridgeChain()` ermittelt in UEFI über `EFI_PCI_IO_PROTOCOL` herstellerunabhängig bis zu `4` vorgelagerte PCI-to-PCI-Brücken (Root -> Leaf) inkl. exaktem `Pri/Sec/Sub`-Bus-Restore im 16-Bit-Trampolin, PM32-Bridge-Arming und Leaf->Root-Teardown. Das 16-MB-inklusive Bridge-Memory-Window (`0x20`) wird dynamisch aus `bar0_target` berechnet (`Base = (bar0 >> 16) & 0xFFF0`, `Limit = ((bar0 + 0x00FFFFFF) >> 16) & 0xFFF0`).
+   - **Dynamische Ada-IDs & VBIOS-Geometrien:** `ctx->pci_id`, `PMC_BOOT_0` (`ctx->chip_id`) sowie im Kaltstart geparste FWSEC- und SEC2-Booter-Geometrien (IMEM/DMEM-Chunks, `app_code_off`, `os_data_off`, `sig_dmem`, `engine_mask`, `ucode_id`) werden über `GU_S3_RESUME_CONTEXT` (`version = 2`, `216` Bytes) dynamisch ins Trampolin übergeben (`2.281 / 2.560` Bytes Envelope).
+   - **Plattform-Härtung:** Port-`0x80`-getaktetes Pre-FWSEC GFW-BOOT-/VRAM-Gate (`(0x118234 & 0xFF) == 0xFF && 0x100CE0 != 0`) gegen D3cold-Races, strikte `< 0x000A0000`-Low-RAM-Begrenzung (kein VGA/ROM-Fallback) sowie `[P]`-Preflight-Warnung bei Modern Standby (`FADT` Bit 21 `LOW_POWER_S0_IDLE_CAPABLE`) und nicht-null `XFirmwareWakingVector`.
+   - **Host-Test-Verifikation:** Alle `9.782` Checks in `test_s3_resume.c` (inkl. Test `[11]` für Intel `0x8086`, 2-Stufen-Switch, `BAR0 = 0xD0000000`, `RTX 4080` `0x270410DE`, `< 0x000A0000`-Gate und S0ix-Erkennung) bestanden (`MSVC_HOST_TESTS=PASS`).
+
 ---
 
 ## 7. Sicherheitsarchitektur & Containment (Code-Review Zusammenfassung)
@@ -196,7 +202,7 @@ Alle Kernkomponenten werden über gemockte Firmware-Services automatisiert valid
 5. `test_gpu_topology`: Negative Topology Isolation (44 Checks).
 6. `test_gpu_discovery`: PCI I/O Protocol Adapter & Memory-Decode-Aktivierung (21 Checks).
 7. `test_turing_local`: Turing TU102/TU104/TU106 Device-IDs & Binär-Hashes.
-8. `test_s3_resume`: Universal S3 Resume Engine, ACPI FACS Shadow Intercept & 16-Bit Trampoline (106 Checks).
+8. `test_s3_resume`: Universal S3 Resume Engine, ACPI FACS Shadow Intercept & 16-Bit Trampoline (9.782 Checks).
 
 ---
 

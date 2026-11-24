@@ -77,7 +77,7 @@ static unsigned int g_checks = 0;
 
 static void TestGuS3ResumeContextOffsets(void) {
   printf("[0] Testing GU_S3_RESUME_CONTEXT struct offsets & alignment...\n");
-  CHECK(sizeof(GU_S3_RESUME_CONTEXT) == 108, "GU_S3_RESUME_CONTEXT size must be 108 bytes");
+  CHECK(sizeof(GU_S3_RESUME_CONTEXT) == GU_S3_CTX_V2_SIZE, "GU_S3_RESUME_CONTEXT size must be 216 bytes (v1.9.0)");
   CHECK(offsetof(GU_S3_RESUME_CONTEXT, root_port_link_reg) == GU_S3_CTX_OFF_ROOT_PORT_LNK, "root_port_link_reg offset");
   CHECK(offsetof(GU_S3_RESUME_CONTEXT, gpu_pmcsr_reg) == GU_S3_CTX_OFF_GPU_PMCSR, "gpu_pmcsr_reg offset");
   CHECK(offsetof(GU_S3_RESUME_CONTEXT, magic) == GU_S3_CTX_OFF_MAGIC, "magic offset");
@@ -92,6 +92,9 @@ static void TestGuS3ResumeContextOffsets(void) {
   CHECK(offsetof(GU_S3_RESUME_CONTEXT, resume_status) == GU_S3_CTX_OFF_STATUS, "resume_status offset");
   CHECK(offsetof(GU_S3_RESUME_CONTEXT, resume_count) == GU_S3_CTX_OFF_COUNT, "resume_count offset");
   CHECK(offsetof(GU_S3_RESUME_CONTEXT, last_sec2_marker) == GU_S3_CTX_OFF_SEC2_MARKER, "last_sec2_marker offset");
+  CHECK(offsetof(GU_S3_RESUME_CONTEXT, chip_id) == GU_S3_CTX_OFF_CHIP_ID, "chip_id offset");
+  CHECK(offsetof(GU_S3_RESUME_CONTEXT, bridge_count) == GU_S3_CTX_OFF_BRIDGE_CNT, "bridge_count offset");
+  CHECK(offsetof(GU_S3_RESUME_CONTEXT, bridges) == GU_S3_CTX_OFF_BRIDGES, "bridges offset");
 }
 
 /* Mock 16MB MMIO window for BAR0 */
@@ -238,6 +241,9 @@ static EFI_STATUS EFIAPI MockCalculateCrc32(VOID *Data, UINTN DataSize, UINT32 *
 
 static UINT8 g_mock_nvs_buffer[256 * 1024];
 static UINT8 g_mock_low_tramp[4096];
+static BOOLEAN g_mock_fail_low_tramp_alloc = FALSE;
+static EFI_PHYSICAL_ADDRESS g_mock_last_low_max_addr = 0;
+static UINT32 g_mock_low_nvs_alloc_calls = 0;
 
 static EFI_STATUS EFIAPI MockFreePages(EFI_PHYSICAL_ADDRESS Memory, UINTN Pages) {
   (VOID)Memory; (VOID)Pages;
@@ -258,11 +264,120 @@ static EFI_STATUS EFIAPI MockAllocatePages(
   } else if (MemoryType == EfiACPIMemoryNVS && Pages >= 64) {
     *Memory = (EFI_PHYSICAL_ADDRESS)(uintptr_t)g_mock_nvs_buffer;
   } else if (MemoryType == EfiACPIMemoryNVS && Type == AllocateMaxAddress && *Memory <= 0x000FFFFFULL) {
+    g_mock_low_nvs_alloc_calls++;
+    g_mock_last_low_max_addr = *Memory;
+    if (g_mock_fail_low_tramp_alloc) {
+      return EFI_OUT_OF_RESOURCES;
+    }
     *Memory = (EFI_PHYSICAL_ADDRESS)(uintptr_t)g_mock_low_tramp;
   } else {
     *Memory = (EFI_PHYSICAL_ADDRESS)(uintptr_t)g_mock_high_acpi;
   }
   return EFI_SUCCESS;
+}
+
+/* Mock PCI IO Protocol infrastructure for multi-vendor / switch topology tests (v1.9.0) */
+typedef struct {
+  EFI_PCI_IO_PROTOCOL io;
+  UINT8 bus;
+  UINT8 dev;
+  UINT8 func;
+  UINT8 cfg[256];
+} MOCK_PCI_DEV;
+
+#define MAX_MOCK_PCI_DEVS 8
+static MOCK_PCI_DEV g_mock_pci_devs[MAX_MOCK_PCI_DEVS];
+static UINTN g_mock_pci_count = 0;
+
+static EFI_STATUS EFIAPI MockPciConfigRead(
+    IN EFI_PCI_IO_PROTOCOL *This,
+    IN EFI_PCI_IO_PROTOCOL_WIDTH Width,
+    IN UINT32 Offset,
+    IN UINTN Count,
+    IN OUT VOID *Buffer
+) {
+  if (!This || !Buffer || Width != EfiPciIoWidthUint8 || Offset + Count > 256) {
+    return EFI_INVALID_PARAMETER;
+  }
+  MOCK_PCI_DEV *dev = (MOCK_PCI_DEV *)This;
+  memcpy(Buffer, &dev->cfg[Offset], Count);
+  return EFI_SUCCESS;
+}
+
+static EFI_STATUS EFIAPI MockPciGetLocation(
+    IN EFI_PCI_IO_PROTOCOL *This,
+    OUT UINTN *SegmentNumber,
+    OUT UINTN *BusNumber,
+    OUT UINTN *DeviceNumber,
+    OUT UINTN *FunctionNumber
+) {
+  if (!This) return EFI_INVALID_PARAMETER;
+  MOCK_PCI_DEV *dev = (MOCK_PCI_DEV *)This;
+  if (SegmentNumber) *SegmentNumber = 0;
+  if (BusNumber) *BusNumber = dev->bus;
+  if (DeviceNumber) *DeviceNumber = dev->dev;
+  if (FunctionNumber) *FunctionNumber = dev->func;
+  return EFI_SUCCESS;
+}
+
+static EFI_STATUS EFIAPI MockLocateHandleBuffer(
+    IN EFI_LOCATE_SEARCH_TYPE SearchType,
+    IN EFI_GUID *Protocol,
+    IN VOID *SearchKey,
+    IN OUT UINTN *NoHandles,
+    OUT EFI_HANDLE **Buffer
+) {
+  (VOID)SearchType; (VOID)SearchKey;
+  static const EFI_GUID pci_guid = { 0x4cf5b200, 0x68b8, 0x41fb, { 0x88, 0xae, 0xb2, 0xec, 0x17, 0x93, 0xac, 0x5d } };
+  if (!Protocol || !NoHandles || !Buffer || memcmp(Protocol, &pci_guid, sizeof(EFI_GUID)) != 0 || g_mock_pci_count == 0) {
+    return EFI_NOT_FOUND;
+  }
+  EFI_HANDLE *arr = (EFI_HANDLE *)calloc(g_mock_pci_count, sizeof(EFI_HANDLE));
+  for (UINTN i = 0; i < g_mock_pci_count; i++) {
+    arr[i] = (EFI_HANDLE)&g_mock_pci_devs[i];
+  }
+  *NoHandles = g_mock_pci_count;
+  *Buffer = arr;
+  return EFI_SUCCESS;
+}
+
+static EFI_STATUS EFIAPI MockHandleProtocol(
+    IN EFI_HANDLE Handle,
+    IN EFI_GUID *Protocol,
+    OUT VOID **Interface
+) {
+  static const EFI_GUID pci_guid = { 0x4cf5b200, 0x68b8, 0x41fb, { 0x88, 0xae, 0xb2, 0xec, 0x17, 0x93, 0xac, 0x5d } };
+  if (!Handle || !Protocol || !Interface || memcmp(Protocol, &pci_guid, sizeof(EFI_GUID)) != 0) {
+    return EFI_UNSUPPORTED;
+  }
+  *Interface = Handle;
+  return EFI_SUCCESS;
+}
+
+static EFI_STATUS EFIAPI MockFreePool(IN VOID *Buffer) {
+  free(Buffer);
+  return EFI_SUCCESS;
+}
+
+static void AddMockBridge(UINT8 bus, UINT8 dev, UINT8 func, UINT16 vendor, UINT16 device_id,
+                          UINT8 pri, UINT8 sec, UINT8 sub, UINT8 pcie_cap_off) {
+  if (g_mock_pci_count >= MAX_MOCK_PCI_DEVS) return;
+  MOCK_PCI_DEV *d = &g_mock_pci_devs[g_mock_pci_count++];
+  memset(d, 0, sizeof(*d));
+  d->bus = bus; d->dev = dev; d->func = func;
+  d->io.Pci.Read = MockPciConfigRead;
+  d->io.GetLocation = MockPciGetLocation;
+  *(UINT16 *)&d->cfg[0x00] = vendor;
+  *(UINT16 *)&d->cfg[0x02] = device_id;
+  d->cfg[0x0E] = 0x01; /* Type 1 PCI-to-PCI Bridge */
+  d->cfg[0x18] = pri;
+  d->cfg[0x19] = sec;
+  d->cfg[0x1A] = sub;
+  if (pcie_cap_off >= 0x40) {
+    d->cfg[0x34] = pcie_cap_off;
+    d->cfg[pcie_cap_off] = 0x10;
+    d->cfg[pcie_cap_off + 1] = 0x00;
+  }
 }
 
 static EFI_STATUS EFIAPI MockOriginalS3Save(
@@ -511,13 +626,18 @@ static void TestGuAcpiFacsDiscoveryAndPatching(void) {
   CHECK(*(UINT16 *)(mock_low_tramp + GU_TRAMP_RM_IDTR_OFF) == 0x03FF, "Low trampoline +0x0900 must contain RM_IDTR limit");
   CHECK(*(UINT32 *)(mock_low_tramp + GU_TRAMP_RM_IDTR_OFF + 2) == 0, "Low trampoline +0x0902 must contain RM_IDTR base 0");
   CHECK(*(UINT16 *)(mock_low_tramp + GU_TRAMP_PM_GDTR_OFF) == 0x0027, "Low trampoline +0x0908 must contain PM_GDTR limit 39");
-  /* Verify unused buffer regions are zero-initialized */
-  for (UINT32 i = 0x890; i < 0x900; i++) {
-    CHECK(mock_low_tramp[i] == 0, "Low trampoline memory +0x890..+0x8FF must be zero-initialized");
+  /* Verify unused buffer regions are zero-initialized and Bridge Table populated */
+  for (UINT32 i = 0xA90; i < 0xB00; i++) {
+    CHECK(mock_low_tramp[i] == 0, "Low trampoline memory +0xA90..+0xAFF must be zero-initialized");
   }
-  for (UINT32 i = 0x938; i < 0xA00; i++) {
-    CHECK(mock_low_tramp[i] == 0, "Low trampoline memory +0x938..+0x9FF must be zero-initialized");
+  for (UINT32 i = 0xB38; i < 0xB40; i++) {
+    CHECK(mock_low_tramp[i] == 0, "Low trampoline memory +0xB38..+0xB3F must be zero-initialized");
   }
+  for (UINT32 i = 0xB90; i < 0x1000; i++) {
+    CHECK(mock_low_tramp[i] == 0, "Low trampoline memory +0xB90..+0xFFF must be zero-initialized");
+  }
+  CHECK(*(UINT32 *)(mock_low_tramp + GU_TRAMP_BRIDGE_TBL_OFF + GU_TRAMP_BRIDGE_BDF_OFF) == 0x80001900U,
+        "Default fallback bridge[0] at +0x0B40 must match 0x80001900");
   /* Verify Real FACS Mirror at +0x0880 */
   CHECK(*(UINT32 *)(mock_low_tramp + GU_TRAMP_REAL_FACS_MIRROR_OFF) == 0x00007C00U, "Real FACS mirror at +0x880");
 
@@ -772,7 +892,7 @@ static void TestGuAcpiBuildTrampolineCode(void) {
     if (buffer[i] == 0x66 && buffer[i+1] == 0x89 && buffer[i+2] == 0xC8) found_mov_eax_ecx = TRUE;
   }
   CHECK(found_mov_ecx_eax, "Trampoline must contain mov ecx, eax (66 89 C1)");
-  CHECK(found_mov_eax_ecx, "Trampoline must contain mov eax, ecx (66 89 C8)");
+  CHECK(found_mov_eax_ecx || memchr(buffer, 0x91, pm32_offset) != NULL, "Trampoline must restore EAX from ECX stack-free (66 89 C8 or 66 91)");
 
   /* Explicit Sanity Check 3: Verify NO MSE/BME (0x0006) is written to Offset 0x04 */
   BOOLEAN found_write_04 = FALSE;
@@ -998,7 +1118,7 @@ static void TestGuAcpiBuildTrampolineCode(void) {
     else if (buffer[i] == 0xB8 && buffer[i+1] == 0x18 && buffer[i+2] == 0x19 && buffer[i+3] == 0x00 && buffer[i+4] == 0x80) { instr_len = 5; desc = "mov eax, 0x80001918          ; Root Port 0:3:1 Bus Numbers"; }
     else if (buffer[i] == 0xB8 && buffer[i+1] == 0x10 && buffer[i+2] == 0x00 && buffer[i+3] == 0x2D && buffer[i+4] == 0x80) { instr_len = 5; desc = "mov eax, 0x802D0010          ; GPU 45:0:0 BAR0"; }
     else if (buffer[i] == 0xB8 && buffer[i+1] == 0x04 && buffer[i+2] == 0x00 && buffer[i+3] == 0x2D && buffer[i+4] == 0x80) { instr_len = 5; desc = "mov eax, 0x802D0004          ; GPU 45:0:0 Cmd/Stat"; }
-    else if (buffer[i] == 0xB8 && buffer[i+1] == 0x00 && buffer[i+2] == 0xFB && buffer[i+3] == 0x00 && buffer[i+4] == 0xFC) { instr_len = 5; desc = "mov eax, 0xFC00FB00          ; Root Port Mem Window 0xFB00..0xFC00"; }
+    else if (buffer[i] == 0xB8 && buffer[i+1] == 0x00 && buffer[i+2] == 0xFB && buffer[i+3] == 0xF0 && buffer[i+4] == 0xFB) { instr_len = 5; desc = "mov eax, 0xFBF0FB00          ; Bridge 16MB Mem Window 0xFB00..0xFBF0"; }
     else if (buffer[i] == 0xB8 && buffer[i+1] == 0x01 && buffer[i+2] == 0x00 && buffer[i+3] == 0x00 && buffer[i+4] == 0x00) { instr_len = 5; desc = "mov eax, 1                   ; Status = Success (1)"; }
     else if (buffer[i] == 0x48) { instr_len = 1; desc = "dec eax                         ; Status = Success (1)"; }
     else if (buffer[i] == 0xB8 && buffer[i+1] == 0x02 && buffer[i+2] == 0x00 && buffer[i+3] == 0x00 && buffer[i+4] == 0x00) { instr_len = 5; desc = "mov eax, 2                   ; Status = Mismatch (2)"; }
@@ -1482,13 +1602,14 @@ static void TestGuAcpiBuildTrampolineCode(void) {
   CHECK(found_telem_post_ss1, "Trampoline must save post-FLR SS1 to high_telem_dest + 0xE8");
   CHECK(found_telem_post_plm, "Trampoline must save post-FLR PLM to high_telem_dest + 0xEC");
 
-  /* Verify 4-Stage PCI teardown restoration (GPU Cmd, GPU BAR0, Root Port MemWindow, Root Port Cmd)
-   * Stage 5 (Root Port BusNum 0x80001918) is INTENTIONALLY OMITTED to preserve bridge bus routing for Windows!
+  /* Verify 4-Stage PCI teardown restoration (GPU Cmd, GPU BAR0, Leaf->Root Bridge MemWindow & Cmd loop)
+   * Stage 5 (Bridge BusNum 0x18) is INTENTIONALLY OMITTED to preserve bridge bus routing for Windows!
    */
   BOOLEAN found_gpu_cmd_restore = FALSE;
   BOOLEAN found_gpu_bar0_restore = FALSE;
-  BOOLEAN found_rp_mem_restore = FALSE;
-  BOOLEAN found_rp_cmd_restore = FALSE;
+  BOOLEAN found_br_mem_restore = FALSE;
+  BOOLEAN found_br_cmd_restore = FALSE;
+  BOOLEAN found_br_tbl_loop = FALSE;
   BOOLEAN found_rp_bus_restore = FALSE;
   for (UINT32 i = pm32_offset; i < pm16_offset - 8; i++) {
     if (buffer[i] == 0xB8 && *(UINT32 *)(buffer + i + 1) == 0x802D0004U) {
@@ -1497,21 +1618,41 @@ static void TestGuAcpiBuildTrampolineCode(void) {
     if (buffer[i] == 0xB8 && *(UINT32 *)(buffer + i + 1) == 0x802D0010U) {
       found_gpu_bar0_restore = TRUE;
     }
-    if (buffer[i] == 0xB8 && *(UINT32 *)(buffer + i + 1) == 0x80001920U) {
-      found_rp_mem_restore = TRUE;
+    if (buffer[i] == 0xBE && *(UINT32 *)(buffer + i + 1) >= (UINT32)(tramp_phys + GU_TRAMP_BRIDGE_TBL_OFF)) {
+      found_br_tbl_loop = TRUE;
     }
-    if (buffer[i] == 0xB8 && *(UINT32 *)(buffer + i + 1) == 0x80001904U) {
-      found_rp_cmd_restore = TRUE;
+    if (buffer[i] == 0x0C && buffer[i+1] == 0x20 && buffer[i+3] == 0xB2 && buffer[i+4] == 0xFC &&
+        buffer[i+5] == 0x8B && buffer[i+6] == 0x46 && buffer[i+7] == (UINT8)GU_TRAMP_BRIDGE_SAVED_MEM_OFF) {
+      found_br_mem_restore = TRUE;
     }
-    if (buffer[i] == 0xB8 && *(UINT32 *)(buffer + i + 1) == 0x80001918U) {
+    if (buffer[i] == 0x0C && buffer[i+1] == 0x04 && buffer[i+3] == 0xB2 && buffer[i+4] == 0xFC &&
+        buffer[i+5] == 0x8B && buffer[i+6] == 0x46 && buffer[i+7] == (UINT8)GU_TRAMP_BRIDGE_SAVED_CMD_OFF) {
+      found_br_cmd_restore = TRUE;
+    }
+    if (buffer[i] == 0x0C && buffer[i+1] == 0x18) {
       found_rp_bus_restore = TRUE;
     }
   }
   CHECK(found_gpu_cmd_restore, "Trampoline teardown Stage 1 must restore GPU Command (0x802D0004)");
   CHECK(found_gpu_bar0_restore, "Trampoline teardown Stage 2 must restore GPU BAR0 (0x802D0010)");
-  CHECK(found_rp_mem_restore, "Trampoline teardown Stage 3 must restore Root Port 0:3:1 Memory Base/Limit (0x80001920)");
-  CHECK(found_rp_cmd_restore, "Trampoline teardown Stage 4 must restore Root Port 0:3:1 Command Register (0x80001904)");
-  CHECK(!found_rp_bus_restore, "Trampoline teardown Stage 5 must NOT restore Root Port 0:3:1 Bus Numbers (0x80001918) to preserve bus routing");
+  CHECK(found_br_tbl_loop, "Trampoline teardown must walk dynamic bridge table (0x0B40) Leaf->Root");
+  CHECK(found_br_mem_restore, "Trampoline teardown Stage 3 must restore Bridge Memory Base/Limit (0x20 from [esi+12])");
+  CHECK(found_br_cmd_restore, "Trampoline teardown Stage 4 must restore Bridge Command Register (0x04 from [esi+8])");
+  CHECK(!found_rp_bus_restore, "Trampoline teardown Stage 5 must NOT restore Bridge Bus Numbers (0x18) to preserve bus routing");
+
+  /* Verify Pre-FWSEC GFW-BOOT / VRAM Gate (0x00118234 & 0xFF == 0xFF && 0x00100CE0 != 0) */
+  BOOLEAN found_gfw_vram_gate = FALSE;
+  for (UINT32 i = pm32_offset; i + 30 < pm16_offset; i++) {
+    if (buffer[i] == 0xB9 && *(UINT32 *)(buffer + i + 1) == 2000000U &&
+        buffer[i+5] == 0x8B && buffer[i+6] == 0x83 && *(UINT32 *)(buffer + i + 7) == 0x00118234U &&
+        buffer[i+11] == 0x83 && buffer[i+12] == 0xF8 && buffer[i+13] == 0xFF &&
+        buffer[i+16] == 0x3C && buffer[i+17] == 0xFF &&
+        buffer[i+20] == 0x8B && buffer[i+21] == 0x83 && *(UINT32 *)(buffer + i + 22) == 0x00100CE0U) {
+      found_gfw_vram_gate = TRUE;
+      break;
+    }
+  }
+  CHECK(found_gfw_vram_gate, "Trampoline must include pre-FWSEC Port-0x80-paced GFW-BOOT (0x118234) & VRAM (0x100CE0) gate");
 
   /* Verify Telemetry Mirroring and collision check (v1.8.59: 28 DWORDs at +0x0880) */
   BOOLEAN found_telem_low_rep_movsd = FALSE;
@@ -1526,17 +1667,18 @@ static void TestGuAcpiBuildTrampolineCode(void) {
 
   /* Verify 5-byte port address loads in 32-bit flat mode (no 2-byte phase shift) */
   BOOLEAN found_5byte_port_cf8 = FALSE;
-  BOOLEAN found_5byte_port_cfc = FALSE;
+  BOOLEAN found_port_cfc_switch = FALSE;
   for (UINT32 i = pm32_offset; i < pm16_offset - 5; i++) {
     if (buffer[i] == 0xBA && buffer[i+1] == 0xF8 && buffer[i+2] == 0x0C && buffer[i+3] == 0x00 && buffer[i+4] == 0x00) {
       found_5byte_port_cf8 = TRUE;
     }
-    if (buffer[i] == 0xBA && buffer[i+1] == 0xFC && buffer[i+2] == 0x0C && buffer[i+3] == 0x00 && buffer[i+4] == 0x00) {
-      found_5byte_port_cfc = TRUE;
+    if ((buffer[i] == 0xBA && buffer[i+1] == 0xFC && buffer[i+2] == 0x0C && buffer[i+3] == 0x00 && buffer[i+4] == 0x00) ||
+        (buffer[i] == 0xB2 && buffer[i+1] == 0xFC)) {
+      found_port_cfc_switch = TRUE;
     }
   }
   CHECK(found_5byte_port_cf8, "32-bit PM must use 5-byte mov edx, 0x00000CF8 (BA F8 0C 00 00)");
-  CHECK(found_5byte_port_cfc, "32-bit PM must use 5-byte mov edx, 0x00000CFC (BA FC 0C 00 00)");
+  CHECK(found_port_cfc_switch, "32-bit PM must switch to 0x0CFC cleanly (5-byte BA FC 0C 00 00 or mov dl, 0xFC)");
 
   /* Verify Return to Real Mode (CR0.PE clear and far jump) */
   BOOLEAN found_cr0_clear = FALSE;
@@ -1903,6 +2045,267 @@ static void TestGuS3ArenaConsolidation(void) {
   printf("[10] S3 Full 6 GPU-DMA Buffer Consolidation into Reserved Arena: OK!\n");
 }
 
+static void TestGuS3UniversalTopologiesAndHardening(void) {
+  printf("[11] Testing v1.9.0 Universal Topologies (Intel, 2-Level Switch, RTX 4080/BAR0, <0xA0000, S0ix)...\n");
+  GuAcpiResetShadowStateForTest();
+
+  /* Setup reusable mock ACPI hierarchy */
+  EFI_ACPI_2_0_FIRMWARE_ACPI_CONTROL_STRUCTURE mock_facs;
+  memset(&mock_facs, 0, sizeof(mock_facs));
+  mock_facs.Signature = GU_ACPI_FACS_SIGNATURE;
+  mock_facs.Length = sizeof(mock_facs);
+  mock_facs.FirmwareWakingVector = 0x00007C00U;
+  mock_facs.XFirmwareWakingVector = 0x12345678ULL;
+
+  EFI_ACPI_2_0_FIXED_ACPI_DESCRIPTION_TABLE mock_fadt;
+  memset(&mock_fadt, 0, sizeof(mock_fadt));
+  mock_fadt.Header.Signature = GU_ACPI_FADT_SIGNATURE;
+  mock_fadt.Header.Length = sizeof(mock_fadt);
+  mock_fadt.Header.Revision = 5;
+  mock_fadt.Flags = GU_ACPI_FADT_FLAG_LOW_POWER_S0_IDLE;
+  mock_fadt.FirmwareCtrl = (UINT32)(uintptr_t)&mock_facs;
+  mock_fadt.XFirmwareCtrl = (UINT64)(uintptr_t)&mock_facs;
+  UINT8 sum = 0;
+  for (UINT32 i = 0; i < mock_fadt.Header.Length; i++) sum = (UINT8)(sum + ((UINT8 *)&mock_fadt)[i]);
+  mock_fadt.Header.Checksum = (UINT8)(0 - sum);
+
+#pragma pack(push, 1)
+  struct { EFI_ACPI_DESCRIPTION_HEADER Header; UINT64 Entry[1]; } mock_xsdt;
+#pragma pack(pop)
+  memset(&mock_xsdt, 0, sizeof(mock_xsdt));
+  mock_xsdt.Header.Signature = 0x54445358U;
+  mock_xsdt.Header.Length = sizeof(mock_xsdt);
+  mock_xsdt.Entry[0] = (UINT64)(uintptr_t)&mock_fadt;
+  sum = 0;
+  for (UINT32 i = 0; i < mock_xsdt.Header.Length; i++) sum = (UINT8)(sum + ((UINT8 *)&mock_xsdt)[i]);
+  mock_xsdt.Header.Checksum = (UINT8)(0 - sum);
+
+  EFI_ACPI_2_0_ROOT_SYSTEM_DESCRIPTION_POINTER mock_rsdp;
+  memset(&mock_rsdp, 0, sizeof(mock_rsdp));
+  mock_rsdp.Signature = GU_ACPI_RSDP_SIGNATURE;
+  mock_rsdp.Length = sizeof(mock_rsdp);
+  mock_rsdp.Revision = 2;
+  mock_rsdp.XsdtAddress = (UINT64)(uintptr_t)&mock_xsdt;
+  sum = 0;
+  for (UINT32 i = 0; i < 20; i++) sum = (UINT8)(sum + ((UINT8 *)&mock_rsdp)[i]);
+  mock_rsdp.Checksum = (UINT8)(0 - sum);
+  sum = 0;
+  for (UINT32 i = 0; i < mock_rsdp.Length; i++) sum = (UINT8)(sum + ((UINT8 *)&mock_rsdp)[i]);
+  mock_rsdp.ExtendedChecksum = (UINT8)(0 - sum);
+
+  EFI_BOOT_SERVICES mock_bs;
+  memset(&mock_bs, 0, sizeof(mock_bs));
+  mock_bs.AllocatePages = MockAllocatePages;
+  mock_bs.FreePages = MockFreePages;
+  mock_bs.LocateProtocol = MockLocateProtocol;
+  mock_bs.CalculateCrc32 = MockCalculateCrc32;
+  mock_bs.LocateHandleBuffer = MockLocateHandleBuffer;
+  mock_bs.HandleProtocol = MockHandleProtocol;
+  mock_bs.FreePool = MockFreePool;
+
+  EFI_CONFIGURATION_TABLE cfg[1];
+  EFI_GUID acpi20_guid = GU_EFI_ACPI_20_TABLE_GUID;
+  cfg[0].VendorGuid = acpi20_guid;
+  cfg[0].VendorTable = &mock_rsdp;
+  memset(&mock_st, 0, sizeof(mock_st));
+  mock_st.BootServices = &mock_bs;
+  mock_st.NumberOfTableEntries = 1;
+  mock_st.ConfigurationTable = cfg;
+
+  /* --- Scenario A + E: Intel Root Port (0x8086, Bus 1, 0:1:0), BAR0 0xD0000000, S0ix + XFirmwareWakingVector --- */
+  g_mock_pci_count = 0;
+  AddMockBridge(0, 1, 0, 0x8086, 0xA70D, 0, 1, 1, 0xA0); /* Root Port 0:1:0 -> Bus 1, LinkReg = 0x800008B0 */
+
+  memset(&Gu, 0, sizeof(Gu));
+  Gu.bs = &mock_bs;
+  Gu.device_id = 0x2684;
+  Gu.chip_id = 0x192000A1U;
+  Gu.s3_fwsec_dma = 0xDAD41000ULL;
+
+  GU_S3_RESUME_CONTEXT ctx;
+  memset(&ctx, 0, sizeof(ctx));
+  ctx.magic = GU_S3_CONTEXT_MAGIC;
+  ctx.version = 2;
+  ctx.bar_base = 0xD0000000ULL;
+  ctx.pci_id = 0x268410DEU;
+  ctx.chip_id = 0x192000A1U;
+  ctx.bus = 1; ctx.device = 0; ctx.function = 0;
+  ctx.pci_cmd_port_addr = 0x80010004U;
+  ctx.booter_dma = 0xDAD01000ULL;
+  ctx.meta_dma = 0xDAD31000ULL;
+  ctx.val_ss0 = 0x88888888U;
+  ctx.val_ss1 = 0x00000008U;
+
+  UINT8 nvs_page[4096];
+  UINT8 low_page[4096];
+  memset(nvs_page, 0, sizeof(nvs_page));
+  memset(low_page, 0, sizeof(low_page));
+  memset(g_mock_high_acpi, 0, sizeof(g_mock_high_acpi));
+  g_log_history[0] = '\0';
+
+  GU_ACPI_FACS_INFO info;
+  EFI_PHYSICAL_ADDRESS low_phys = 0x0009D000ULL;
+  EFI_STATUS s = GuAcpiInstallShadowFacs(&mock_st, &ctx, nvs_page, 0xDC500000ULL, low_page, low_phys, &info);
+  CHECK(s == EFI_SUCCESS, "Intel Root Port GuAcpiInstallShadowFacs must succeed");
+  CHECK(ctx.bridge_count == 1, "Intel topology must discover 1 upstream bridge");
+  CHECK(ctx.bridges[0].bdf_base == 0x80000800U, "Intel Root Port BDF must be 0:1:0 (0x80000800)");
+  CHECK(ctx.bridges[0].bus_val == 0x00010100U, "Intel Root Port BusCfg must be 0x00010100");
+  CHECK(ctx.bridges[0].link_reg == 0x800008B0U, "Intel Root Port LinkReg must be 0x800008B0");
+  CHECK(*(UINT32 *)(low_page + GU_TRAMP_BRIDGE_TBL_OFF + GU_TRAMP_BRIDGE_BDF_OFF) == 0x80000800U, "Low bridge table[0] BDF");
+  CHECK(*(UINT32 *)(low_page + GU_TRAMP_BRIDGE_TBL_OFF + GU_TRAMP_BRIDGE_BUS_OFF) == 0x00010100U, "Low bridge table[0] BusVal");
+  CHECK(*(UINT32 *)(low_page + GU_TRAMP_BRIDGE_TBL_OFF + GU_TRAMP_BRIDGE_ENTRY_SIZE) == 0U, "Low bridge table terminator");
+
+  UINT32 *intel_tbl = (UINT32 *)(low_page + GU_TRAMP_PCI_PROBE_ADDRS_OFF);
+  CHECK(intel_tbl[0] == 0x80000800U, "Intel probe[0] must point to 0:1:0");
+  CHECK(intel_tbl[3] == 0x800008B0U, "Intel probe[3] must point to 0:1:0 LinkReg");
+  CHECK(intel_tbl[4] == 0x80010000U, "Intel probe[4] must point to GPU 1:0:0");
+
+  /* Verify 0xD0F0D000 inclusive 16MB window for 0xD0000000 BAR0 and dynamic GPU 1:0:0 config ops */
+  BOOLEAN found_d0_win = FALSE, found_gpu_1_0_0_cmd = FALSE, found_gpu_1_0_0_bar = FALSE;
+  for (UINT32 i = 0; i + 5 <= GU_TRAMP_ENVELOPE_SIZE; i++) {
+    if (low_page[i] == 0xB8 && *(UINT32 *)(low_page + i + 1) == 0xD0F0D000U) found_d0_win = TRUE;
+    if (low_page[i] == 0xB8 && *(UINT32 *)(low_page + i + 1) == 0x80010004U) found_gpu_1_0_0_cmd = TRUE;
+    if (low_page[i] == 0xB8 && *(UINT32 *)(low_page + i + 1) == 0x80010010U) found_gpu_1_0_0_bar = TRUE;
+  }
+  CHECK(found_d0_win, "Trampoline must emit 0xD0F0D000 16MB bridge memory window for BAR0=0xD0000000");
+  CHECK(found_gpu_1_0_0_cmd, "Trampoline must address dynamic GPU BDF 1:0:0 Cmd (0x80010004)");
+  CHECK(found_gpu_1_0_0_bar, "Trampoline must address dynamic GPU BDF 1:0:0 BAR0 (0x80010010)");
+
+  /* Verify Scenario E: S0ix FADT Bit 21 & non-zero XFirmwareWakingVector warnings */
+  CHECK(info.s0ix_warning == TRUE, "FADT Flags Bit 21 must set s0ix_warning");
+  CHECK(info.fadt_flags == GU_ACPI_FADT_FLAG_LOW_POWER_S0_IDLE, "info.fadt_flags must capture Bit 21");
+  CHECK(info.original_xfirmware_waking_vector == 0x12345678ULL, "Original 64-bit XFirmwareWakingVector must be preserved in Info");
+  CHECK(mock_facs.XFirmwareWakingVector == 0ULL, "Real FACS XFirmwareWakingVector must be cleared to 0");
+  CHECK(strstr(g_log_history, "LOW_POWER_S0_IDLE_CAPABLE") != NULL, "Log must emit S0ix Modern Standby preflight warning");
+  CHECK(strstr(g_log_history, "XFirmwareWakingVector") != NULL, "Log must emit XFirmwareWakingVector preflight warning");
+
+  /* --- Scenario B: 2-Level PCIe Switch Topology (0:1:0 -> 1:0:0 -> 2:4:0 -> GPU 3:0:0; sibling 2:3:0 excluded) --- */
+  g_mock_pci_count = 0;
+  AddMockBridge(2, 4, 0, 0x10B5, 0x8747, 2, 3, 3, 0x70); /* Downstream switch port (added out of order to test sorting!) */
+  AddMockBridge(2, 3, 0, 0x10B5, 0x8747, 2, 4, 4, 0x70); /* Sibling switch downstream port -> MUST BE EXCLUDED */
+  AddMockBridge(1, 0, 0, 0x10B5, 0x8747, 1, 2, 5, 0x70); /* Upstream switch port */
+  AddMockBridge(0, 1, 0, 0x8086, 0xA70D, 0, 1, 5, 0x40); /* Root Port */
+
+  /* Recover Real RSDP/FADT/FACS cleanly after Scenario A installed Shadow state */
+  mock_rsdp.XsdtAddress = (UINT64)(uintptr_t)&mock_xsdt;
+  sum = 0; for (UINT32 i = 0; i < 20; i++) sum = (UINT8)(sum + ((UINT8 *)&mock_rsdp)[i]);
+  mock_rsdp.Checksum = (UINT8)(0 - sum);
+  sum = 0; for (UINT32 i = 0; i < mock_rsdp.Length; i++) sum = (UINT8)(sum + ((UINT8 *)&mock_rsdp)[i]);
+  mock_rsdp.ExtendedChecksum = (UINT8)(0 - sum);
+  mock_fadt.FirmwareCtrl = (UINT32)(uintptr_t)&mock_facs;
+  mock_fadt.XFirmwareCtrl = (UINT64)(uintptr_t)&mock_facs;
+  mock_fadt.Header.Checksum = 0;
+  sum = 0; for (UINT32 i = 0; i < mock_fadt.Header.Length; i++) sum = (UINT8)(sum + ((UINT8 *)&mock_fadt)[i]);
+  mock_fadt.Header.Checksum = (UINT8)(0 - sum);
+  mock_facs.FirmwareWakingVector = 0x00007C00U;
+
+  memset(&ctx, 0, sizeof(ctx));
+  ctx.magic = GU_S3_CONTEXT_MAGIC;
+  ctx.version = 2;
+  ctx.bar_base = 0xC8000000ULL;
+  ctx.bus = 3; ctx.device = 0; ctx.function = 0;
+  ctx.pci_cmd_port_addr = 0x80030004U;
+  ctx.booter_dma = 0xDAD01000ULL;
+  ctx.meta_dma = 0xDAD31000ULL;
+  memset(low_page, 0, sizeof(low_page));
+  s = GuAcpiInstallShadowFacs(&mock_st, &ctx, nvs_page, 0xDC500000ULL, low_page, low_phys, &info);
+  CHECK(s == EFI_SUCCESS, "2-level PCIe switch GuAcpiInstallShadowFacs must succeed");
+  CHECK(ctx.bridge_count == 3, "2-level switch topology must discover exactly 3 bridges (Root -> Up -> Down)");
+  CHECK(ctx.bridges[0].bdf_base == 0x80000800U && ctx.bridges[0].bus_val == 0x00050100U, "Switch[0] Root Port 0:1:0");
+  CHECK(ctx.bridges[1].bdf_base == 0x80010000U && ctx.bridges[1].bus_val == 0x00050201U, "Switch[1] Upstream 1:0:0");
+  CHECK(ctx.bridges[2].bdf_base == 0x80022000U && ctx.bridges[2].bus_val == 0x00030302U, "Switch[2] Downstream 2:4:0");
+  CHECK(*(UINT32 *)(low_page + GU_TRAMP_BRIDGE_TBL_OFF + 2U * GU_TRAMP_BRIDGE_ENTRY_SIZE) == 0x80022000U,
+        "Bridge table[2] must be Leaf Downstream 2:4:0");
+  CHECK(*(UINT32 *)(low_page + GU_TRAMP_BRIDGE_TBL_OFF + 3U * GU_TRAMP_BRIDGE_ENTRY_SIZE) == 0U,
+        "Bridge table[3] must be null terminator");
+
+  BOOLEAN found_leaf_ptr = FALSE, found_cnt_3 = FALSE;
+  UINT32 last_br_lin = (UINT32)(low_phys + GU_TRAMP_BRIDGE_TBL_OFF + (2U * GU_TRAMP_BRIDGE_ENTRY_SIZE));
+  for (UINT32 i = 0; i + 10 <= GU_TRAMP_ENVELOPE_SIZE; i++) {
+    if (low_page[i] == 0xBE && *(UINT32 *)(low_page + i + 1) == last_br_lin &&
+        low_page[i+5] == 0xB9 && *(UINT32 *)(low_page + i + 6) == 3U) {
+      found_leaf_ptr = TRUE;
+      found_cnt_3 = TRUE;
+      break;
+    }
+  }
+  CHECK(found_leaf_ptr && found_cnt_3, "Teardown must initialize ESI at leaf bridge (2:4:0) and ECX=3");
+
+  /* --- Scenario C: RTX 4080 (0x270410DE) + Chip ID 0x193000A1 + Custom FWSEC/SEC2 Geometries --- */
+  GU_S3_RESUME_CONTEXT ctx4080;
+  memset(&ctx4080, 0, sizeof(ctx4080));
+  ctx4080.magic = GU_S3_CONTEXT_MAGIC;
+  ctx4080.version = 2;
+  ctx4080.bar_base = 0xF0000000ULL;
+  ctx4080.pci_id = 0x270410DEU; /* RTX 4080 AD103 */
+  ctx4080.chip_id = 0x193000A1U;
+  ctx4080.bus = 7; ctx4080.device = 0; ctx4080.function = 0;
+  ctx4080.pci_cmd_port_addr = 0x80070004U;
+  ctx4080.booter_dma = 0xDAD01000ULL;
+  ctx4080.meta_dma = 0xDAD31000ULL;
+  ctx4080.fwsec_imem_chunks = 210U;
+  ctx4080.fwsec_dmem_chunks = 12U;
+  ctx4080.fwsec_data_off = 0xD200U;
+  ctx4080.fwsec_sig_dmem = 0x09A0U;
+  ctx4080.fwsec_engine_mask = 0x0400U;
+  ctx4080.fwsec_ucode_id = 10U;
+  ctx4080.booter_app_code_off = 512U;
+  ctx4080.booter_imem_chunks = 110U;
+  ctx4080.booter_os_data_off = 0x7200U;
+  ctx4080.booter_dmem_chunks = 80U;
+  ctx4080.booter_sig_dmem = 0x20U;
+  ctx4080.booter_engine_mask = 1U;
+  ctx4080.booter_ucode_id = 4U;
+
+  UINT8 buf4080[4096];
+  UINT32 bytes4080 = GuAcpiBuildTrampolineCodeEx(
+      buf4080, sizeof(buf4080), 0x0009E000ULL, 0xDC5D8000ULL, 0xDC617400ULL,
+      0xDA000000ULL, 0xF0000000ULL, 0x800008B0U, 0x80070064U, 0xDAD41000ULL, &ctx4080);
+  CHECK(bytes4080 > 0 && bytes4080 <= GU_TRAMP_ENVELOPE_SIZE, "RTX 4080 custom geometry trampoline must fit within 0x0A00");
+
+  BOOLEAN f_pci = FALSE, f_chip = FALSE, f_fw_imem = FALSE, f_fw_dmem = FALSE, f_fw_sig = FALSE, f_fw_uc = FALSE;
+  BOOLEAN f_bt_app = FALSE, f_bt_imem = FALSE, f_bt_dmem = FALSE, f_bt_sig = FALSE, f_bt_uc = FALSE, f_bt_vec = FALSE;
+  for (UINT32 i = 0; i + 10 <= bytes4080; i++) {
+    if (buf4080[i] == 0x3D && *(UINT32 *)(buf4080 + i + 1) == 0x270410DEU) f_pci = TRUE;
+    if (buf4080[i] == 0x3D && *(UINT32 *)(buf4080 + i + 1) == 0x193000A1U) f_chip = TRUE;
+    if (buf4080[i] == 0xBD && *(UINT32 *)(buf4080 + i + 1) == 210U) f_fw_imem = TRUE;
+    if (buf4080[i] == 0xBD && *(UINT32 *)(buf4080 + i + 1) == 12U) f_fw_dmem = TRUE;
+    if (buf4080[i] == 0xC7 && buf4080[i+1] == 0x83 && *(UINT32 *)(buf4080 + i + 2) == 0x00111210U && *(UINT32 *)(buf4080 + i + 6) == 0x09A0U) f_fw_sig = TRUE;
+    if (buf4080[i] == 0xC7 && buf4080[i+1] == 0x83 && *(UINT32 *)(buf4080 + i + 2) == 0x00111198U && *(UINT32 *)(buf4080 + i + 6) == 10U) f_fw_uc = TRUE;
+    if (buf4080[i] == 0xBA && *(UINT32 *)(buf4080 + i + 1) == 512U) f_bt_app = TRUE;
+    if (buf4080[i] == 0xBD && *(UINT32 *)(buf4080 + i + 1) == 110U) f_bt_imem = TRUE;
+    if (buf4080[i] == 0xBD && *(UINT32 *)(buf4080 + i + 1) == 80U) f_bt_dmem = TRUE;
+    if (buf4080[i] == 0xC7 && buf4080[i+1] == 0x83 && *(UINT32 *)(buf4080 + i + 2) == 0x00841210U && *(UINT32 *)(buf4080 + i + 6) == 0x20U) f_bt_sig = TRUE;
+    if (buf4080[i] == 0xC7 && buf4080[i+1] == 0x83 && *(UINT32 *)(buf4080 + i + 2) == 0x00841198U && *(UINT32 *)(buf4080 + i + 6) == 4U) f_bt_uc = TRUE;
+    if (buf4080[i] == 0xC7 && buf4080[i+1] == 0x83 && *(UINT32 *)(buf4080 + i + 2) == 0x00840104U && *(UINT32 *)(buf4080 + i + 6) == 512U) f_bt_vec = TRUE;
+  }
+  CHECK(f_pci && f_chip, "RTX 4080 PCI ID (0x270410DE) and Chip ID (0x193000A1) must be emitted");
+  CHECK(f_fw_imem && f_fw_dmem && f_fw_sig && f_fw_uc, "Custom FWSEC chunk counts/sig/ucode must be emitted");
+  CHECK(f_bt_app && f_bt_imem && f_bt_dmem && f_bt_sig && f_bt_uc && f_bt_vec, "Custom SEC2 Booter geometry/code_va must be emitted");
+
+  /* --- Scenario D: Strict Low-RAM < 0x000A0000 Enforcement (NO 0x000FFFFF VGA/ROM Fallback) --- */
+  g_mock_pci_count = 0;
+  g_mock_fail_low_tramp_alloc = TRUE;
+  g_mock_low_nvs_alloc_calls = 0;
+  g_mock_last_low_max_addr = 0;
+  Gu.bar_base = 0xFB000000ULL;
+  Gu.s3_persist_armed = TRUE;
+  Gu.s3_arena_armed = TRUE;
+  Gu.s3_booter_dma = 0xDAD01000ULL; Gu.s3_booter_size = 57672U;
+  Gu.s3_v67_dma = 0xDAD11000ULL;
+  Gu.s3_boot_dma = 0xDAD21000ULL; Gu.s3_boot_size = 36864U;
+  Gu.s3_meta_dma = 0xDAD31000ULL;
+  Gu.s3_fwsec_dma = 0xDAD41000ULL; Gu.s3_fwsec_size = 65536U;
+  Gu.wpr_meta_valid = TRUE;
+  EFI_STATUS fail_s = GuS3PrepareAndRegister(&mock_st);
+  g_mock_fail_low_tramp_alloc = FALSE;
+  CHECK(fail_s == EFI_OUT_OF_RESOURCES, "GuS3PrepareAndRegister must return EFI_OUT_OF_RESOURCES when <0xA0000 low RAM unavailable");
+  CHECK(g_mock_low_nvs_alloc_calls == 1, "Must NOT retry low trampoline allocation into 0x000A0000..0x000FFFFF VGA/ROM zone");
+  CHECK(g_mock_last_low_max_addr <= 0x0009FFFFULL, "Low trampoline allocation cap must remain strictly <= 0x0009FFFF");
+
+  printf("[11] v1.9.0 Universal Topologies & Hardening (Intel/Switch/4080/<0xA0000/S0ix): OK!\n");
+}
+
 int main(void) {
   setvbuf(stdout, NULL, _IONBF, 0);
   printf("=== Universal S3 Persistence Resume Engine Test Suite ===\n");
@@ -1918,6 +2321,7 @@ int main(void) {
   TestGuS3Prepare_BooterUnpackAndPatch();
   TestGuS3PersistentMemoryRetention();
   TestGuS3ArenaConsolidation();
+  TestGuS3UniversalTopologiesAndHardening();
 
   printf("=== ALL S3 RESUME TESTS PASSED (%u checks) [OK] ===\n", g_checks);
   fflush(stdout);

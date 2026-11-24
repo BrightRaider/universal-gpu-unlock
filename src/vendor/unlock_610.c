@@ -406,8 +406,10 @@ static int ad102_sample_permissions(struct unlock_transaction_work *work,
 		identity == pci_identity(work->pdev) &&
 		!read_bar(work, 0, &chip) && chip && !inaccessible(chip) &&
 		(before || chip == work->chip_entry);
-	if (before && accessible)
+	if (before && accessible) {
 		work->chip_entry = chip;
+		Gu.chip_id = chip;
+	}
 	for (i = 0; i < ARRAY_SIZE(ad102_permissions); i++) {
 		bool valid;
 
@@ -496,6 +498,8 @@ static int falcon_reset(struct unlock_transaction_work *work, const struct falco
 	}
 	if (read_bar(work, 0, &chip) || inaccessible(chip))
 		return GU_RESULT(-ENODEV);
+	if (!Gu.chip_id)
+		Gu.chip_id = chip;
 	write_bar(work, eng->base + 0x84, chip);
 	dev_info(&work->pdev->dev, "Falcon reset done: base=%#x hwcfg=%#x chip=%#x\n", eng->base, hwcfg, chip);
 	return 0;
@@ -1284,6 +1288,13 @@ static int unlock_transaction_dma(struct unlock_transaction_work *work)
 		Gu.s3_v67_dma = work->v67_dma;
 		Gu.s3_boot_dma = work->boot_dma;
 		Gu.s3_boot_size = work->boot_desc.image_size;
+		Gu.s3_booter_app_code_off = work->booter_hdr.app_code_off;
+		Gu.s3_booter_app_code_size = work->booter_hdr.app_code_size;
+		Gu.s3_booter_os_data_off = work->booter_hdr.os_data_off;
+		Gu.s3_booter_os_data_size = work->booter_hdr.os_data_size;
+		Gu.s3_booter_sig_dmem = work->booter_hdr.patch_loc - work->booter_hdr.os_data_off;
+		Gu.s3_booter_engine_id = work->booter_hdr.engine_id;
+		Gu.s3_booter_ucode_id = work->booter_hdr.ucode_id;
 		dev_info(&work->pdev->dev, "S3 Arena Allocations: booter=%#llx (%u) v67=%#llx boot=%#llx (%u) meta=%#llx\n",
 			 (unsigned long long)Gu.s3_booter_dma, Gu.s3_booter_size,
 			 (unsigned long long)Gu.s3_v67_dma,
@@ -1396,6 +1407,12 @@ static int unlock_transaction_fwsec(struct unlock_transaction_work *work)
 	if (Gu.s3_persist_armed && Gu.s3_arena_armed) {
 		Gu.s3_fwsec_dma = image_dma;
 		Gu.s3_fwsec_size = fw.image_size;
+		Gu.s3_fwsec_imem_size = fw.imem_size;
+		Gu.s3_fwsec_dmem_size = fw.dmem_size;
+		Gu.s3_fwsec_data_off = fw.data_off;
+		Gu.s3_fwsec_pkc_off = fw.pkc_off;
+		Gu.s3_fwsec_engine_mask = fw.engine_mask;
+		Gu.s3_fwsec_ucode_id = fw.ucode_id;
 		dev_info(&work->pdev->dev, "S3 Persistent FWSEC Arena: dma=%#llx size=%#x (EfiReservedMemoryType)\n",
 			 (unsigned long long)Gu.s3_fwsec_dma, Gu.s3_fwsec_size);
 	}
