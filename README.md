@@ -49,8 +49,12 @@
 If your motherboard blocks the USB drive with a signature verification warning:
 
 - **Easiest method:** Temporarily set **Secure Boot** to **Disabled** (or OS Type: *Other OS*) in your BIOS.
-- **To keep Secure Boot enabled** (e.g. for Valorant / Vanguard / Windows 11):  
-  In your BIOS under **Security ➔ Secure Boot ➔ Key Management** (or *Custom Key Management*), choose **Append / Enroll DB Key** (Authorized Signatures `db`), browse to the USB drive, and select `AdaUnlock_SecureBoot.cer`. Save and reboot (`F10`).
+- **To keep Secure Boot enabled (Windows 11):**  
+  In your BIOS under **Security ➔ Secure Boot ➔ Key Management** (or *Custom Key Management*), choose **Append / Enroll DB Key** (Authorized Signatures `db`), browse to the USB drive, and select `AdaUnlock_SecureBoot.cer` (keeping existing factory keys intact). Save and reboot (`F10`).
+- **For Riot Vanguard (*Valorant* / *League of Legends*):**  
+  1. Keep **Secure Boot Enabled** (`Standard` mode with factory keys; only if your BIOS blocks `AdaUnlockDxe.efi`, append `AdaUnlock_SecureBoot.cer` to `db` *alongside* the factory keys — never erase factory keys).
+  2. Boot from the USB drive **once** (`F8` / `F11` / `F12`) and select **`[I]`** (`AdaUnlockDxe.efi`).
+  3. On all following boots, start Windows normally via **Windows Boot Manager (`bootmgfw.efi`)** instead of booting from USB *(if your 100 MB ESP falls back to USB storage for Ada/Ampere assets, leave the USB drive plugged in, but always boot via the internal Windows Boot Manager)*.
 
 ---
 
@@ -136,7 +140,7 @@ The unlock removes artificial firmware restrictions on the **Tensor Cores (GEMM 
 
 - **Volatile (RAM-only):** The unlock lives in GPU registers and is gone after a full power-off. Without the `[I]` driver installed, the next boot is stock. On the test bench, the card always booted stock again after a power-off.
 - **Official NVIDIA Drivers:** Runs seamlessly with standard, unmodified NVIDIA Game Ready and Studio drivers (`nvlddmkm.sys`).
-- **Anti-Cheat:** No driver patches, kernel hooks or runtime memory injection. With the image or certificate enrolled in `db`, `UEFISecureBootEnabled` stays `1`. Individual anti-cheat engines (Riot Vanguard, Easy Anti-Cheat, BattlEye, Ricochet) were not tested systematically.
+- **Anti-Cheat:** No driver patches, kernel hooks, or runtime memory injection (`UEFISecureBootEnabled` stays `1`). **Riot Vanguard (*Valorant* / *League of Legends*)** works with **Secure Boot Enabled** via Option **`[I]` (`AdaUnlockDxe.efi`)** and a normal **Windows Boot Manager (`bootmgfw.efi`)** boot (see [Secure Boot Configuration](#-secure-boot-configuration-if-enabled)). Easy Anti-Cheat, BattlEye, and Ricochet were not tested systematically.
 - **Fast Resume & Idle Relock Guard:** Includes **`Setup-FastResume.bat`** to enable Windows Hibernation and create a desktop **Fast-Unlock-Sleep** shortcut (~3s wake-up without USB reboot). It also includes the **Idle Relock Guard** (disables aggressive PCIe ASPM and Runtime D3cold power-gating), ensuring that laptops (Optimus) and secondary headless compute GPUs never drop their unlocked state during idle timeouts or display standby.
 - **S3 Sleep Protection:** Includes **`Toggle-Sleep-Button.bat`** in the root directory to hide the "Sleep" button from the Windows Start menu, preventing accidental loss of volatile RAM state.
 - **44-Cycle Testbench:** 44 supervised runs on my primary RTX 4090 platform. The last 18 (RUN0027 – RUN0044) all passed. The earlier runs were prototyping.

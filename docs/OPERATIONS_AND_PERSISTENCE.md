@@ -73,22 +73,24 @@ Observed in these runs on the RTX 4090 bench:
 
 ## 3. Secure Boot & Competitive Anti-Cheat Coexistence
 
-A frequent concern among enthusiasts is whether unlocking the GPU compromises UEFI Secure Boot or triggers competitive kernel anti-cheat engines (such as **Riot Vanguard** for *Valorant*, **Easy Anti-Cheat**, **BattlEye**, or **Ricochet**).
+A frequent concern among enthusiasts is whether unlocking the GPU compromises UEFI Secure Boot or triggers competitive kernel anti-cheat engines (such as **Riot Vanguard** for *Valorant* / *League of Legends*, **Easy Anti-Cheat**, **BattlEye**, or **Ricochet**).
 
-**The short answer:** If you enroll the image or certificate in `db` (see below), Secure Boot stays enabled. Whether a specific anti-cheat accepts the system is decided by its vendor, and this was not tested systematically.
+**The short answer:** With Secure Boot enabled, **Riot Vanguard** works reliably by using Option **`[I]` (`AdaUnlockDxe.efi`)** so Windows boots directly via the internal **Windows Boot Manager (`bootmgfw.efi`)**. Easy Anti-Cheat, BattlEye, and Ricochet were not tested systematically.
 
 ### What Anti-Cheat Engines Commonly Check (vendors do not publish their full criteria):
 Kernel-level anti-cheat drivers query the Windows Security Subsystem (specifically `HKLM\SYSTEM\CurrentControlSet\Control\SecureBoot\State` and UEFI runtime variables):
 - **Criterion 1:** Is `UEFISecureBootEnabled == 1`?
-- **Criterion 2:** Is the TPM 2.0 PCR-7 measurement chain intact and Windows hypervisor-enforced code integrity (HVCI) operational?
+- **Criterion 2:** Is the TPM 2.0 `PCR[7]` measurement chain intact and Windows hypervisor-enforced code integrity (HVCI) operational?
 
 Anti-cheat engines do **not** forbid users from owning and administering their motherboard's authorized signature database (`db`). The UEFI specification explicitly provides the `db` variable so hardware vendors and users can authorize proprietary hardware option ROMs, storage controllers, and custom drivers.
 
-### Authorizing the Driver While Keeping Secure Boot Active:
-You do **not** need to disable Secure Boot:
-1. **Method 1 (Enroll Hash / Image):** In your BIOS Secure Boot menu, select **"Enroll EFI Image"** (or *"Select an UEFI file as trusted for executing"*), browse to `BOOTX64.EFI` / `AdaUnlockDxe.efi`, and confirm. The BIOS computes its SHA-256 hash and appends it to `db`.
-2. **Method 2 (Enroll Certificate):** In BIOS Key Management, append `AdaUnlock_SecureBoot.cer` to the `db` database.
-3. **Outcome:** In Windows, `Confirm-SecureBootUEFI` and `UEFISecureBootEnabled` report `1` (True). Behavior of individual anti-cheat engines and games was not tested systematically.
+### How to Run Riot Vanguard (*Valorant* / *League of Legends*):
+1. Keep **Secure Boot Enabled** (`Standard` mode with factory keys). If your motherboard BIOS rejects `AdaUnlockDxe.efi` under `Standard` mode, use **Append / Enroll DB Key** (never replace/erase existing Microsoft/OEM keys!) to append `AdaUnlock_SecureBoot.cer` to `db`.
+2. Boot from the USB drive **once** (`F8` / `F11` / `F12`) and press **`[I]`** to register `AdaUnlockDxe.efi` in UEFI `DriverOrder`.
+3. On subsequent boots, start Windows normally via the internal **Windows Boot Manager (`bootmgfw.efi`)** rather than booting from the USB menu entry. *(If a 100 MB ESP falls back to USB storage for Ada/Ampere assets, leave the USB drive plugged in as storage while letting Windows boot from the internal NVMe/SSD.)*
+4. **Outcome:** In Windows, `Confirm-SecureBootUEFI` reports `True` (`UEFISecureBootEnabled == 1`) and Riot Vanguard passes cleanly.
+
+*(For non-anti-cheat setups, you can also enroll `BOOTX64.EFI` / `AdaUnlock_SecureBoot.cer` in `db` or disable Secure Boot.)*
 
 ---
 

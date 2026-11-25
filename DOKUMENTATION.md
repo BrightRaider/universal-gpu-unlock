@@ -15,7 +15,7 @@ NVIDIA beschränkt Consumer- und Mining-Grafikkarten in ihrer Firmware bei FP16-
 ### 1.2 Grenzen & Gaming-Verhalten
 - **Kein Gaming-Boost:** Der Unlock beeinflusst weder Shader-, Rasterizer- noch DLSS-Leistung in Spielen. In reinen PC-Spielen beträgt der Performance-Gewinn 0 %.
 - **100 % RAM-Only / Reversibel:** Es findet kein permanenter Flash des Grafik-VBIOS statt. Nach vollständigem Ausschalten des Systems (Kaltstart) befindet sich die GPU wieder im Originalzustand.
-- **Kompatibel mit Secure Boot & Anti-Cheat:** Durch Authenticode-Signierung bleibt Secure Boot aktiv (wichtig für Riot Vanguard / Windows 11).
+- **Kompatibel mit Secure Boot & Anti-Cheat:** Durch Authenticode-Signierung bleibt Secure Boot aktiv; Riot Vanguard (*Valorant* / *League of Legends*) funktioniert über Option **`[I]`** (`AdaUnlockDxe.efi`) mit normalem Start über den Windows Boot Manager (`bootmgfw.efi`) (siehe [Kapitel 4](#4-secure-boot-konfiguration)).
 
 ---
 
@@ -63,9 +63,13 @@ Die Binärdateien (`BOOTX64.EFI` und `AdaUnlockDxe.efi`) sind mit einem dedizier
 - **Option A (Einfachste Methode):** Secure Boot im BIOS vorübergehend auf **Disabled** stellen.
 - **Option B (Secure Boot aktiv lassen):**
   1. Im BIOS Setup unter **Security ➔ Secure Boot ➔ Key Management** (bzw. *Custom Key Management*).
-  2. Unter **Authorized Signatures (`db`)** auf **Append Key** / **Enroll Signature** klicken.
+  2. Unter **Authorized Signatures (`db`)** auf **Append Key** / **Enroll Signature** klicken (*nicht* bestehende Microsoft-/OEM-Factory-Keys löschen oder ersetzen!).
   3. Auf den USB-Stick navigieren und **`AdaUnlock_SecureBoot.cer`** auswählen.
   4. Mit **F10** speichern und neu starten.
+- **Option C (Riot Vanguard / *Valorant* / *League of Legends*):**
+  1. **Secure Boot aktiv lassen** (`Standard`-Modus mit Factory-Keys; nur falls das BIOS `AdaUnlockDxe.efi` blockiert, `AdaUnlock_SecureBoot.cer` per **Append Key** zu `db` hinzufügen — Factory-Keys nicht löschen).
+  2. Einmal vom USB-Stick booten (`F8`/`F11`/`F12`) und **`[I]`** wählen (`AdaUnlockDxe.efi` wird in `DriverOrder` eingetragen).
+  3. Danach Windows ganz normal direkt über den internen **Windows Boot Manager (`bootmgfw.efi`)** starten *(bei einer 100-MB-ESP ohne genug Platz für Ada/Ampere-Assets bleibt der USB-Stick als Speicher eingesteckt, gebootet wird aber über den normalen Windows-Eintrag — nicht vom Stick)*.
 
 ---
 
