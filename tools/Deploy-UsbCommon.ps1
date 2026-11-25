@@ -38,17 +38,23 @@ function Get-GuSupportedGpuIds([string]$RepoRoot) {
     return $table
 }
 
-# Everything the Control Center, the benchmark and the root launchers need on the USB drive under tools\.
+# Everything the Control Center, Dashboard, Setup and Benchmark need on the USB drive under tools\.
 function Get-GuUsbToolFiles {
     return @(
         'quick_check.py',
+        'gpu_dashboard.py',
         'gu_system_info.py',
         'Deploy-UsbCommon.ps1',
+        'Setup-AdaUnlock.ps1',
+        'Update-USB.bat',
+        'Create-Unlock-Partition.bat',
+        'Create-Unlock-Partition.ps1',
+        'Setup-FastResume.bat',
         'Universal-Control-Center.ps1',
+        'Universal-Control-Center.xaml',
         'Universal-Control-Center-Detection.ps1',
         'Universal-Control-Center-Deployment.ps1',
         'Universal-Control-Center-Diagnostics.ps1',
-        # Targets of the launcher stubs copied to the stick root.
         'Universal-Control-Center.cmd',
         'Toggle-Turing-GSP.bat',
         'Toggle-Sleep-Button.bat'
@@ -173,29 +179,26 @@ function Deploy-UniversalToUsb {
         Emit-Log "  [OK] Secure Boot certificate copied to $driveRoot\AdaUnlock_SecureBoot.cer" "Green"
     }
 
-    # 3. Copy Setup, Toggles and Benchmark Scripts
+    # 3. Copy clean Root Launchers (Setup, Dashboard, Benchmark) + full tools/ suite
     $setupBat = Join-Path $RepoRoot "Setup.bat"
+    $dashBat = Join-Path $RepoRoot "Launch-Dashboard.bat"
     $checkBat = Join-Path $RepoRoot "Check-GPU-Unlock.bat"
-    $turingBat = Join-Path $RepoRoot "Toggle-Turing-GSP.bat"
-    $sleepBat = Join-Path $RepoRoot "Toggle-Sleep-Button.bat"
     $toolsDir = Join-Path $RepoRoot "tools"
     if (Test-Path -LiteralPath $setupBat) {
         Copy-Item -LiteralPath $setupBat -Destination (Join-Path $driveRoot "Setup.bat") -Force
     }
-    if (Test-Path -LiteralPath $turingBat) {
-        Copy-Item -LiteralPath $turingBat -Destination (Join-Path $driveRoot "Toggle-Turing-GSP.bat") -Force
-    }
-    if (Test-Path -LiteralPath $sleepBat) {
-        Copy-Item -LiteralPath $sleepBat -Destination (Join-Path $driveRoot "Toggle-Sleep-Button.bat") -Force
+    if (Test-Path -LiteralPath $dashBat) {
+        Copy-Item -LiteralPath $dashBat -Destination (Join-Path $driveRoot "Launch-Dashboard.bat") -Force
     }
     if (Test-Path -LiteralPath $checkBat) {
         Copy-Item -LiteralPath $checkBat -Destination (Join-Path $driveRoot "Check-GPU-Unlock.bat") -Force
         $toolsDst = Join-Path $driveRoot "tools"
         New-Item -ItemType Directory -Path $toolsDst -Force | Out-Null
-        # The Control Center dot-sources its modules, and quick_check.py imports
-        # gu_system_info.py, so all of them must be copied together.
         foreach ($file in (Get-GuUsbToolFiles)) {
             $source = Join-Path $toolsDir $file
+            if (-not (Test-Path -LiteralPath $source)) {
+                $source = Join-Path $RepoRoot $file
+            }
             if (Test-Path -LiteralPath $source) {
                 Copy-Item -LiteralPath $source -Destination (Join-Path $toolsDst $file) -Force
             } else {
@@ -209,9 +212,7 @@ function Deploy-UniversalToUsb {
             $source = Join-Path (Join-Path $RepoRoot "src") $file
             if (Test-Path -LiteralPath $source) { Copy-Item -LiteralPath $source -Destination (Join-Path $srcDst $file) -Force }
         }
-        $uccCmd = Join-Path $RepoRoot "Universal-Control-Center.cmd"
-        if (Test-Path -LiteralPath $uccCmd) { Copy-Item -LiteralPath $uccCmd -Destination (Join-Path $driveRoot "Universal-Control-Center.cmd") -Force }
-        Emit-Log "  [OK] Verification tools and Control Center copied to $driveRoot" "Green"
+        Emit-Log "  [OK] Dashboard, Verification tools and Control Center copied to $driveRoot" "Green"
     }
 
     # 4. Write USB README
@@ -222,16 +223,16 @@ Architect: BrightRaider | Desktop GUI: Ahsan Umair
 
 ## Boot Menu Modes:
 - [U] Full GPU Unlock (Proven rock-solid, volatile RAM-only)
-- [P] Experimental S3 Persistence Unlock (Boot-Script registration)
-- [I] Install DXE Driver to Internal ESP & UEFI NVRAM (Stickless permanent auto-boot)
+- [P] S3 Sleep Persistence Unlock (Tier 1 Boot-Script + Tier 2 ACPI FACS Trampoline)
+- [I] Install DXE Driver to Internal ESP / GPU_UNLOCK & UEFI NVRAM (Stickless auto-boot)
 - [R] Remove DXE Driver from Internal ESP & UEFI NVRAM
 - [S] Stock Windows (Skip unlock, normal boot)
 
 ## Quick Start:
 1. Reboot PC and press your Boot Menu key (F8 for ASUS, F11 for MSI/ASRock, F12 for Gigabyte).
 2. Select your USB drive (e.g. 'UEFI: USB Drive').
-3. Choose your desired mode ([U] for standard unlock, [P] for S3 persistence).
-4. Windows boots with 100% full unrestricted tensor compute capacity!
+3. Choose your desired mode ([U] for standard unlock, [P] for S3 persistence, [I] for stickless boot).
+4. In Windows, run Launch-Dashboard.bat (GUI Cockpit) or Check-GPU-Unlock.bat (CLI Benchmark).
 "@
     Set-Content -LiteralPath (Join-Path $driveRoot "README-USB.txt") -Value $readmeContent -Encoding utf8
 

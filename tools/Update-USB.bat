@@ -10,7 +10,6 @@ echo ====================================================================
 echo.
 
 :: Usage: Update-USB.bat [F:] [--no-pause]
-:: A drive given on the command line is used without asking.
 set "TARGET_DRIVE=%~1"
 set "ASK_CONFIRM="
 
@@ -35,7 +34,6 @@ if not defined TARGET_DRIVE (
     exit /b 1
 )
 
-:: Keep only the drive letter and add the colon.
 set "CLEAN_DRIVE=%TARGET_DRIVE:~0,1%:"
 
 if defined ASK_CONFIRM (
@@ -53,12 +51,19 @@ if defined ASK_CONFIRM (
     )
 )
 
+set "DEPLOY_PS1=%~dp0Deploy-UsbCommon.ps1"
+set "REPO_ROOT=%~dp0.."
+if not exist "%DEPLOY_PS1%" (
+    set "DEPLOY_PS1=%~dp0tools\Deploy-UsbCommon.ps1"
+    set "REPO_ROOT=%~dp0"
+)
+
 echo.
 echo  Target USB drive: %CLEAN_DRIVE%
 echo  Deploying latest binaries, assets, and tools...
 echo.
 
-powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "& { try { . '%~dp0tools\Deploy-UsbCommon.ps1'; Deploy-UniversalToUsb -Drive '%CLEAN_DRIVE%' -RepoRoot '%~dp0' -OnLog { param($m, $c) if ($c) { Write-Host $m -ForegroundColor $c } else { Write-Host $m } } } catch { Write-Host ('[ERROR] ' + $_.Exception.Message) -ForegroundColor Red; exit 1 } }"
+powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "& { try { . '%DEPLOY_PS1%'; Deploy-UniversalToUsb -Drive '%CLEAN_DRIVE%' -RepoRoot '%REPO_ROOT%' -OnLog { param($m, $c) if ($c) { Write-Host $m -ForegroundColor $c } else { Write-Host $m } } } catch { Write-Host ('[ERROR] ' + $_.Exception.Message) -ForegroundColor Red; exit 1 } }"
 set "RC=%ERRORLEVEL%"
 
 echo.

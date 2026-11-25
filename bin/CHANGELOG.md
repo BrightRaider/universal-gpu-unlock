@@ -1,11 +1,32 @@
-# Changelog - Universal Multi-Gen GPU Unlock
+﻿# Changelog - Universal Multi-Gen GPU Unlock
 
 All notable changes, architectural improvements, and device expansions for Universal GPU Unlock are documented here.
+Older history (`v1.5` - `v1.7.9`) has been archived in [docs/CHANGELOG_ARCHIVE.md](docs/CHANGELOG_ARCHIVE.md).
 
 For packaged binaries and downloads, visit [GitHub Releases](https://github.com/BrightRaider/universal-gpu-unlock/releases).
 
 ---
 
+## [v2.0.0] - 2026-11-25
+### Added & Improved (Cockpit UX, Power-Limit Control, S3 Telemetry, Stickless `[I]` & Repository Consolidation)
+- **Live S3 ARMED Traffic-Light Telemetry (`tools/gu_system_info.py`, `tools/gpu_dashboard.py`, `tools/quick_check.py`):**
+  - Added language-independent Windows standby capability inspection (`powrprof.dll!GetPwrCapabilities` `SystemS3` + kernel `HKLM\HARDWARE\ACPI\FADT` `FirmwareCtrl` & `Flags` Bit 21 `S0ix`) paired with current-boot `RUN*.TXT` parsing (`get_s3_armed_status()`).
+  - Dashboard and CLI now clearly distinguish `ARMED` (`ShadowFACS` / Boot-Script Tier 1 confirmed), `S0IX_WARN` (Modern Standby active in BIOS), `UNVERIFIED` (S3 supported, current-boot log not mounted), and `NOT_ARMED` (`[U]` / stock cold-boot session).
+- **Stepless 1-W Power-Limit Slider, Snap Markers & S3-Wake Re-Apply (`tools/gu_system_info.py`, `tools/gpu_dashboard.py`):**
+  - Queries `nvidia-smi` (via `find_nvidia_smi()`) for current, default, min, and max power limits and provides a stepless 1-W slider over `[min_w, max_w]` with clickable **Eco (~78%)**, **Stock (100%)**, and **Max (VBIOS)** snap markers plus `Apply PL` readback verification and direct `ShellExecuteExW` UAC elevation (gracefully disabled when VBIOS/OEM locks `-pl`).
+  - Added **Re-apply PL on S3 Wake** (registers optional Windows Task Scheduler event trigger `UniversalGpuUnlock_ReapplyPL` on `Power-Troubleshooter` EventID `1` running `quick_check.py --reapply-pl`, backed by live dashboard wake polling) plus 1-click **Gaming / Quiet** and **AI / Compute** profiles.
+- **Benchmark Baseline Comparison (`tools/gpu_dashboard.py`):**
+  - Added `Save Baseline` and automatic percentage delta readout (`vs. Baseline`) persisted in `%LOCALAPPDATA%\UniversalGpuUnlock\config.json`.
+- **Unified Setup Launcher & Pre-Flight Audits (`Setup.bat`, `tools/Setup-AdaUnlock.ps1`):**
+  - Consolidated new USB setup (`[1]`), existing USB updater (`[2]`), hidden 512 MB `GPU_UNLOCK` partition creator (`[3]`), and Dashboard launcher (`[4]`) behind `Setup.bat`.
+  - Added automatic pre-flight safety checks for **BitLocker (`C:`)**, **Secure Boot**, **ESP storage size**, and **ACPI S3 vs. Modern Standby (`S0ix`)** directly into `tools/Setup-AdaUnlock.ps1`.
+- **Merged Stickless `v1.9.6` `[I]` Fixes & Troubleshooting:**
+  - Includes `OpenOrCreateDirRecursive()`, `1 MiB` streaming chunked copy (`src/driver_nvram.c`), `-Partition`-based formatting (`tools/Create-Unlock-Partition.ps1`), strict mock tests (`tests/test_driver_nvram.c`), verified stickless `GPU_UNLOCK` + S3 + Riot Vanguard + Secure Boot results (`RUN0110.TXT`), and the Fast Startup `0xC00000D4` Vanguard recovery guide in `DOKUMENTATION.md` & `docs/OPERATIONS_AND_PERSISTENCE.md`.
+- **Repository & USB Deployment Cleanup:**
+  - Reduced root entrypoints to `Setup.bat`, `Launch-Dashboard.bat`, and `Check-GPU-Unlock.bat`; moved helper scripts cleanly into `tools/` and updated all callers in `tools/Deploy-UsbCommon.ps1`, `tools/Universal-Control-Center.ps1`, and `tools/gpu_dashboard.py` (including bundling `Universal-Control-Center.xaml` and `gpu_dashboard.py` onto USB drives).
+  - Removed bit-identical duplicate `bin/AD102-UNIVERSAL.EFI` (identical SHA-256 to `bin/BOOTX64.EFI`) and archived `v1.5`–`v1.7.9` notes into `docs/CHANGELOG_ARCHIVE.md`.
+
+---
 ## [v1.9.6] - 2026-11-25
 
 ### Fixed (Local Dev — Empty-Partition `[I]` Recursive Directory Creation & Chunked Copy)
@@ -39,9 +60,9 @@ For packaged binaries and downloads, visit [GitHub Releases](https://github.com/
   - `AdaUnlockApplyPlanCNow()` und `AdaUnlockHookedStartImage()` rufen `GuAcpiRefreshShadowChain(&ref_info)` vor `GuAcpiInstallEbsHook()` + `GuAcpiApplyShadowConfigTable()` auf und protokollieren `RealXSDT`/`RealFADT`/`ShadowXSDT`/`ShadowFADT` Checksums sowie `facs_rearm` in `RUNxxxx.TXT`.
 - **Tests (`tests/test_s3_resume.c`, `tests/test_dxe_main.c`):** Neue Testfälle für späte BDS-Mutationen an `mock_fadt.Flags`, erweitertem `mock_xsdt.Entry[2]` und gelöschtem `mock_facs.FirmwareWakingVector` (`9.809` Checks in `test_s3_resume`, `test_dxe_main: all checks passed`, `MSVC_HOST_TESTS=PASS`).
 - **Hardware-Verifikation (`RUN0105.TXT`, RTX 4090, Windows 10, Secure Boot + Riot Vanguard + ~9h S3):**
-  - Start über `[I]` (`Driver0000` auf `F:\EFI\Drivers\AdaUnlockDxe.efi`) + regulären Windows Boot Manager (`Boot0000`), `Confirm-SecureBootUEFI: True`.
+  - Start über `[I]` (`Driver0000` auf `<USB_DRIVE>:\EFI\Drivers\AdaUnlockDxe.efi`) + regulären Windows Boot Manager (`Boot0000`), `Confirm-SecureBootUEFI: True`.
   - `GuAcpiRefreshShadowChain()` übernahm im `StartImage`-Guard die finalen BIOS-Tabellen (`RealXSDT=0xb0`, `RealFADT=0x7a` -> `ShadowXSDT=0x65`, `ShadowFADT=0xde`) und Windows-Registry bestätigte `HKLM\HARDWARE\ACPI\FADT`: `HeaderChk=0xDE`, `FirmwareCtrl=0xDC637400` (`ShadowFACS`).
-  - Etappe A (*League of Legends*-Spielrunde vor Standby) und Etappe B (~9 h S3 Standby `02:44:12` -> `11:40:57`, derselbe Boot `02:13:32`) bestanden: nach Wake liefen `vgk`, `vgc` (`Running`) und `LeagueClient` fehlerfrei weiter; cuBLAS-12-Tensor-Verifikation maß **`247,43` TFLOPS** (`FP16 COMPUTE_16F`, `4096x4096`) bzw. **`232,72` TFLOPS** (`FP16 COMPUTE_32F`, `4096x4096`; `246,78` / `176,87` TFLOPS bei `8192x8192`), womit der entsperrte Rate-Limiter nach S3 Wake bestätigt ist *(USB-Stick `F:` als DXE-/Asset-Ablage eingesteckt wegen voller 100-MB-ESP)*.
+  - Etappe A (*League of Legends*-Spielrunde vor Standby) und Etappe B (~9 h S3 Standby `02:44:12` -> `11:40:57`, derselbe Boot `02:13:32`) bestanden: nach Wake liefen `vgk`, `vgc` (`Running`) und `LeagueClient` fehlerfrei weiter; cuBLAS-12-Tensor-Verifikation maß **`247,43` TFLOPS** (`FP16 COMPUTE_16F`, `4096x4096`) bzw. **`232,72` TFLOPS** (`FP16 COMPUTE_32F`, `4096x4096`; `246,78` / `176,87` TFLOPS bei `8192x8192`), womit der entsperrte Rate-Limiter nach S3 Wake bestätigt ist *(USB-Stick `<USB_DRIVE>:` als DXE-/Asset-Ablage eingesteckt wegen voller 100-MB-ESP)*.
 
 ## [v1.9.3] - 2026-11-25
 ### Added & Hardened (Local Dev — Plan-C StartImage Guard + Etappe-A Diagnostik)
@@ -97,7 +118,7 @@ For packaged binaries and downloads, visit [GitHub Releases](https://github.com/
     - Die Hauptschleife pollt mit `in al, 0x80`-Taktung pro Durchlauf bis zu `6.000.000` Iterationen (~5–6 s Sicherheitsbudget, statt zuvor 100.000 ungepaceter MMIO-Reads / ~15–30 ms) und bricht sofort ab bei `MAILBOX0 == 0x67b00001` oder `(CPUCTL & 0x10) != 0 && MAILBOX0 != meta_dma`.
     - Nach dem Marker wartet eine zusätzliche Port-`0x80`-getaktete Schleife (`100.000` Iterationen, analog zu `unlock_610.c`) bis zum echten SEC2-Halt (`0x00840100 & 0x10 != 0`), bevor `SS0`/`SS1` geschrieben werden.
   - **Zusatz-Telemetrie `+0x14C` (`src/s3_facs.h`, `src/s3_facs.c`):**
-    - Sichert das erste DWORD direkt aus Host-RAM `[meta_dma]` (erwartetes Low-DWORD `0x371a60b3` von `GU_WPR_META_MAGIC`) an Telemetrie `+0x14C` (mit `L58` in `C:\S3Dumps\capture_s3_telem.ps1` automatisch im Dump erfasst; Trampolingröße `2.140` Bytes im `0x0A00`-Envelope).
+    - Sichert das erste DWORD direkt aus Host-RAM `[meta_dma]` (erwartetes Low-DWORD `0x371a60b3` von `GU_WPR_META_MAGIC`) an Telemetrie `+0x14C` (mit `L58` in `<DEBUG_TOOLS>\capture_s3_telem.ps1` automatisch im Dump erfasst; Trampolingröße `2.140` Bytes im `0x0A00`-Envelope).
   - **Bewährte Basis unverändert:** GSP-FWSEC-Sequenz (inkl. GSP-Halt-Gate), 6-Puffer-Arena (`EfiReservedMemoryType`, 1 Deskriptor, `DMA_live = 0`), PCIe-FLR, post-FLR `hold_sec2_reset()`, 4-Stufen-Teardown (`0x002D2D00`) sowie `0x0A00`-Envelope-Layout.
   - **Live Hardware-Verifikation (RTX 4090 AD102, Windows 10, NVIDIA-Treiber `621.14`):**
     - Zwei aufeinanderfolgende S3-Sleep/Wake-Zyklen innerhalb derselben Windows-Sitzung bestanden (`wake #1` & `wake #2`): Telemetrie `+0x14C` `[meta_dma] = 0x371a60b3`, `WPR2 = 0x05ff2000:0x05ff2e00`, `GSP_CPUCTL = 0x10`, `SEC2_MAILBOX0 = 0x67b00001`, `SEC2_CPUCTL = 0x10`, `Status = 1` (`SS0 = 0x88888888`, `SS1 = 0x00000008`, `PLM = 0xffffffff`, `READOUT1 = 0x0`).
@@ -113,7 +134,7 @@ For packaged binaries and downloads, visit [GitHub Releases](https://github.com/
   - **Erweiterung des Code-Envelopes auf `0x0A00` (2560 Bytes) (`src/s3_facs.h`, `src/s3_facs.c`):**
     - Low-Data / Telemetrie / Mirror um `+0x0200` auf `0x0A00..0x0AEF` sowie `RM_IDTR`/`PM_GDTR`/`GDT` auf `0x0B00..0x0B37` verschoben; alle Offsets über Makros und Compile-Time-Layout-Asserts abgesichert (Trampolingröße: 2.098 Bytes).
   - **Diagnose-Snapshots + Kaltstart-Referenz (`src/s3_facs.h`, `src/s3_facs.c`, `src/vendor/unlock_610.c`):**
-    - Im S3-Trampolin zusätzlich `SEC2_DEBUGINFO` (`0x00840094`, `+0x120`), `SEC2_IRQSTAT` (`0x00840008`, `+0x124`), `SEC2_TRACEPC` (`0x0084140C`, `+0x128`), `SEC2_PRIV_ERR` (`0x00841500`, `+0x12C`), `SEC2_HUB_ERR` (`0x00841510`, `+0x130`), `PMC_DEVICE_ENABLE` (`0x00000600`, `+0x134`), `GSP_RISCV_CPUCTL` (`0x00111388`, `+0x138`), `GSP_BCR` (`0x00111668`, `+0x13C`), `SEC2_PRIV_INFO` (`0x00841504`, `+0x140`), `SEC2_PRIV_ADDR` (`0x00841508`, `+0x144`) und `GSP_DEBUGINFO` (`0x00110094`, `+0x148`) erfasst (`L58` in `C:\S3Dumps\capture_s3_telem.ps1` deckt bis `+0x15C` ab).
+    - Im S3-Trampolin zusätzlich `SEC2_DEBUGINFO` (`0x00840094`, `+0x120`), `SEC2_IRQSTAT` (`0x00840008`, `+0x124`), `SEC2_TRACEPC` (`0x0084140C`, `+0x128`), `SEC2_PRIV_ERR` (`0x00841500`, `+0x12C`), `SEC2_HUB_ERR` (`0x00841510`, `+0x130`), `PMC_DEVICE_ENABLE` (`0x00000600`, `+0x134`), `GSP_RISCV_CPUCTL` (`0x00111388`, `+0x138`), `GSP_BCR` (`0x00111668`, `+0x13C`), `SEC2_PRIV_INFO` (`0x00841504`, `+0x140`), `SEC2_PRIV_ADDR` (`0x00841508`, `+0x144`) und `GSP_DEBUGINFO` (`0x00110094`, `+0x148`) erfasst (`L58` in `<DEBUG_TOOLS>\capture_s3_telem.ps1` deckt bis `+0x15C` ab).
     - Im Kaltstart (`src/vendor/unlock_610.c`, `log_coldboot_gsp_pmc_diag`) werden `0x00000200`, `0x00000600`, `0x001100F4`, `0x00110100`, `0x00111388` und `0x00111668` nach FWSEC-FRTS (`post-fwsec`) sowie vor SEC2-Booter (`pre-booter`) in `RUN*.TXT` protokolliert.
   - **Bewährte Basis unverändert:** Arena-Konsolidierung (`DMA_live = 0`, 1 `EfiReservedMemoryType`-Deskriptor), SEC2-Booter-Registersequenz, PCIe-FLR, post-FLR `hold_sec2_reset()` und 4-Stufen-Teardown (Root Port `0x18 = 0x002D2D00`) bleiben unverändert.
   - **Host-Tests:** Alle 8.791 Checks in `test_s3_resume.c` sowie das komplette `MSVC_HOST_TESTS`-Paket erfolgreich bestanden (`MSVC_HOST_TESTS=PASS`).
@@ -133,8 +154,8 @@ For packaged binaries and downloads, visit [GitHub Releases](https://github.com/
   - **Mini-Telemetrie-Ergänzung (+0x11C) & Trampolin-Envelope (`src/s3_facs.c`, `src/s3_facs.h`):**
     - Direkt nach dem SEC2-Booter-Halt sichert das 32-Bit-Trampolin zusätzlich SEC2 Mailbox 1 (`BAR0 + 0x00840044`) an Telemetrie `+0x11C`.
     - Gesamte Trampolingröße beträgt 1965 Bytes (strikt innerhalb des 2048-Byte / `<0x0800` Envelope-Limits).
-  - **Dynamische meta_dma-Erkennung im Auto-Dump-Skript (`C:\S3Dumps\capture_s3_telem.ps1`):**
-    - `Find-MetaDmaAddress` ermittelt die dynamische `meta_dma`-Adresse aus der neuesten `RUN*.TXT` auf `F:\GPU-UNLOCK` statt der früheren festen NVS-Adresse `dc642000`.
+  - **Dynamische meta_dma-Erkennung im Auto-Dump-Skript (`<DEBUG_TOOLS>\capture_s3_telem.ps1`):**
+    - `Find-MetaDmaAddress` ermittelt die dynamische `meta_dma`-Adresse aus der neuesten `RUN*.TXT` auf `<USB_DRIVE>:\GPU-UNLOCK` statt der früheren festen NVS-Adresse `dc642000`.
   - **Host-Tests (`tests/test_s3_resume.c`):**
     - Test [10] hinzugefügt für vollständige Arena-Konsolidierung und DMA_live = 0.
     - Alle 8.778 Host-Checks erfolgreich bestanden (`MSVC_HOST_TESTS=PASS`).
@@ -179,7 +200,7 @@ For packaged binaries and downloads, visit [GitHub Releases](https://github.com/
       * `+0x100`: GSP_HWCFG2 (`BAR0 + 0x001100f4`)
       * `+0x104`: GSP_CPUCTL (`BAR0 + 0x00110100`)
     - Dadurch lässt sich beim nächsten S3-Wake im laufenden Windows verifizieren, ob VRAM-/Devinit bereit ist, ob GFW-Boot aktiv war und ob WPR2 bereits vor dem Booter durch GFW/FSP partitioniert wurde.
-  - **Erweiterung des Auto-Dump-Skripts (`C:\S3Dumps\capture_s3_telem.ps1`):**
+  - **Erweiterung des Auto-Dump-Skripts (`<DEBUG_TOOLS>\capture_s3_telem.ps1`):**
     - Telemetrie-Dump auf `L50` (80 DWORDs = 320 Bytes) erweitert, sodass `+0xF0..+0x104` vollständig in `wake_*.txt` und `wake_latest.txt` erfasst werden.
   - **Bewährtes Trampolin unverändert erhalten:**
     - 4-Stufen-Teardown (inkl. aktivem `0x002D2D00`), PCIe-FLR, post-FLR hold_sec2_reset, 82-MB-Reserved-Arena (`EfiReservedMemoryType`, 1 Deskriptor, `DMA_live = 0`) und `EfiRuntimeServicesData`-Telemetrie bleiben exakt erhalten.
@@ -338,7 +359,7 @@ For packaged binaries and downloads, visit [GitHub Releases](https://github.com/
   - **Code Envelope & Effizienz:**
     - Trampolin-Größe bleibt bei schlanken **1272 Bytes** (`< 1280` Bytes Limit / `< 0x0500`).
     - Vollständiger 4-Stufen-PCIe-Teardown, 0 CMOS/RTC-Mutation, `OspmFlags = 0`.
-    - Authenticode-signierte Binaries `BOOTX64.EFI` und `AdaUnlockDxe.efi` erfolgreich gebaut, signiert und auf alle 4 Zielpfade auf USB-Laufwerk `F:` synchronisiert.
+    - Authenticode-signierte Binaries `BOOTX64.EFI` und `AdaUnlockDxe.efi` erfolgreich gebaut, signiert und auf alle 4 Zielpfade auf USB-Laufwerk `<USB_DRIVE>:` synchronisiert.
 
 ## [v1.8.56] - 2026-11-24
 ### Added & Fixed
@@ -702,7 +723,7 @@ For packaged binaries and downloads, visit [GitHub Releases](https://github.com/
     - Added hook detection check (`acpi_s3_save->S3Save != GuHookedS3Save`) to prevent self-wrapping recursion during warm boots and unit testing.
   - **Validation:**
     - All 8,474 MSVC host test checks pass cleanly (`MSVC_HOST_TESTS=PASS`).
-    - Authenticode-signed `BOOTX64.EFI` and `AdaUnlockDxe.efi` built and synchronized to USB drive (`F:\`).
+    - Authenticode-signed `BOOTX64.EFI` and `AdaUnlockDxe.efi` built and synchronized to USB drive (`<USB_DRIVE>:\`).
 - **Permanent Closure of 3 ACPI Leak Vectors & Return to Stable 16-Bit Real-Mode S3 Resume Path (addresses #19):**
   - **Empirical Hardware Discovery & 64-Bit Wake Deadlock Root Cause:**
     - Testing the 22-byte 0xCF9 diagnostic reset probe (`v1.8.43c-probe`) confirmed that when `OspmFlags |= 0x01` is active, AMI Aptio V hangs inside BIOS PEI code before ever reaching `0x9E000` (no reboot occurred, screen remained black, subsequent boot was Windows Hybrid-Sleep/Hibernate Recovery via `bootmgfw.efi -> winresume.efi` with `Kernel-Boot Event 27, BootType = 0x2`).
@@ -729,7 +750,7 @@ For packaged binaries and downloads, visit [GitHub Releases](https://github.com/
     - Safety parameters strictly enforced: ZERO BAR0-MMIO, ZERO SEC2-unlock, ZERO CMOS/RTC mutation.
   - **Validation:**
     - All MSVC host tests pass cleanly (`MSVC_HOST_TESTS=PASS`).
-    - Authenticode-signed `BOOTX64.EFI` and `AdaUnlockDxe.efi` built and synchronized to USB (`F:\`).
+    - Authenticode-signed `BOOTX64.EFI` and `AdaUnlockDxe.efi` built and synchronized to USB (`<USB_DRIVE>:\`).
 
 ---
 
@@ -1520,145 +1541,3 @@ For packaged binaries and downloads, visit [GitHub Releases](https://github.com/
 
 ---
 
-## [v1.7.9] - 2026-11-08
-### Fixed
-- **Resolved `final-Windows-verification` Status `0x8000000000000006` Halt on Ampere GA106 (Resolves [#11](https://github.com/BrightRaider/universal-gpu-unlock/issues/11)):** Fixed `ChipMatchesTarget` in `src/msi_release.c` to mask the architecture nibble `((chip >> 24) & 0x0fU) == 0x07`, cleanly matching Ampere GA106 and LHR cards reporting `PMC=0xb76000a1` (as well as GA102 `0x17xxxxxx`, Turing `0x16xxxxxx`, and Ada `0x19xxxxxx`). Isolated Ada-exclusive SM speed select readout and open PLM assertions so that Ampere and Turing cards proceed directly to `GuBootWindows()`. Verified on physical hardware (Palit RTX 3060 12GB on MSI Z390) by @Fr4Ckt3r, confirming full unrestricted 46.08 TFLOPS tensor compute throughput and seamless boot to Windows.
-- **DXE failure path:** After the GPU was touched, the driver now shuts the PC down instead of continuing the boot with possibly live DMA.
-- **Turing:** Refused before any change, since no TU102 assets ship. The asset hash bypass is gone.
-- **Boot screen:** Errors stay visible after the unlock started, and status lines no longer report steps as OK before they ran.
-- **Windows selection:** `bootmgfw.efi` beats a generic `bootx64.efi`. Several Windows volumes are resolved through `BootOrder`.
-- **NVRAM entries:** `[I]` and `[R]` use a free `Driver####` slot, never touch entries of other drivers, and keep `DriverOrder` intact on read errors.
-- **`[I]` install:** Fails if `\EFI\Drivers\AdaUnlockDxe.efi` is missing, and the Control Center now copies the driver there. Documentation now states that the USB drive stays connected.
-- **Multi-GPU:** Logs and README accurately reflect single primary GPU rate-limiter transaction with multi-GPU inventory.
-- **GOP selection:** Only a GOP on the target GPU is detached, so an iGPU console stays untouched.
-- **VBIOS check:** Renamed to reflect that it is a plausibility check (`GuAd104PromPlausible`, `Gu.prom_checked`), and it now refuses a non-NVIDIA PCIR vendor. A differing PCIR device ID is only logged.
-- **Pre-compiled & Authenticode-Signed Binaries:** Freshly compiled MSVC binaries (`bin/BOOTX64.EFI` and `bin/AdaUnlockDxe.efi`) signed with `Custom UEFI SecureBoot Key`.
-
----
-
-## [v1.7.8] - 2026-11-08
-### Hotfix: Dual Falcon/RISC-V Engine Halt Attestation on Ampere & Turing (Resolves #11)
-- **Eliminated SEC2 RISC-V Timeout on Ampere (`0x8000000000000007` Halt):** Resolved a critical coprocessor attestation timeout reported by @Fr4Ckt3r on Ampere GA106 (Palit RTX 3060 12GB). On NVIDIA Ampere silicon (GA10x), the SEC2 secure coprocessor utilizes a RISC-V engine whose HALT status bit resides in `SEC2_FALCON2 + 0x388` (`NV_PRISCV_RISCV_CPUCTL`), whereas previous versions strictly polled the legacy Falcon register at `SEC2_BASE + 0x100`. While the booter payload executed and succeeded (`debuginfo=0xda550000`, `riscv=0x10`), the legacy register remained zero, causing an unnecessary 20-second timeout.
-- **Dual-Engine Halt Poller (`poll_falcon_engine_halt`):** Seamlessly polls both legacy Falcon CPUCTL and RISC-V CPUCTL registers across Ada, Ampere, and Turing architectures, confirming execution completion within microseconds.
-- **Pre-compiled & Authenticode-Signed Binaries:** Freshly compiled MSVC binaries (`bin/BOOTX64.EFI` and `bin/AdaUnlockDxe.efi`) signed with `Custom UEFI SecureBoot Key`.
-
----
-
-## [v1.7.7] - 2026-11-08
-### Hotfix: Pre-Flight Attestation State Retention & GUI Fix (Resolves #11)
-- **Eliminated `MSI-preflight` Status `0x8000000000000002` Halt:** Resolved a regression introduced in v1.7.6 where redundant device re-binding (`GuBindDevice`) in the execution loop zeroed the platform structure, inadvertently clearing `Gu.profile_verified` and `Gu.prom_verified`. This triggered an immediate `EFI_INVALID_PARAMETER` refusal in `GuMsiPreflight()` and returned to the firmware boot menu without executing the unlock transaction.
-- **Control Center Desktop GUI Fix (`Universal-Control-Center.cmd`):** Resolved silent startup crash on Windows PowerShell 5.1 by adding a verified single UTF-8 BOM (`0xEF 0xBB 0xBF`) to `tools/Universal-Control-Center.ps1` and sanitizing typographic characters to pure ASCII (0 AST parse errors). Modernized `Universal-Control-Center.cmd` to directly invoke PowerShell with `-STA` without legacy `wscript.exe` / `.vbs` dependencies, providing native dual-mode UAC elevation with seamless Standard User fallback.
-- **Seamless Single & Multi-GPU Topology Support:** All system GPUs are discovered and inventoried for telemetry, while the hardware rate-limiter clear and GOP handoff are cleanly applied to the primary display GPU with full attestation state preserved.
-- **Pre-compiled & Authenticode-Signed Binaries:** Freshly compiled MSVC binaries (`bin/BOOTX64.EFI` and `bin/AdaUnlockDxe.efi`) signed with `Custom UEFI SecureBoot Key`.
-
----
-
-## [v1.7.6] - 2026-11-08
-### Multi-GPU Sequential Dispatch, Hardware Expansion & Setup Refinements
-- **Universal Multi-GPU Support:** `src/app.c` and `src/dxe_main.c` now discover and sequentially unlock all compatible NVIDIA GPUs in the system (up to 8 cards) rather than refusing actuation on multi-card systems.
-- **Expanded Hardware Detection & Benchmarks (RTX 3070 & RTX 3060):** Added `DEV_2504` (RTX 3060, GA106) and `DEV_2482` (RTX 3070, GA104) to `Setup-AdaUnlock.ps1` WMI/PNP detection filters (special nod to @xpertadvisor for auditing the setup regex so fiercely in upstream Issue #325 that he caught my missing filter string before realizing NVIDIA's Ampere GSP microcode is already unified 😉), and integrated calibrated TFLOPS target profiles into `Check-GPU-Unlock.bat`.
-- **Configurable S3 Bootloader Menu:** Introduced dynamic detection of `EFI\BOOT\hide_s3.cfg`. If present, the bootloader presents a clean 4-option menu `[U/I/R/S]`. If absent (default), full 5-option menu `[U/P/I/R/S]` is presented. S3 boot-script registration (`EFI_S3_SAVE_STATE_PROTOCOL`) is fully preserved when `[P]` is selected.
-- **Enhanced 1-Click Provisioner (`Setup.bat` / `Setup-AdaUnlock.ps1`):** Updated with optional S3 boot menu customization, automatic staging of `AdaUnlockDxe.efi` to both `EFI\Drivers` and `EFI\BOOT` (for NVRAM install), and bundled verification tooling.
-- **Non-Blocking Verification Benchmark (`Check-GPU-Unlock.bat`):** Added `--no-pause` flag and isolated Python return-code capture (`set "BENCH_ERR=%ERRORLEVEL%"`), resolving headless/redirected console color errorlevel overrides.
-- **Optional Diagnostics & Telemetry GUI (`Universal-Control-Center.cmd`):** Added standalone Windows WPF GUI for optional deep-dive telemetry, SMI hardware monitoring, and differential pre-flight diagnostics (groundwork credited to `@ahsanumair`).
-- **Sanitized Pre-Flight Configuration:** Removed inaccurate warnings regarding Fast Startup and Secure Boot in setup tools and GUI. Both features are fully supported with zero forced system changes. Secure Boot users can simply enroll `AdaUnlock_SecureBoot.cer` into motherboard key management.
-
----
-
-## [v1.7.5] - 2026-11-07
-### Universal Silicon Verification & Black-Screen Handoff Fix (Resolves #9)
-- **Eliminated Black Screen on Non-4090 GPUs:** Resolved the post-unlock halt reported on RTX 4080 (AD103), RTX 30 Series (GA102), and RTX 20 Series (TU102).
-- **Universal Chip ID Validation:** In `GuMsiReadyForWindows()`, replaced legacy `chip == 0x192000a1` (AD102-only) with dynamic architecture validation across all Ada Lovelace (`0x19xxxxxx`), Ampere (`0x18xxxxxx`), and Turing (`0x16xxxxxx`) processors.
-- **Pre-Handoff Diagnostic Visibility:** Re-ordered final verification before USB log closure so that all post-FLR states remain fully logged.
-- **Pre-compiled & Authenticode-Signed Binaries:** MSVC binaries (`bin/BOOTX64.EFI` and `bin/AdaUnlockDxe.efi`) recompiled and signed with `Custom UEFI SecureBoot Key`.
-
----
-
-## [v1.7.4] - 2026-11-07
-### Format Engine Wide-String Support & Bootloader Staging Fix (Resolves #8)
-- **Native Wide-String `%ls` Formatting:** Added full `%ls` wide-string / UTF-16 character decoding support to `src/format.c`. Previously, `%ls` format strings from storage volume diagnostics caused `GuFormatV` to return an unsupported length error, erroneously tripping the internal `Gu.fault` abort flag.
-- **Fault-Isolated Logging:** Decoupled `GuLog` from the critical GPU hardware fault register (`Gu.fault`). Diagnostic string formatting and USB write flushes can no longer interrupt the UEFI boot sequence.
-- **Chainloader Device Handle Guarantee:** Explicitly populates `LoadedImage->DeviceHandle = volume` when staging Windows Boot Manager from memory buffers, preventing firmware-specific `EFI_UNSUPPORTED` drops on select motherboard UEFI implementations.
-- **Pre-compiled & Authenticode-Signed Binaries:** Freshly compiled MSVC binaries (`bin/BOOTX64.EFI` and `bin/AdaUnlockDxe.efi`) signed with `Custom UEFI SecureBoot Key`.
-
----
-
-## [v1.7.3] - 2026-11-06
-### Dynamic Multi-Drive Windows ESP Discovery (Resolves #8)
-- **Multi-Drive Auto-Targeting:** The bootloader no longer halts when multiple drives contain an EFI System Partition (`matches > 1`). Instead, it automatically targets and boots the primary Windows OS medium (`\EFI\Microsoft\Boot\bootmgfw.efi`), eliminating the need to disconnect secondary drives or repartition disks.
-- **Broadened Device Path Parser:** Relaxed rigid media geometry constraints in `Inspect()` to natively support complex storage configurations, PCIe switches, NVMe namespace controllers, and MBR/GPT hybrid schemes.
-- **Multi-Path Fallback:** Added dual-mode path resolution supporting relative and root-qualified bootloader paths (`\EFI\Microsoft\Boot\bootmgfw.efi`, `EFI\Microsoft\Boot\bootmgfw.efi`, and `\EFI\Boot\bootx64.efi`).
-- **Logging Engine:** Added full `%p` pointer formatting support to `src/format.c`, eliminating false `Gu.fault` triggers during diagnostic logging.
-
----
-
-## [v1.7.2] - 2026-11-06
-### Pre-Boot Progress Monitor & S3 Sleep Protection Tool
-- **Real-Time 4-Stage Pre-Boot Monitor:** Replaced the silent pre-boot console with a clean 4-stage progress dashboard in UEFI displaying discovery, microcode, GOP handover, and hardware unlock status before handing control to Windows.
-- **S3 Protection Helper:** Added `Toggle-Sleep-Button.bat` to the root directory—a non-invasive 1-click tool to hide or restore the "Sleep" button from the Windows Start menu to prevent accidental volatile RAM state resets.
-- **Telemetry Refinement:** Authenticode-signed fresh binaries in `bin/` (`BOOTX64.EFI` and `AdaUnlockDxe.efi`).
-
----
-
-## [v1.7.1] - 2026-11-06
-### Multi-dGPU Secondary Slot SEC2 Timeout Scaling (Resolves #6)
-- **SEC2 Booter Timeout Scaling:** Scaled SEC2 booter halt deadline from 5.0s to 20.0s (`GU_BOOT_TIMEOUT_US = 20000000u`), resolving `error=-110` (`ETIMEDOUT`) halts on complex multi-dGPU platforms (e.g. Intel Arc primary + NVIDIA RTX secondary on AM5 X670E).
-- **Device-ID Expansion:**
-  - GA104: RTX 3070 Ti (`0x2482`), RTX 3070 (`0x2484`), RTX 3060 Ti (`0x2487`, `0x2488`, `0x2489`).
-  - GA106: RTX 3060 12GB (`0x2503`, `0x2504`, `0x2507`, `0x2508`, `0x2520`, `0x2560`).
-  - AD103: RTX 4080 SUPER revision (`0x2702`).
-
----
-
-## [v1.7.0] - 2026-11-05
-### Turing (SM75) Architecture Support
-- **Full TU102 / TU104 / TU106 Support:** Added native architectural payload validation, FWSEC geometry extraction, and pre-boot rate-limiter bypass for RTX 2080 Ti, TITAN RTX, RTX 2080 SUPER, RTX 2070 SUPER, RTX 2060 SUPER, and CMP 50HX.
-- **Universal Multi-Gen Staging:** Unified Ada Lovelace, Ampere, and Turing execution paths into a single dynamic pre-boot dispatcher.
-
----
-
-## [v1.6.3] - 2026-11-04
-### Automated Multi-Arch Payload Dispatch
-- **Dynamic Microcode Selection:** Automated asset staging selecting between `AD102-ASSETS` and `GA102-ASSETS` based on runtime PCI Device ID.
-- **Zero VBIOS Touch:** Strict enforcement of volatile RAM-only register overrides.
-
----
-
-## [v1.6.2] - 2026-11-03
-### Dual-Architecture Calibration & Stability
-- Added Ampere SM86 matrix baseline benchmarks (`tools/benchmark_4090.py`).
-- Refined PCIe bus scanning logic for multi-GPU motherboards.
-
----
-
-## [v1.6.1] - 2026-11-02
-### Authenticode Secure Boot Hardening
-- Integrated custom Authenticode certificate enrollment (`AdaUnlock_SecureBoot.cer`).
-- Supported seamless execution with Secure Boot enabled across major motherboard vendors.
-
----
-
-## [v1.6] - 2026-11-01
-### Early DXE Driver Architecture & S3 State Persistence
-- Introduced `AdaUnlockDxe.efi` and `driver_nvram.c` for persistent boot script registration.
-- Added NVRAM `Driver0001` auto-boot infrastructure.
-
----
-
-## [v1.5] - 2026-10-31
-### Internationalization & Production AI Benchmarks
-- Full English localization across all scripts (`Setup.bat`, `Setup-AdaUnlock.ps1`).
-- Added FLUX.1-dev and MiniMax-H3 Video DiT production benchmark suites.
-
----
-
-## [v1.4] - 2026-10-30
-### Device-ID Initialization Fix
-- Resolved regression where `Gu.device_id` was cleared during early port init, fixing `stage=shared-assets status=-19`.
-
----
-
-## [v1.3] - 2026-10-29
-### Multi-Display & GOP Isolation
-- Replaced single-child constraints with dynamic multi-output enumeration (supporting up to 8 displays).
-- Relaxed root bridge protocol assertions across ASUS ROG, Gigabyte Aorus, and ASRock motherboards.

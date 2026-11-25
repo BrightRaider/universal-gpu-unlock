@@ -25,30 +25,37 @@ C_RESET = "\033[0m"
 
 # Shared helpers live next to this script (tools/gu_system_info.py).
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from gu_system_info import CARD_PROFILES, get_firmware_mode, get_last_wake_time, get_rebar_info  # noqa: E402
+from gu_system_info import (  # noqa: E402
+    CARD_PROFILES,
+    apply_saved_power_limits,
+    find_nvidia_smi,
+    get_firmware_mode,
+    get_last_wake_time,
+    get_power_limit_info,
+    get_rebar_info,
+    get_s3_armed_status,
+)
+
 
 def get_pcie_info(gpu_index=0):
-    candidates = [
-        "nvidia-smi",
-        r"C:\Windows\System32\nvidia-smi.exe",
-        r"C:\Program Files\NVIDIA Corporation\NVSMI\nvidia-smi.exe",
-    ]
-    for exe in candidates:
-        try:
-            cmd = [
-                exe, "-i", str(gpu_index),
-                "--query-gpu=pcie.link.gen.max,pcie.link.width.max",
-                "--format=csv,noheader,nounits"
-            ]
-            out = subprocess.check_output(cmd, text=True, stderr=subprocess.DEVNULL)
-            parts = [p.strip() for p in out.strip().split(",")]
-            if len(parts) >= 2:
-                gen_max = int(parts[0])
-                width_max = int(parts[1])
-                is_throttled = width_max < 8 or gen_max < 3
-                return gen_max, width_max, is_throttled
-        except Exception:
-            continue
+    exe = find_nvidia_smi()
+    if not exe:
+        return None, None, False
+    try:
+        cmd = [
+            exe, "-i", str(gpu_index),
+            "--query-gpu=pcie.link.gen.max,pcie.link.width.max",
+            "--format=csv,noheader,nounits"
+        ]
+        out = subprocess.check_output(cmd, text=True, stderr=subprocess.DEVNULL)
+        parts = [p.strip() for p in out.strip().split(",")]
+        if len(parts) >= 2:
+            gen_max = int(parts[0])
+            width_max = int(parts[1])
+            is_throttled = width_max < 8 or gen_max < 3
+            return gen_max, width_max, is_throttled
+    except Exception:
+        pass
     return None, None, False
 
 def copy_to_clipboard(text):
@@ -227,8 +234,30 @@ def evaluate_gpu(dev_idx, dev_count, fw_str):
     }
 
 def main():
+    if "--reapply-pl" in sys.argv:
+        ok, msg = apply_saved_power_limits()
+        print(msg)
+        sys.exit(0 if ok else 1)
+
     fw_str, fw_is_uefi = get_firmware_mode()
     wake_time = get_last_wake_time()
+    s3_status = get_s3_armed_status()
+    pl_info = get_power_limit_info(0)
+
+    def _s3_line():
+        code = s3_status["code"]
+        col = C_GREEN if code == "ARMED" else (C_YELLOW if code in ("S0IX_WARN", "UNVERIFIED") else C_RED_BOLD)
+        return f"  * S3 Persistence     : {col}{s3_status['label']}{C_RESET} ({s3_status['detail']})"
+
+    def _pl_line():
+        if pl_info.get("current_w") is None:
+            return None
+        rng = (
+            f"Range {pl_info['min_w']:.0f}-{pl_info['max_w']:.0f} W, Default {pl_info['default_w']:.0f} W"
+            if pl_info.get("adjustable") and pl_info.get("default_w") is not None
+            else "Read-only"
+        )
+        return f"  * Power Limit        : {pl_info['current_w']:.0f} W ({rng})"
 
     try:
         global torch
@@ -241,8 +270,12 @@ def main():
         print("=" * 72)
         print("  SYSTEM HARDWARE ENVIRONMENT:")
         print(f"  * Firmware Mode      : {fw_str}")
+        print(_s3_line())
+        pl_txt = _pl_line()
+        if pl_txt:
+            print(pl_txt)
         if wake_time:
-            print(f"  * Last Wake (S3/S4)  : {wake_time} (does not show whether the unlock survived)")
+            print(f"  * Last Wake (S3/S4)  : {wake_time}")
         if rebar_active is True:
             print(f"  * Resizable BAR      : {C_GREEN}[OK] ENABLED (BAR1: {bar1} MiB / VRAM: {fb} MiB){C_RESET}")
         elif rebar_active is False:
@@ -287,8 +320,12 @@ def main():
     print("=" * 72)
     print("  SYSTEM HARDWARE ENVIRONMENT:")
     print(f"  * Firmware Mode      : {fw_str}")
+    print(_s3_line())
+    pl_txt = _pl_line()
+    if pl_txt:
+        print(pl_txt)
     if wake_time:
-        print(f"  * Last Wake (S3/S4)  : {wake_time} (does not show whether the unlock survived)")
+        print(f"  * Last Wake (S3/S4)  : {wake_time}")
     print(f"  * NVIDIA CUDA GPUs   : {dev_count} device(s) detected")
     print("-" * 72)
 

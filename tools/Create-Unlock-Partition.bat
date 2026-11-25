@@ -12,5 +12,7 @@ if %errorlevel% neq 0 (
     exit /b
 )
 
-powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0tools\Create-Unlock-Partition.ps1" %*
+set "PART_PS1=%~dp0Create-Unlock-Partition.ps1"
+if not exist "%PART_PS1%" set "PART_PS1=%~dp0tools\Create-Unlock-Partition.ps1"
+powershell -NoProfile -ExecutionPolicy Bypass -File "%PART_PS1%" %*
 exit /b %ERRORLEVEL%

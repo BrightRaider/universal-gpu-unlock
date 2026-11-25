@@ -871,7 +871,7 @@ $btnDeployUsb.Add_Click({
         }
         $letter = $selected.Substring(0, 1)
 
-        $s3Desc = if ($chkHideS3 -and $chkHideS3.IsChecked) { "Hidden (Clean [U/I/R/S] boot prompt)" } else { "Visible (Full [U/P/I/R/S] prompt with experimental S3 persistence [P])" }
+        $s3Desc = if ($chkHideS3 -and $chkHideS3.IsChecked) { "Hidden (Clean [U/I/R/S] boot prompt)" } else { "Visible (Full [U/P/I/R/S] prompt with verified S3 persistence [P])" }
         $espNoticeMsg = if ($espMb -gt 0 -and $espMb -lt 250) { "`n`n[!] Notice: Windows ESP is $espMb MB (Standard 100MB OEM). Option [I] requires ~85MB free for Ada/Ampere (~28MB for Turing). Option [P] (S3 Sleep) is recommended (bypasses ESP space limits)!" } else { "" }
         $confirm = [System.Windows.MessageBox]::Show("Deploy Universal GPU Unlock to USB drive $letter`:`\?`n`n- Universal BOOTX64.EFI & AdaUnlockDxe.efi`n- Universal Firmware Assets (AD102/GA102/TU102)`n- S3 Persistence Menu: $s3Desc$espNoticeMsg`n`nExisting user files on the USB drive will be preserved.", "Confirm Universal 1-Click Deployment", [System.Windows.MessageBoxButton]::YesNo, [System.Windows.MessageBoxImage]::Question)
         if ($confirm -eq [System.Windows.MessageBoxResult]::Yes) {
@@ -1210,7 +1210,8 @@ if ($btnRunCheckUnlockWin) {
 $btnToggleTuringGsp = $window.FindName("BtnToggleTuringGsp")
 if ($btnToggleTuringGsp) {
     $btnToggleTuringGsp.Add_Click({
-        $turingBat = Join-Path $Script:RepoRoot "Toggle-Turing-GSP.bat"
+        $turingBat = Join-Path $Script:RepoRoot "tools\Toggle-Turing-GSP.bat"
+        if (-not (Test-Path -LiteralPath $turingBat)) { $turingBat = Join-Path $Script:RepoRoot "Toggle-Turing-GSP.bat" }
         if (Test-Path -LiteralPath $turingBat) {
             Start-Process -FilePath "cmd.exe" -ArgumentList "/c `"$turingBat`"" -WorkingDirectory $Script:RepoRoot
         } else {
@@ -1222,7 +1223,8 @@ if ($btnToggleTuringGsp) {
 $btnToggleSleepButton = $window.FindName("BtnToggleSleepButton")
 if ($btnToggleSleepButton) {
     $btnToggleSleepButton.Add_Click({
-        $sleepBat = Join-Path $Script:RepoRoot "Toggle-Sleep-Button.bat"
+        $sleepBat = Join-Path $Script:RepoRoot "tools\Toggle-Sleep-Button.bat"
+        if (-not (Test-Path -LiteralPath $sleepBat)) { $sleepBat = Join-Path $Script:RepoRoot "Toggle-Sleep-Button.bat" }
         if (Test-Path -LiteralPath $sleepBat) {
             Start-Process -FilePath "cmd.exe" -ArgumentList "/c `"$sleepBat`"" -WorkingDirectory $Script:RepoRoot
         } else {

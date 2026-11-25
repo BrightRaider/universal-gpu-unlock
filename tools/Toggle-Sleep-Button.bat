@@ -18,7 +18,7 @@ cls
 echo ====================================================================
 echo   UNIVERSAL GPU UNLOCK - Start Menu Sleep Button Toggle
 echo ====================================================================
-echo   Prevents accidental S3 Sleep while using volatile GPU unlock.
+echo   Prevents accidental S3 Sleep when using Cold-Boot [U] mode (instead of [P]).
 echo   Does NOT modify power plans, timeouts, or system background tasks.
 echo --------------------------------------------------------------------
 
