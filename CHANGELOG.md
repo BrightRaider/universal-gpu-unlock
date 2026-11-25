@@ -6,6 +6,17 @@ For packaged binaries and downloads, visit [GitHub Releases](https://github.com/
 
 ---
 
+## [v1.9.6] - 2026-11-25
+
+### Fixed (Local Dev — Empty-Partition `[I]` Recursive Directory Creation & Chunked Copy)
+- **Root Cause Observed on Fresh `GPU_UNLOCK` Partition:** After creating an empty `512 MB FAT32` `GPU_UNLOCK` partition (`0.01 MB` used, `507.99 MB` free) and running `[I]`, Windows booted stock (`FADT HeaderChk=0x7A`, `123.50 TFLOPS`) with `GPU_UNLOCK` still empty (`0.01 MB` used). On UEFI `FatDxe`, `EFI_FILE_PROTOCOL.Open(..., EFI_FILE_MODE_CREATE, EFI_FILE_DIRECTORY)` can only create a single leaf directory component; opening `L"\\EFI\\Drivers"` directly failed with `EFI_NOT_FOUND` on a brand-new partition lacking `\EFI`, falling back to USB before anything was written.
+- **Recursive Directory Creation (`src/driver_nvram.c`):** Added `OpenOrCreateDirRecursive()` walking path segments one at a time (`EFI` -> `Drivers`, or asset subdirectories) with `EFI_FILE_MODE_CREATE | EFI_FILE_DIRECTORY`. `StageArchAssetsToVolume()` also splits on the last backslash so multi-level asset paths work at any depth.
+- **1 MiB Streaming Chunked Copy & Space-Trimmed Label Match (`src/driver_nvram.c`):** Replaced full-file (`~84 MB`) `AllocatePool` + single-shot `Read`/`Write` in `CopyFileBetweenVolumes()` with a `1 MiB` (`GU_COPY_CHUNK_BYTES`) streaming loop, partial target `Delete()` cleanup on write failure, trailing-space trimming in `StrEqNoCase16()`, and a `512`-byte `EFI_FILE_SYSTEM_INFO` buffer.
+- **Clean Hidden Formatting Without Premature Drive-Letter Popup (`tools/Create-Unlock-Partition.ps1`):** Switched partition creation and formatting to `Format-Volume -Partition` before assigning any drive letter, eliminating the spurious Windows Explorer `"Cannot format drive"` popup.
+- **Strict Host Tests (`tests/test_driver_nvram.c`):** Mock `FOpen()` now enforces real UEFI `FatDxe` parent-directory rules (`EFI_NOT_FOUND` if `\EFI` does not exist when opening `\EFI\Drivers`) plus a `2.5 MB` multi-chunk streaming copy and space-padded label test (`"GPU_UNLOCK   "`); `tests/Run-MsvcHostTests.ps1` passed (`MSVC_HOST_TESTS=PASS`).
+
+---
+
 ## [v1.9.5] - 2026-11-25
 
 ### Fixed / Added (Local Dev — Stickless `[I]` Multi-Volume Fallback & Hidden `GPU_UNLOCK` Partition)

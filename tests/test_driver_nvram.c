@@ -67,30 +67,73 @@ static EFI_STATUS EFIAPI SetVar(CHAR16 *n, EFI_GUID *g, UINT32 a, UINTN s, VOID 
 #define SMALLFAT_HANDLE ((EFI_HANDLE)(UINTN)5)
 #define DATAFAT_HANDLE  ((EFI_HANDLE)(UINTN)6)
 typedef struct VOL VOL;
-typedef struct { EFI_FILE_PROTOCOL p; VOL *v; } MFILE;
+typedef struct { EFI_FILE_PROTOCOL p; VOL *v; int kind; } MFILE;
+enum { MF_ROOT = 0, MF_EFI_DIR, MF_DRIVERS_DIR, MF_ASSETS_DIR, MF_RFILE, MF_WDRIVER, MF_WASSET };
 struct VOL {
   EFI_SIMPLE_FILE_SYSTEM_PROTOCOL fs; /* must stay first */
   UINT8 path[64];
   const CHAR16 *files[8];
   int has_bootmgfw, has_fs_info, read_only, fail_write, short_write, deleted, fail_after_writes;
-  UINT64 vol_size, free_space, asset_written_bytes;
+  int has_efi_dir, has_drivers_dir, has_assets_dir, driver_present, asset_present;
+  UINT64 vol_size, free_space, asset_written_bytes, src_file_size;
   CHAR16 label[32];
-  UINTN written, total_writes;
+  UINTN written, total_writes, write_calls;
   CHAR16 written_name[64];
-  MFILE root, dir, rfile, wfile;
+  MFILE root, dir, sub_efi, sub_assets, rfile, wfile, wasset;
 };
 static VOL Usb, Esp, UnlockVol, SmallFatVol, DataFatVol;
 static int esp_present, unlock_present, small_fat_present, data_fat_present;
 
 static EFI_STATUS EFIAPI FOpen(EFI_FILE_PROTOCOL *This, EFI_FILE_PROTOCOL **New, CHAR16 *Name, UINT64 Mode, UINT64 Attr) {
-  VOL *v = ((MFILE *)This)->v;
-  if (Attr & EFI_FILE_DIRECTORY) { *New = &v->dir.p; return EFI_SUCCESS; }
-  if (Mode & EFI_FILE_MODE_CREATE) { wcopy(v->written_name, Name, 64); *New = &v->wfile.p; return EFI_SUCCESS; }
+  MFILE *mf = (MFILE *)This;
+  VOL *v = mf->v;
+  if (Attr & EFI_FILE_DIRECTORY) {
+    /* Enforce real UEFI FatDxe rule: Open(..., CREATE, DIRECTORY) cannot create
+     * multi-segment paths unless all intermediate parent directories exist. */
+    if (mf->kind == MF_ROOT) {
+      if (weq(Name, L"\\EFI\\Drivers") || weq(Name, L"EFI\\Drivers")) {
+        if (!v->has_efi_dir) return EFI_NOT_FOUND;
+        v->has_drivers_dir = 1;
+        *New = &v->dir.p;
+        return EFI_SUCCESS;
+      }
+      if (weq(Name, L"EFI") || weq(Name, L"\\EFI")) {
+        v->has_efi_dir = 1;
+        *New = &v->sub_efi.p;
+        return EFI_SUCCESS;
+      }
+      if (weq(Name, L"AD102-ASSETS") || weq(Name, L"\\AD102-ASSETS")) {
+        v->has_assets_dir = 1;
+        *New = &v->sub_assets.p;
+        return EFI_SUCCESS;
+      }
+      if (weq(Name, L"Drivers")) return EFI_NOT_FOUND;
+    } else if (mf->kind == MF_EFI_DIR) {
+      if (weq(Name, L"Drivers")) {
+        if (!v->has_efi_dir) return EFI_NOT_FOUND;
+        v->has_drivers_dir = 1;
+        *New = &v->dir.p;
+        return EFI_SUCCESS;
+      }
+    }
+    return EFI_NOT_FOUND;
+  }
+  if (Mode & EFI_FILE_MODE_CREATE) {
+    wcopy(v->written_name, Name, 64);
+    if (weq(Name, L"AdaUnlockDxe.efi")) {
+      v->driver_present = 1;
+      *New = &v->wfile.p;
+    } else {
+      v->asset_present = 1;
+      *New = &v->wasset.p;
+    }
+    return EFI_SUCCESS;
+  }
   if (v->has_bootmgfw && weq(Name, L"\\EFI\\Microsoft\\Boot\\bootmgfw.efi")) { *New = &v->rfile.p; return EFI_SUCCESS; }
   for (int i = 0; i < 8; i++)
     if (v->files[i] && weq(Name, v->files[i])) { *New = &v->rfile.p; return EFI_SUCCESS; }
   /* An existing copy, opened by full path ([R]) or relative to \EFI\Drivers (copy). */
-  if (v->written && (weq(Name, L"\\EFI\\Drivers\\AdaUnlockDxe.efi") || weq(Name, L"AdaUnlockDxe.efi"))) {
+  if (v->driver_present && (weq(Name, L"\\EFI\\Drivers\\AdaUnlockDxe.efi") || weq(Name, L"AdaUnlockDxe.efi"))) {
     *New = &v->wfile.p;
     return EFI_SUCCESS;
   }
@@ -98,9 +141,15 @@ static EFI_STATUS EFIAPI FOpen(EFI_FILE_PROTOCOL *This, EFI_FILE_PROTOCOL **New,
 }
 static EFI_STATUS EFIAPI FClose(EFI_FILE_PROTOCOL *This) { (void)This; return EFI_SUCCESS; }
 static EFI_STATUS EFIAPI FDelete(EFI_FILE_PROTOCOL *This) {
-  VOL *v = ((MFILE *)This)->v;
-  v->deleted++;
-  v->written = 0;
+  MFILE *mf = (MFILE *)This;
+  VOL *v = mf->v;
+  if (mf->kind == MF_WDRIVER) {
+    v->deleted++;
+    v->written = 0;
+    v->driver_present = 0;
+  } else if (mf->kind == MF_WASSET) {
+    v->asset_present = 0;
+  }
   return EFI_SUCCESS;
 }
 static EFI_STATUS EFIAPI FRead(EFI_FILE_PROTOCOL *This, UINTN *Size, VOID *Buffer) {
@@ -109,19 +158,24 @@ static EFI_STATUS EFIAPI FRead(EFI_FILE_PROTOCOL *This, UINTN *Size, VOID *Buffe
   return EFI_SUCCESS;
 }
 static EFI_STATUS EFIAPI FWrite(EFI_FILE_PROTOCOL *This, UINTN *Size, VOID *Buffer) {
-  VOL *v = ((MFILE *)This)->v;
+  MFILE *mf = (MFILE *)This;
+  VOL *v = mf->v;
   (void)Buffer;
   if (v->fail_write) return EFI_DEVICE_ERROR;
   if (v->fail_after_writes && v->total_writes >= (UINTN)v->fail_after_writes) return EFI_VOLUME_FULL;
   if (v->has_fs_info && v->free_space < *Size) return EFI_VOLUME_FULL;
   if (v->short_write) *Size /= 2;
-  v->written = *Size;
+  v->write_calls++;
+  if (mf->kind == MF_WDRIVER) {
+    v->written = *Size;
+  }
   v->total_writes++;
   v->asset_written_bytes += *Size;
   return EFI_SUCCESS;
 }
 static EFI_STATUS EFIAPI FGetInfo(EFI_FILE_PROTOCOL *This, EFI_GUID *Type, UINTN *Size, VOID *Buffer) {
-  VOL *v = ((MFILE *)This)->v;
+  MFILE *mf = (MFILE *)This;
+  VOL *v = mf->v;
   if (Type && !memcmp(Type, &FsInfoGuid, sizeof(*Type))) {
     if (!v->has_fs_info) return EFI_UNSUPPORTED;
     UINTN need = sizeof(GU_EFI_FILE_SYSTEM_INFO) + 64;
@@ -138,11 +192,11 @@ static EFI_STATUS EFIAPI FGetInfo(EFI_FILE_PROTOCOL *This, EFI_GUID *Type, UINTN
     return EFI_SUCCESS;
   }
   EFI_FILE_INFO *info = Buffer;
-  (void)This;
+  (void)mf;
   if (*Size < sizeof(*info)) { *Size = sizeof(*info); return EFI_BUFFER_TOO_SMALL; }
   memset(info, 0, sizeof(*info));
   info->Size = sizeof(*info);
-  info->FileSize = FILE_BYTES;
+  info->FileSize = v->src_file_size ? v->src_file_size : FILE_BYTES;
   return EFI_SUCCESS;
 }
 static EFI_STATUS EFIAPI OpenVol(EFI_SIMPLE_FILE_SYSTEM_PROTOCOL *Fs, EFI_FILE_PROTOCOL **Root) {
@@ -156,9 +210,10 @@ static void mkpath(UINT8 *p, int usb, UINT8 sig) {
   p[6] = 4; p[7] = 1; p[8] = 42; p[6 + 24] = sig;
   p[48] = 0x7f; p[49] = 0xff; p[50] = 4;
 }
-static void mkfile(MFILE *f, VOL *v) {
+static void mkfile(MFILE *f, VOL *v, int kind) {
   memset(f, 0, sizeof(*f));
   f->v = v;
+  f->kind = kind;
   f->p.Revision = EFI_FILE_PROTOCOL_REVISION;
   f->p.Open = FOpen; f->p.Close = FClose; f->p.Delete = FDelete;
   f->p.Read = FRead; f->p.Write = FWrite; f->p.GetInfo = FGetInfo;
@@ -167,7 +222,10 @@ static void mkvol(VOL *v, int usb, UINT8 sig) {
   memset(v, 0, sizeof(*v));
   v->fs.OpenVolume = OpenVol;
   mkpath(v->path, usb, sig);
-  mkfile(&v->root, v); mkfile(&v->dir, v); mkfile(&v->rfile, v); mkfile(&v->wfile, v);
+  mkfile(&v->root, v, MF_ROOT); mkfile(&v->dir, v, MF_DRIVERS_DIR);
+  mkfile(&v->sub_efi, v, MF_EFI_DIR); mkfile(&v->sub_assets, v, MF_ASSETS_DIR);
+  mkfile(&v->rfile, v, MF_RFILE); mkfile(&v->wfile, v, MF_WDRIVER);
+  mkfile(&v->wasset, v, MF_WASSET);
 }
 
 /* ---- Mock boot services ---- */
@@ -319,7 +377,7 @@ int main(void) {
   CHECK(Esp.deleted == 1 && find(L"Driver0000") == NULL);
 
   /* An older, larger copy on the ESP is deleted before the new one is written. */
-  reset(); esp_present = 1; Esp.written = 3 * FILE_BYTES;
+  reset(); esp_present = 1; Esp.written = 3 * FILE_BYTES; Esp.driver_present = 1;
   CHECK(GuInstallDriverOption(image, &St) == EFI_SUCCESS);
   CHECK(Esp.deleted == 1 && Esp.written == FILE_BYTES && entry_on(L"Driver0000", &Esp));
 
@@ -426,6 +484,22 @@ int main(void) {
   CHECK(GuInstallDriverOption(image, &St) == EFI_SUCCESS);
   CHECK(!GuDriverInstalledOnEsp());
   CHECK(DataFatVol.total_writes == 0 && entry_on(L"Driver0000", &Usb));
+
+  /* Empty GPU_UNLOCK (no pre-existing \EFI folder, trailing spaces in FAT label)
+   * + >1 MiB streaming chunked copy across multiple 1 MiB chunks. */
+  reset();
+  esp_present = 1; unlock_present = 1;
+  MockArchAssets = &mock_ada;
+  Usb.files[1] = L"\\AD102-ASSETS\\gsp_ga10x.bin";
+  Usb.src_file_size = 2500000ULL;
+  Esp.has_fs_info = 1; Esp.vol_size = 100ULL * 1024 * 1024; Esp.free_space = 60ULL * 1024 * 1024;
+  wcopy(UnlockVol.label, L"GPU_UNLOCK   ", 32);
+  CHECK(GuInstallDriverOption(image, &St) == EFI_SUCCESS);
+  CHECK(GuDriverInstalledOnEsp());
+  CHECK(UnlockVol.has_efi_dir && UnlockVol.has_drivers_dir && UnlockVol.has_assets_dir);
+  CHECK(UnlockVol.asset_written_bytes == 5000000ULL);
+  CHECK(UnlockVol.write_calls == 6); /* 3 chunks (1M+1M+452K) x 2 files */
+  CHECK(entry_on(L"Driver0000", &UnlockVol));
 
   if (failures) printf("test_driver_nvram: %d FAILED\n", failures);
   else printf("test_driver_nvram: all checks passed\n");

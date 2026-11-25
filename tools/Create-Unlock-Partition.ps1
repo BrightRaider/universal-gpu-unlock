@@ -195,14 +195,13 @@ shrink desired=512
 Write-Host "  [2/3] Creating new 512 MB partition on Disk $diskNum..." -ForegroundColor Cyan
 $newPart = $null
 try {
-    $newPart = New-Partition -DiskNumber $diskNum -Size $shrinkBytes -AssignDriveLetter -ErrorAction Stop
-    Write-Host "        [OK] New partition created (Partition $($newPart.PartitionNumber), Drive $($newPart.DriveLetter):)." -ForegroundColor Green
+    $newPart = New-Partition -DiskNumber $diskNum -Size $shrinkBytes -ErrorAction Stop
+    Write-Host "        [OK] New partition created (Partition $($newPart.PartitionNumber))." -ForegroundColor Green
 } catch {
     Write-Host "        [WARN] PowerShell New-Partition failed, trying diskpart..." -ForegroundColor Yellow
     $dpScript = @"
 select disk $diskNum
 create partition primary size=512
-assign
 "@
     $dpFile = [System.IO.Path]::GetTempFileName()
     Set-Content -Path $dpFile -Value $dpScript -Encoding ascii
@@ -214,49 +213,68 @@ assign
     $newPart = Get-Partition -DiskNumber $diskNum -ErrorAction SilentlyContinue | Sort-Object PartitionNumber -Descending | Select-Object -First 1
 }
 
-if (-not $newPart -or -not $newPart.DriveLetter) {
-    # If drive letter wasn't assigned, find partition and assign one
-    $unassigned = Get-Partition -DiskNumber $diskNum -ErrorAction SilentlyContinue | Where-Object { -not $_.DriveLetter -and $_.Size -le ($shrinkBytes + 10485760) -and $_.Size -ge ($shrinkBytes - 10485760) } | Select-Object -First 1
-    if ($unassigned) {
-        $usedLetters = (Get-Volume).DriveLetter | Where-Object { $_ }
-        $candidateLetter = ('U', 'V', 'W', 'X', 'Y', 'Z', 'G', 'H', 'I', 'J') | Where-Object { $_ -notin $usedLetters } | Select-Object -First 1
-        if (-not $candidateLetter) { $candidateLetter = 'U' }
-        $unassigned | Set-Partition -NewDriveLetter $candidateLetter -ErrorAction SilentlyContinue
-        $newPart = Get-Partition -DiskNumber $diskNum -PartitionNumber $unassigned.PartitionNumber -ErrorAction SilentlyContinue
-    }
+if (-not $newPart) {
+    $newPart = Get-Partition -DiskNumber $diskNum -ErrorAction SilentlyContinue | Where-Object { -not $_.DriveLetter -and $_.Size -le ($shrinkBytes + 10485760) -and $_.Size -ge ($shrinkBytes - 10485760) } | Sort-Object PartitionNumber -Descending | Select-Object -First 1
+}
+
+if ($newPart) {
+    # Prevent Windows Explorer from auto-mounting a raw drive letter and showing a premature format prompt.
+    Set-Partition -DiskNumber $diskNum -PartitionNumber $newPart.PartitionNumber -NoDefaultDriveLetter $true -ErrorAction SilentlyContinue
 }
 
 Write-Host "  [3/3] Formatting partition with FAT32 ('GPU_UNLOCK')..." -ForegroundColor Cyan
 $formatSuccess = $false
-if ($newPart -and $newPart.DriveLetter) {
+if ($newPart) {
     try {
-        Format-Volume -DriveLetter $newPart.DriveLetter -FileSystem FAT32 -NewFileSystemLabel "GPU_UNLOCK" -Confirm:$false -ErrorAction Stop | Out-Null
+        Format-Volume -Partition $newPart -FileSystem FAT32 -NewFileSystemLabel "GPU_UNLOCK" -Force -Confirm:$false -ErrorAction Stop | Out-Null
         $formatSuccess = $true
-        Write-Host "        [OK] Partition $($newPart.DriveLetter): formatted as FAT32." -ForegroundColor Green
+        Write-Host "        [OK] Partition $($newPart.PartitionNumber) formatted as FAT32 ('GPU_UNLOCK')." -ForegroundColor Green
     } catch {
-        Write-Host "        [WARN] Format-Volume failed, falling back to cmd format..." -ForegroundColor Yellow
-        cmd.exe /c "format $($newPart.DriveLetter): /FS:FAT32 /V:GPU_UNLOCK /Q /Y" | Out-Null
-        $formatSuccess = ($LASTEXITCODE -eq 0)
+        Write-Host "        [WARN] Format-Volume -Partition failed, falling back to temporary drive letter..." -ForegroundColor Yellow
+        $usedLetters = (Get-Volume).DriveLetter | Where-Object { $_ }
+        $candidateLetter = ('U', 'V', 'W', 'X', 'Y', 'Z', 'G', 'H', 'I', 'J') | Where-Object { $_ -notin $usedLetters } | Select-Object -First 1
+        if (-not $candidateLetter) { $candidateLetter = 'U' }
+        Set-Partition -DiskNumber $diskNum -PartitionNumber $newPart.PartitionNumber -NewDriveLetter $candidateLetter -ErrorAction SilentlyContinue
+        $newPart = Get-Partition -DiskNumber $diskNum -PartitionNumber $newPart.PartitionNumber -ErrorAction SilentlyContinue
+        if ($newPart -and $newPart.DriveLetter) {
+            cmd.exe /c "format $($newPart.DriveLetter): /FS:FAT32 /V:GPU_UNLOCK /Q /Y" | Out-Null
+            $formatSuccess = ($LASTEXITCODE -eq 0)
+        }
     }
 }
 
 $hiddenSelected = [bool]$Hidden
-if (-not $Hidden -and -not $NonInteractive -and $newPart -and $newPart.DriveLetter) {
+if (-not $Hidden -and -not $NonInteractive -and $newPart) {
     $hideAns = Read-Host "  Hide drive letter from Windows Explorer (keep partition invisible, recommended)? (Y/n)"
     $hiddenSelected = ($hideAns -notmatch '^[nN]')
 }
 
 $hiddenApplied = $false
-if ($formatSuccess -and $newPart -and $hiddenSelected) {
-    try {
-        Set-Partition -DiskNumber $diskNum -PartitionNumber $newPart.PartitionNumber -NoDefaultDriveLetter $true -ErrorAction Stop
-        if ($newPart.DriveLetter) {
-            Remove-PartitionAccessPath -DiskNumber $diskNum -PartitionNumber $newPart.PartitionNumber -AccessPath "$($newPart.DriveLetter):\" -ErrorAction Stop
+if ($formatSuccess -and $newPart) {
+    if ($hiddenSelected) {
+        try {
+            Set-Partition -DiskNumber $diskNum -PartitionNumber $newPart.PartitionNumber -NoDefaultDriveLetter $true -ErrorAction Stop
+            $newPart = Get-Partition -DiskNumber $diskNum -PartitionNumber $newPart.PartitionNumber -ErrorAction SilentlyContinue
+            if ($newPart -and $newPart.DriveLetter) {
+                Remove-PartitionAccessPath -DiskNumber $diskNum -PartitionNumber $newPart.PartitionNumber -AccessPath "$($newPart.DriveLetter):\" -ErrorAction Stop
+            }
+            $hiddenApplied = $true
+            Write-Host "        [OK] NoDefaultDriveLetter set and no drive letter assigned (hidden in Explorer)." -ForegroundColor Green
+        } catch {
+            Write-Host "        [WARN] Could not hide drive letter automatically: $($_.Exception.Message)" -ForegroundColor Yellow
         }
-        $hiddenApplied = $true
-        Write-Host "        [OK] Drive letter removed and NoDefaultDriveLetter set (hidden in Explorer)." -ForegroundColor Green
-    } catch {
-        Write-Host "        [WARN] Could not hide drive letter automatically: $($_.Exception.Message)" -ForegroundColor Yellow
+    } else {
+        try {
+            Set-Partition -DiskNumber $diskNum -PartitionNumber $newPart.PartitionNumber -NoDefaultDriveLetter $false -ErrorAction SilentlyContinue
+            if (-not $newPart.DriveLetter) {
+                $usedLetters = (Get-Volume).DriveLetter | Where-Object { $_ }
+                $candidateLetter = ('U', 'V', 'W', 'X', 'Y', 'Z', 'G', 'H', 'I', 'J') | Where-Object { $_ -notin $usedLetters } | Select-Object -First 1
+                if ($candidateLetter) {
+                    Set-Partition -DiskNumber $diskNum -PartitionNumber $newPart.PartitionNumber -NewDriveLetter $candidateLetter -ErrorAction SilentlyContinue
+                }
+            }
+            $newPart = Get-Partition -DiskNumber $diskNum -PartitionNumber $newPart.PartitionNumber -ErrorAction SilentlyContinue
+        } catch { }
     }
 }
 

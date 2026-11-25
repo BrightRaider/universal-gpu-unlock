@@ -25,9 +25,10 @@ typedef struct {
   CHAR16  VolumeLabel[1];
 } GU_EFI_FILE_SYSTEM_INFO;
 
-#define GU_MAX_FS_HANDLES       64U
-#define GU_MAX_AUTO_PART_BYTES  (2ULL * 1024ULL * 1024ULL * 1024ULL)
+#define GU_MAX_FS_HANDLES        64U
+#define GU_MAX_AUTO_PART_BYTES   (2ULL * 1024ULL * 1024ULL * 1024ULL)
 #define GU_FALLBACK_DRIVER_BYTES (256ULL * 1024ULL)
+#define GU_COPY_CHUNK_BYTES      (1024ULL * 1024ULL)
 
 #ifndef LOAD_OPTION_ACTIVE
 #define LOAD_OPTION_ACTIVE 0x00000001U
@@ -140,6 +141,49 @@ static EFI_STATUS DriverFilePresentOnVolume(EFI_BOOT_SERVICES *bs, EFI_HANDLE vo
   return s;
 }
 
+static EFI_STATUS OpenOrCreateDirRecursive(EFI_FILE_PROTOCOL *root, const CHAR16 *dir_path,
+                                           EFI_FILE_PROTOCOL **out_dir) {
+  if (!root || !out_dir) return EFI_INVALID_PARAMETER;
+  *out_dir = NULL;
+  if (!dir_path || !*dir_path) {
+    *out_dir = root;
+    return EFI_SUCCESS;
+  }
+
+  /* UEFI EFI_FILE_PROTOCOL.Open(..., EFI_FILE_MODE_CREATE, EFI_FILE_DIRECTORY)
+   * can only create the leaf component; intermediate parents must already exist. */
+  EFI_FILE_PROTOCOL *cur = root;
+  const CHAR16 *p = dir_path;
+  while (*p) {
+    while (*p == L'\\') p++;
+    if (!*p) break;
+
+    CHAR16 seg[64];
+    UINTN len = 0;
+    while (p[len] && p[len] != L'\\') {
+      if (len + 1 >= 64) {
+        if (cur != root) (VOID)cur->Close(cur);
+        return EFI_INVALID_PARAMETER;
+      }
+      seg[len] = p[len];
+      len++;
+    }
+    seg[len] = 0;
+    p += len;
+
+    EFI_FILE_PROTOCOL *next = NULL;
+    EFI_STATUS s = cur->Open(cur, &next, seg,
+                             EFI_FILE_MODE_READ | EFI_FILE_MODE_WRITE | EFI_FILE_MODE_CREATE,
+                             EFI_FILE_DIRECTORY);
+    if (cur != root) (VOID)cur->Close(cur);
+    if (s != EFI_SUCCESS || !next) return (s == EFI_SUCCESS) ? EFI_DEVICE_ERROR : s;
+    cur = next;
+  }
+
+  *out_dir = cur;
+  return EFI_SUCCESS;
+}
+
 static EFI_STATUS CopyFileBetweenVolumes(EFI_BOOT_SERVICES *bs,
                                          EFI_HANDLE src_vol, const CHAR16 *src_path,
                                          EFI_HANDLE dst_vol, const CHAR16 *dst_dir, const CHAR16 *dst_file) {
@@ -162,53 +206,46 @@ static EFI_STATUS CopyFileBetweenVolumes(EFI_BOOT_SERVICES *bs,
   UINT64 info_buf[128];
   UINTN info_sz = sizeof(info_buf);
   s = src_file->GetInfo(src_file, &InfoGuid, &info_sz, info_buf);
-  if (s != EFI_SUCCESS) {
+  if (s != EFI_SUCCESS || info_sz < sizeof(EFI_FILE_INFO)) {
     src_file->Close(src_file);
     src_root->Close(src_root);
-    return s;
+    return (s == EFI_SUCCESS) ? EFI_DEVICE_ERROR : s;
   }
 
-  EFI_FILE_INFO *info = (EFI_FILE_INFO *)info_buf;
-  UINTN file_sz = (UINTN)info->FileSize;
+  UINT64 file_sz = ((EFI_FILE_INFO *)info_buf)->FileSize;
+  UINTN buf_sz = (file_sz > 0 && file_sz < GU_COPY_CHUNK_BYTES)
+                     ? (UINTN)file_sz
+                     : (file_sz ? (UINTN)GU_COPY_CHUNK_BYTES : 1U);
   VOID *buf = NULL;
-  s = bs->AllocatePool(EfiBootServicesData, file_sz, (VOID **)&buf);
+  s = bs->AllocatePool(EfiBootServicesData, buf_sz, (VOID **)&buf);
   if (s != EFI_SUCCESS || !buf) {
     src_file->Close(src_file);
     src_root->Close(src_root);
     return EFI_OUT_OF_RESOURCES;
   }
 
-  UINTN read_bytes = file_sz;
-  s = src_file->Read(src_file, &read_bytes, buf);
-  src_file->Close(src_file);
-  src_root->Close(src_root);
-  if (s != EFI_SUCCESS || read_bytes != file_sz) {
-    bs->FreePool(buf);
-    return EFI_DEVICE_ERROR;
-  }
-
   s = bs->HandleProtocol(dst_vol, &FsGuid, (VOID **)&dst_fs);
   if (s != EFI_SUCCESS || !dst_fs) {
     bs->FreePool(buf);
-    return s;
+    src_file->Close(src_file);
+    src_root->Close(src_root);
+    return (s == EFI_SUCCESS) ? EFI_UNSUPPORTED : s;
   }
   s = dst_fs->OpenVolume(dst_fs, &dst_root);
   if (s != EFI_SUCCESS || !dst_root) {
     bs->FreePool(buf);
-    return s;
+    src_file->Close(src_file);
+    src_root->Close(src_root);
+    return (s == EFI_SUCCESS) ? EFI_DEVICE_ERROR : s;
   }
 
-  if (dst_dir && *dst_dir) {
-    s = dst_root->Open(dst_root, &dst_dir_proto, (CHAR16 *)dst_dir,
-                       EFI_FILE_MODE_READ | EFI_FILE_MODE_WRITE | EFI_FILE_MODE_CREATE,
-                       EFI_FILE_DIRECTORY);
-    if (s != EFI_SUCCESS || !dst_dir_proto) {
-      dst_root->Close(dst_root);
-      bs->FreePool(buf);
-      return s;
-    }
-  } else {
-    dst_dir_proto = dst_root;
+  s = OpenOrCreateDirRecursive(dst_root, dst_dir, &dst_dir_proto);
+  if (s != EFI_SUCCESS || !dst_dir_proto) {
+    dst_root->Close(dst_root);
+    bs->FreePool(buf);
+    src_file->Close(src_file);
+    src_root->Close(src_root);
+    return (s == EFI_SUCCESS) ? EFI_DEVICE_ERROR : s;
   }
 
   /* Delete an existing copy first: opening an existing file with CREATE keeps
@@ -224,11 +261,26 @@ static EFI_STATUS CopyFileBetweenVolumes(EFI_BOOT_SERVICES *bs,
     s = dst_dir_proto->Open(dst_dir_proto, &dst_file_proto, (CHAR16 *)dst_file,
                             EFI_FILE_MODE_READ | EFI_FILE_MODE_WRITE | EFI_FILE_MODE_CREATE, 0);
   if (s == EFI_SUCCESS && dst_file_proto) {
-    UINTN write_bytes = file_sz;
-    s = dst_file_proto->Write(dst_file_proto, &write_bytes, buf);
-    if (s == EFI_SUCCESS && write_bytes != file_sz) s = EFI_DEVICE_ERROR;
-    EFI_STATUS closed = dst_file_proto->Close(dst_file_proto);
-    if (s == EFI_SUCCESS) s = closed;
+    UINT64 remaining = file_sz;
+    while (s == EFI_SUCCESS && remaining > 0) {
+      UINTN chunk = (remaining > (UINT64)buf_sz) ? buf_sz : (UINTN)remaining;
+      UINTN read_bytes = chunk;
+      s = src_file->Read(src_file, &read_bytes, buf);
+      if (s == EFI_SUCCESS && read_bytes != chunk) s = EFI_DEVICE_ERROR;
+      if (s == EFI_SUCCESS) {
+        UINTN write_bytes = chunk;
+        s = dst_file_proto->Write(dst_file_proto, &write_bytes, buf);
+        if (s == EFI_SUCCESS && write_bytes != chunk) s = EFI_DEVICE_ERROR;
+      }
+      if (s == EFI_SUCCESS) remaining -= (UINT64)chunk;
+    }
+    if (s == EFI_SUCCESS) {
+      if (dst_file_proto->Flush) (VOID)dst_file_proto->Flush(dst_file_proto);
+      s = dst_file_proto->Close(dst_file_proto);
+    } else {
+      if (dst_file_proto->Delete) (VOID)dst_file_proto->Delete(dst_file_proto);
+      else (VOID)dst_file_proto->Close(dst_file_proto);
+    }
   } else if (s == EFI_SUCCESS) {
     s = EFI_DEVICE_ERROR;
   }
@@ -236,6 +288,8 @@ static EFI_STATUS CopyFileBetweenVolumes(EFI_BOOT_SERVICES *bs,
   if (dst_dir_proto != dst_root) dst_dir_proto->Close(dst_dir_proto);
   dst_root->Close(dst_root);
   bs->FreePool(buf);
+  src_file->Close(src_file);
+  src_root->Close(src_root);
   return s;
 }
 
@@ -247,17 +301,17 @@ static BOOLEAN StageArchAssetsToVolume(EFI_BOOT_SERVICES *bs, EFI_HANDLE src_vol
   for (UINTN i = 0; i < GU_ASSET_COUNT; i++) {
     const CHAR16 *path = arch->entries[i].path;
     if (!path) continue;
-    const CHAR16 *fn = path;
-    while (*fn == L'\\') fn++;
-    const CHAR16 *slash = fn;
-    while (*slash && *slash != L'\\') slash++;
-    if (*slash == L'\\') {
+    const CHAR16 *last_slash = NULL;
+    for (const CHAR16 *q = path; *q; q++) {
+      if (*q == L'\\') last_slash = q;
+    }
+    if (last_slash && last_slash[1]) {
       CHAR16 dir[64];
-      UINTN dir_len = slash - path;
+      UINTN dir_len = (UINTN)(last_slash - path);
       if (dir_len < 63) {
         for (UINTN k = 0; k < dir_len; k++) dir[k] = path[k];
         dir[dir_len] = 0;
-        const CHAR16 *name = slash + 1;
+        const CHAR16 *name = last_slash + 1;
         EFI_STATUS s = CopyFileBetweenVolumes(bs, src_vol, path, dst_vol, dir, name);
         if (s != EFI_SUCCESS) {
           all_ok = FALSE;
@@ -277,12 +331,16 @@ static CHAR16 AsciiToUpper16(CHAR16 c) {
 
 static BOOLEAN StrEqNoCase16(const CHAR16 *a, const CHAR16 *b) {
   if (!a || !b) return FALSE;
-  while (*a && *b) {
-    if (AsciiToUpper16(*a) != AsciiToUpper16(*b)) return FALSE;
-    a++;
-    b++;
+  UINTN la = 0, lb = 0;
+  while (a[la]) la++;
+  while (b[lb]) lb++;
+  while (la > 0 && a[la - 1] == L' ') la--;
+  while (lb > 0 && b[lb - 1] == L' ') lb--;
+  if (la != lb) return FALSE;
+  for (UINTN i = 0; i < la; i++) {
+    if (AsciiToUpper16(a[i]) != AsciiToUpper16(b[i])) return FALSE;
   }
-  return *a == *b;
+  return TRUE;
 }
 
 static BOOLEAN IsInternalNonUsbFsHandle(EFI_BOOT_SERVICES *bs, EFI_HANDLE h) {
@@ -310,7 +368,7 @@ static BOOLEAN GetVolumeFsStats(EFI_BOOT_SERVICES *bs, EFI_HANDLE vol,
     return FALSE;
   }
 
-  UINT64 buf[32];
+  UINT64 buf[64];
   UINTN sz = sizeof(buf);
   EFI_STATUS s = root->GetInfo(root, &FsInfoGuid, &sz, buf);
   root->Close(root);
