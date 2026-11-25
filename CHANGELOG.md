@@ -14,6 +14,10 @@ For packaged binaries and downloads, visit [GitHub Releases](https://github.com/
   - `GuAcpiLocateFadtAndFacs()` akzeptiert geänderte, echte `RealRSDP`-Zeiger aus dem BDS direkt und löst `orig_rsdp` nur noch auf, wenn `ConfigurationTable` tatsächlich auf `ShadowRSDP` oder `shadow_xsdt_phys` zeigt.
   - `AdaUnlockApplyPlanCNow()` und `AdaUnlockHookedStartImage()` rufen `GuAcpiRefreshShadowChain(&ref_info)` vor `GuAcpiInstallEbsHook()` + `GuAcpiApplyShadowConfigTable()` auf und protokollieren `RealXSDT`/`RealFADT`/`ShadowXSDT`/`ShadowFADT` Checksums sowie `facs_rearm` in `RUNxxxx.TXT`.
 - **Tests (`tests/test_s3_resume.c`, `tests/test_dxe_main.c`):** Neue Testfälle für späte BDS-Mutationen an `mock_fadt.Flags`, erweitertem `mock_xsdt.Entry[2]` und gelöschtem `mock_facs.FirmwareWakingVector` (`9.809` Checks in `test_s3_resume`, `test_dxe_main: all checks passed`, `MSVC_HOST_TESTS=PASS`).
+- **Hardware-Verifikation (`RUN0105.TXT`, RTX 4090, Windows 10, Secure Boot + Riot Vanguard + ~9h S3):**
+  - Start über `[I]` (`Driver0000` auf `F:\EFI\Drivers\AdaUnlockDxe.efi`) + regulären Windows Boot Manager (`Boot0000`), `Confirm-SecureBootUEFI: True`.
+  - `GuAcpiRefreshShadowChain()` übernahm im `StartImage`-Guard die finalen BIOS-Tabellen (`RealXSDT=0xb0`, `RealFADT=0x7a` -> `ShadowXSDT=0x65`, `ShadowFADT=0xde`) und Windows-Registry bestätigte `HKLM\HARDWARE\ACPI\FADT`: `HeaderChk=0xDE`, `FirmwareCtrl=0xDC637400` (`ShadowFACS`).
+  - Etappe A (*League of Legends*-Spielrunde vor Standby) und Etappe B (~9 h S3 Standby `02:44:12` -> `11:40:57`, derselbe Boot `02:13:32`) bestanden: nach Wake liefen `vgk`, `vgc` (`Running`) und `LeagueClient` fehlerfrei weiter; cuBLAS-12-Tensor-Verifikation maß **`247,43` TFLOPS** (`FP16 COMPUTE_16F`, `4096x4096`) bzw. **`232,72` TFLOPS** (`FP16 COMPUTE_32F`, `4096x4096`; `246,78` / `176,87` TFLOPS bei `8192x8192`), womit der entsperrte Rate-Limiter nach S3 Wake bestätigt ist *(USB-Stick `F:` als DXE-/Asset-Ablage eingesteckt wegen voller 100-MB-ESP)*.
 
 ## [v1.9.3] - 2026-11-25
 ### Added & Hardened (Local Dev — Plan-C StartImage Guard + Etappe-A Diagnostik)
