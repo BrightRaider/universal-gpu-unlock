@@ -60,16 +60,17 @@ Grafikkarten ohne Display-Ausgänge (wie die NVIDIA CMP 40HX auf TU106-Basis) od
 
 Die Binärdateien (`BOOTX64.EFI` und `AdaUnlockDxe.efi`) sind mit einem dedizierten Authenticode-Zertifikat signiert.
 
-- **Option A (Einfachste Methode):** Secure Boot im BIOS vorübergehend auf **Disabled** stellen.
+- **Option A (Ohne Anti-Cheat, einfachste Methode):** Secure Boot im BIOS vorübergehend auf **Disabled** stellen.
 - **Option B (Secure Boot aktiv lassen):**
   1. Im BIOS Setup unter **Security ➔ Secure Boot ➔ Key Management** (bzw. *Custom Key Management*).
   2. Unter **Authorized Signatures (`db`)** auf **Append Key** / **Enroll Signature** klicken (*nicht* bestehende Microsoft-/OEM-Factory-Keys löschen oder ersetzen!).
   3. Auf den USB-Stick navigieren und **`AdaUnlock_SecureBoot.cer`** auswählen.
   4. Mit **F10** speichern und neu starten.
-- **Option C (Riot Vanguard / *Valorant* / *League of Legends*):**
-  1. **Secure Boot aktiv lassen** (`Standard`-Modus mit Factory-Keys; nur falls das BIOS `AdaUnlockDxe.efi` blockiert, `AdaUnlock_SecureBoot.cer` per **Append Key** zu `db` hinzufügen — Factory-Keys nicht löschen).
-  2. Einmal vom USB-Stick booten (`F8`/`F11`/`F12`) und **`[I]`** wählen (`AdaUnlockDxe.efi` wird in `DriverOrder` eingetragen).
-  3. Danach Windows ganz normal direkt über den internen **Windows Boot Manager (`bootmgfw.efi`)** starten *(bei einer 100-MB-ESP ohne genug Platz für Ada/Ampere-Assets bleibt der USB-Stick als Speicher eingesteckt, gebootet wird aber über den normalen Windows-Eintrag — nicht vom Stick)*.
+
+### 4.1 Riot Vanguard (*Valorant* / *League of Legends*)
+1. **Secure Boot aktiv lassen** (`Standard`-Modus mit Factory-Keys; falls dein BIOS den USB-Stick oder `AdaUnlockDxe.efi` blockiert, **`AdaUnlock_SecureBoot.cer` per Append** zu `db` hinzufügen — Factory-Keys niemals löschen oder ersetzen).
+2. **Einmalig `[I]` installieren:** Einmal vom USB-Stick booten (`F8` / `F11` / `F12`), **`[I]`** drücken (`AdaUnlockDxe.efi` wird im UEFI-NVRAM eingetragen) und neu starten lassen.
+3. **Windows normal starten (nicht vom USB-Stick booten):** Danach immer regulär direkt über den **Windows Boot Manager (`bootmgfw.efi`)** starten *(reicht eine 100-MB-ESP nicht für Ada/Ampere-Assets aus, bleibt der USB-Stick als Speicher eingesteckt oder du legst per `Create-Unlock-Partition.bat` eine 512-MB-FAT32-Partition an — gestartet wird aber immer über den internen Windows Boot Manager)*.
 
 ---
 

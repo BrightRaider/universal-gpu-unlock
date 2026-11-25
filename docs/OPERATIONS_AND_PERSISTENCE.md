@@ -75,7 +75,7 @@ Observed in these runs on the RTX 4090 bench:
 
 A frequent concern among enthusiasts is whether unlocking the GPU compromises UEFI Secure Boot or triggers competitive kernel anti-cheat engines (such as **Riot Vanguard** for *Valorant* / *League of Legends*, **Easy Anti-Cheat**, **BattlEye**, or **Ricochet**).
 
-**The short answer:** With Secure Boot enabled, **Riot Vanguard** works reliably by using Option **`[I]` (`AdaUnlockDxe.efi`)** so Windows boots directly via the internal **Windows Boot Manager (`bootmgfw.efi`)**. Easy Anti-Cheat, BattlEye, and Ricochet were not tested systematically.
+**The short answer:** With Secure Boot enabled, **Riot Vanguard** works by using Option **`[I]` (`AdaUnlockDxe.efi`)** and booting Windows normally via **Windows Boot Manager (`bootmgfw.efi`)** rather than booting from the USB drive. Easy Anti-Cheat, BattlEye, and Ricochet were not tested systematically.
 
 ### What Anti-Cheat Engines Commonly Check (vendors do not publish their full criteria):
 Kernel-level anti-cheat drivers query the Windows Security Subsystem (specifically `HKLM\SYSTEM\CurrentControlSet\Control\SecureBoot\State` and UEFI runtime variables):
