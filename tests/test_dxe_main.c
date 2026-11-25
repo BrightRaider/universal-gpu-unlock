@@ -17,13 +17,27 @@ static EFI_STATUS mock_unlock_status = EFI_SUCCESS;
 static BOOLEAN mock_s3_armed = TRUE;
 static UINTN ebs_hook_calls = 0;
 static UINTN shadow_apply_calls = 0;
+static UINTN restore_calls = 0;
 static UINT32 mock_shadow_apply_ret = 2;
 static UINTN close_event_calls = 0;
 static UINTN create_ex_calls = 0;
 static UINTN create_legacy_calls = 0;
+static UINTN orig_start_image_calls = 0;
+static UINTN crc_calls = 0;
+static UINTN append_log_calls = 0;
+static EFI_STATUS mock_create_ex_status = EFI_SUCCESS;
 static EFI_EVENT_NOTIFY last_callback = NULL;
 static VOID *last_context = NULL;
 static EFI_EVENT next_event_handle = (EFI_EVENT)(UINTN)0x1001;
+static VOID *const REAL_RSDP_PTR = (VOID *)(UINTN)0xDC8C1014ULL;
+static VOID *const SHADOW_RSDP_PTR = (VOID *)(UINTN)0xDC637000ULL;
+static EFI_CONFIGURATION_TABLE MockConfigTable[1];
+static EFI_LOADED_IMAGE_PROTOCOL MockLoadedDriver;
+static EFI_LOADED_IMAGE_PROTOCOL MockLoadedLoader;
+static EFI_LOADED_IMAGE_PROTOCOL MockLoadedNestedLoader;
+static EFI_STATUS (*on_orig_start_image)(EFI_HANDLE ImageHandle) = NULL;
+static EFI_BOOT_SERVICES MockBs;
+static EFI_SYSTEM_TABLE MockSt;
 
 VOID GuLog(const char *format, ...) { (void)format; }
 VOID GuBootSay(const CHAR16 *text) { (void)text; }
@@ -31,6 +45,7 @@ EFI_STATUS GuBootOpen(EFI_HANDLE image, EFI_SYSTEM_TABLE *t) { (void)image; (voi
 EFI_STATUS GuBootSyncLog(VOID) { return EFI_SUCCESS; }
 EFI_STATUS GuBootClose(VOID) { return EFI_SUCCESS; }
 VOID GuBootHalt(VOID) {}
+VOID GuBootAppendLog(const char *Format, ...) { (void)Format; append_log_calls++; }
 BOOLEAN GuCheckSafeguardFlag(VOID) { return FALSE; }
 EFI_STATUS GuSetSafeguardFlag(VOID) { return EFI_SUCCESS; }
 EFI_STATUS GuClearSafeguardFlag(VOID) { return EFI_SUCCESS; }
@@ -93,7 +108,14 @@ EFI_STATUS GuAcpiInstallEbsHook(IN EFI_SYSTEM_TABLE *SystemTable) {
 
 UINT32 GuAcpiApplyShadowConfigTable(VOID) {
   shadow_apply_calls++;
+  MockConfigTable[0].VendorTable = SHADOW_RSDP_PTR;
   return mock_shadow_apply_ret;
+}
+
+UINT32 GuAcpiRestoreConfigTable(VOID) {
+  restore_calls++;
+  MockConfigTable[0].VendorTable = REAL_RSDP_PTR;
+  return 1;
 }
 
 static EFI_STATUS EFIAPI MockCreateEventEx(UINT32 Type, EFI_TPL NotifyTpl,
@@ -105,6 +127,10 @@ static EFI_STATUS EFIAPI MockCreateEventEx(UINT32 Type, EFI_TPL NotifyTpl,
   create_ex_calls++;
   last_callback = NotifyFunction;
   last_context = (VOID *)NotifyContext;
+  if (mock_create_ex_status != EFI_SUCCESS) {
+    *Event = NULL;
+    return mock_create_ex_status;
+  }
   *Event = next_event_handle;
   next_event_handle = (EFI_EVENT)((UINTN)next_event_handle + 1);
   return EFI_SUCCESS;
@@ -129,17 +155,74 @@ static EFI_STATUS EFIAPI MockCloseEvent(EFI_EVENT Event) {
   return EFI_SUCCESS;
 }
 
-static EFI_BOOT_SERVICES MockBs;
-static EFI_SYSTEM_TABLE MockSt;
+static EFI_STATUS EFIAPI MockCalculateCrc32(VOID *Data, UINTN DataSize, UINT32 *Crc32) {
+  (void)Data; (void)DataSize;
+  crc_calls++;
+  if (Crc32) *Crc32 = 0x12345678U;
+  return EFI_SUCCESS;
+}
+
+static EFI_HANDLE const DRV_IMG = (EFI_HANDLE)(UINTN)0x3001;
+static EFI_HANDLE const LOADER_IMG = (EFI_HANDLE)(UINTN)0x3002;
+static EFI_HANDLE const WINLOAD_IMG = (EFI_HANDLE)(UINTN)0x3003;
+
+static EFI_STATUS EFIAPI MockHandleProtocol(EFI_HANDLE Handle, EFI_GUID *Protocol, VOID **Interface) {
+  static const EFI_GUID loaded_guid = EFI_LOADED_IMAGE_PROTOCOL_GUID;
+  if (!Protocol || !Interface || memcmp(Protocol, &loaded_guid, sizeof(EFI_GUID)) != 0) {
+    return EFI_UNSUPPORTED;
+  }
+  if (Handle == DRV_IMG) { *Interface = &MockLoadedDriver; return EFI_SUCCESS; }
+  if (Handle == LOADER_IMG) { *Interface = &MockLoadedLoader; return EFI_SUCCESS; }
+  if (Handle == WINLOAD_IMG) { *Interface = &MockLoadedNestedLoader; return EFI_SUCCESS; }
+  return EFI_NOT_FOUND;
+}
+
+static EFI_STATUS EFIAPI MockOrigStartImage(EFI_HANDLE ImageHandle, UINTN *ExitDataSize, CHAR16 **ExitData) {
+  (void)ExitDataSize; (void)ExitData;
+  orig_start_image_calls++;
+  if (on_orig_start_image) {
+    return on_orig_start_image(ImageHandle);
+  }
+  return EFI_SUCCESS;
+}
+
+static EFI_STATUS NestWinloadCallback(EFI_HANDLE ImageHandle) {
+  if (ImageHandle == LOADER_IMG) {
+    CHECK(MockConfigTable[0].VendorTable == SHADOW_RSDP_PTR);
+    return MockSt.BootServices->StartImage(WINLOAD_IMG, NULL, NULL);
+  }
+  if (ImageHandle == WINLOAD_IMG) {
+    CHECK(MockConfigTable[0].VendorTable == SHADOW_RSDP_PTR);
+    return EFI_SUCCESS;
+  }
+  return EFI_SUCCESS;
+}
 
 static VOID ResetTestState(BOOLEAN use_create_ex) {
+  static const EFI_GUID acpi20 = GU_EFI_ACPI_20_TABLE_GUID;
   memset(&Gu, 0, sizeof(Gu));
   memset(&MockBs, 0, sizeof(MockBs));
   memset(&MockSt, 0, sizeof(MockSt));
+  memset(&MockLoadedDriver, 0, sizeof(MockLoadedDriver));
+  memset(&MockLoadedLoader, 0, sizeof(MockLoadedLoader));
+  memset(&MockLoadedNestedLoader, 0, sizeof(MockLoadedNestedLoader));
+  MockLoadedDriver.ImageCodeType = EfiBootServicesCode;
+  MockLoadedLoader.ImageCodeType = EfiLoaderCode;
+  MockLoadedNestedLoader.ImageCodeType = EfiLoaderCode;
+
+  MockConfigTable[0].VendorGuid = acpi20;
+  MockConfigTable[0].VendorTable = REAL_RSDP_PTR;
+
+  MockBs.Hdr.HeaderSize = sizeof(MockBs);
   MockBs.CreateEventEx = use_create_ex ? MockCreateEventEx : NULL;
   MockBs.CreateEvent = MockCreateEvent;
   MockBs.CloseEvent = MockCloseEvent;
+  MockBs.HandleProtocol = MockHandleProtocol;
+  MockBs.StartImage = MockOrigStartImage;
+  MockBs.CalculateCrc32 = MockCalculateCrc32;
   MockSt.BootServices = &MockBs;
+  MockSt.NumberOfTableEntries = 1;
+  MockSt.ConfigurationTable = MockConfigTable;
 
   mDxeImage = NULL;
   mDxeTable = NULL;
@@ -147,25 +230,37 @@ static VOID ResetTestState(BOOLEAN use_create_ex) {
   mPlanCReadyToBootEvent = NULL;
   mDriverExecuted = FALSE;
   mPlanCActivated = FALSE;
+  mReadyToBootFired = FALSE;
+  mOrigStartImage = NULL;
+  mStartImageHookActive = FALSE;
+  mStartImageDepth = 0;
+  mStartImageLogCount = 0;
 
   mock_discover_status = EFI_SUCCESS;
   mock_discover_count = 1;
   mock_unlock_status = EFI_SUCCESS;
   mock_s3_armed = TRUE;
+  mock_create_ex_status = EFI_SUCCESS;
   ebs_hook_calls = 0;
   shadow_apply_calls = 0;
+  restore_calls = 0;
   mock_shadow_apply_ret = 2;
   close_event_calls = 0;
   create_ex_calls = 0;
   create_legacy_calls = 0;
+  orig_start_image_calls = 0;
+  crc_calls = 0;
+  append_log_calls = 0;
   last_callback = NULL;
   last_context = NULL;
+  on_orig_start_image = NULL;
 }
 
 int main(void) {
   EFI_HANDLE img = (EFI_HANDLE)(UINTN)0x1234;
 
-  /* 1. Early BDS succeeds with Plan C S3 armed -> deferred until ReadyToBoot */
+  /* 1. Early BDS succeeds with Plan C S3 armed -> deferred until ReadyToBoot,
+   *    non-loader driver StartImage before ReadyToBoot keeps RealRSDP intact. */
   ResetTestState(TRUE);
   CHECK(AdaUnlockDriverEntryPoint(img, &MockSt) == EFI_SUCCESS);
   CHECK(mDriverExecuted == TRUE);
@@ -174,32 +269,45 @@ int main(void) {
   CHECK(shadow_apply_calls == 0);
   CHECK(create_ex_calls == 1);
   CHECK(mPlanCReadyToBootEvent != NULL);
+  CHECK(mStartImageHookActive == TRUE);
+  CHECK(MockBs.StartImage == AdaUnlockHookedStartImage);
+  CHECK(crc_calls == 1);
   CHECK(last_callback == AdaUnlockOnPlanCReadyToBoot);
+
+  /* Launching another DXE driver before ReadyToBoot must NOT switch to ShadowRSDP */
+  CHECK(MockSt.BootServices->StartImage(DRV_IMG, NULL, NULL) == EFI_SUCCESS);
+  CHECK(orig_start_image_calls == 1);
+  CHECK(shadow_apply_calls == 0);
+  CHECK(MockConfigTable[0].VendorTable == REAL_RSDP_PTR);
 
   /* Signal ReadyToBoot -> activates EBS hook and Shadow ConfigTable once */
   last_callback(mPlanCReadyToBootEvent, last_context);
   CHECK(mPlanCReadyToBootEvent == NULL);
   CHECK(close_event_calls == 1);
   CHECK(mPlanCActivated == TRUE);
+  CHECK(mReadyToBootFired == TRUE);
   CHECK(ebs_hook_calls == 1);
   CHECK(shadow_apply_calls == 1);
+  CHECK(MockConfigTable[0].VendorTable == SHADOW_RSDP_PTR);
 
   /* Second ReadyToBoot invocation must be a safe no-op */
   AdaUnlockOnPlanCReadyToBoot(NULL, NULL);
   CHECK(ebs_hook_calls == 1);
   CHECK(shadow_apply_calls == 1);
 
-  /* 2. Early BDS succeeds WITHOUT S3 registered -> no Plan C event registered */
+  /* 2. Early BDS succeeds WITHOUT S3 registered -> neither event nor StartImage hook armed */
   ResetTestState(TRUE);
   mock_s3_armed = FALSE;
   CHECK(AdaUnlockDriverEntryPoint(img, &MockSt) == EFI_SUCCESS);
   CHECK(mDriverExecuted == TRUE);
   CHECK(create_ex_calls == 0);
   CHECK(mPlanCReadyToBootEvent == NULL);
+  CHECK(mStartImageHookActive == FALSE);
+  CHECK(MockBs.StartImage == MockOrigStartImage);
   CHECK(ebs_hook_calls == 0);
   CHECK(shadow_apply_calls == 0);
 
-  /* 3. Early BDS sees 0 GPUs, ReadyToBoot fallback discovers GPU & activates Plan C immediately */
+  /* 3. Early BDS sees 0 GPUs, ReadyToBoot fallback discovers GPU, activates Plan C & hooks StartImage */
   ResetTestState(TRUE);
   mock_discover_status = EFI_NOT_FOUND;
   mock_discover_count = 0;
@@ -216,6 +324,7 @@ int main(void) {
   last_callback(mReadyToBootEvent, last_context);
   CHECK(mDriverExecuted == TRUE);
   CHECK(mPlanCActivated == TRUE);
+  CHECK(mStartImageHookActive == TRUE);
   CHECK(ebs_hook_calls == 1);
   CHECK(shadow_apply_calls == 1);
 
@@ -228,6 +337,24 @@ int main(void) {
   last_callback(mPlanCReadyToBootEvent, last_context);
   CHECK(ebs_hook_calls == 1);
   CHECK(shadow_apply_calls == 1);
+
+  /* 5. Firmware reverts ConfigurationTable after ReadyToBoot OR ReadyToBoot fails:
+   *    StartImage(EfiLoaderCode -> nested EfiLoaderCode) MUST re-apply ShadowRSDP,
+   *    keep it active for nested winload, and restore RealRSDP only when depth reaches 0. */
+  ResetTestState(TRUE);
+  mock_create_ex_status = EFI_UNSUPPORTED;
+  CHECK(AdaUnlockDriverEntryPoint(img, &MockSt) == EFI_SUCCESS);
+  CHECK(mReadyToBootFired == FALSE);
+  CHECK(MockConfigTable[0].VendorTable == REAL_RSDP_PTR);
+  on_orig_start_image = NestWinloadCallback;
+  CHECK(MockSt.BootServices->StartImage(LOADER_IMG, NULL, NULL) == EFI_SUCCESS);
+  CHECK(orig_start_image_calls == 2); /* LOADER_IMG + WINLOAD_IMG */
+  CHECK(shadow_apply_calls == 2);
+  CHECK(ebs_hook_calls == 2);
+  CHECK(restore_calls == 1);
+  CHECK(mStartImageDepth == 0);
+  CHECK(mPlanCActivated == FALSE);
+  CHECK(MockConfigTable[0].VendorTable == REAL_RSDP_PTR);
 
   if (failures) {
     printf("test_dxe_main: FAILED (%d failures)\n", failures);

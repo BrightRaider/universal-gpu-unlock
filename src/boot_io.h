@@ -12,6 +12,7 @@ VOID GuBootSay(const CHAR16 *);
 VOID GuBootSilence(VOID);
 VOID GuBootUnsilence(VOID);
 VOID GuBootHalt(VOID);
+VOID GuBootAppendLog(const char *Format, ...);
 /* v0.5.4: diagnostics log only while the USB log is open (GuLog faults otherwise). */
 BOOLEAN GuBootLogOpen(VOID);
 EFI_HANDLE GuBootGetTargetEspVolume(VOID);

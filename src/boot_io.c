@@ -842,8 +842,8 @@ static size_t GuFormat(char *Destination, size_t Capacity, const char *Format, .
   return n;
 }
 
-static VOID GuBootLogError(EFI_STATUS ErrorStatus) {
-  if (!Table || !Table->BootServices || !OwnVolume)
+static VOID GuBootAppendBuffer(const CHAR8 *Buffer, UINTN Bytes) {
+  if (!Buffer || Bytes == 0 || !Table || !Table->BootServices || !OwnVolume)
     return;
   EFI_SIMPLE_FILE_SYSTEM_PROTOCOL *fs = NULL;
   EFI_FILE_PROTOCOL *root = NULL;
@@ -857,18 +857,41 @@ static VOID GuBootLogError(EFI_STATUS ErrorStatus) {
   s = root->Open(root, &log, ActiveLogName, EFI_FILE_MODE_READ | EFI_FILE_MODE_WRITE, 0);
   if (s == EFI_SUCCESS && log) {
     (VOID)log->SetPosition(log, ~(UINT64)0);
-    CHAR8 buffer[256];
-    size_t n = GuFormat(buffer, sizeof(buffer),
-                        "\n[FATAL ERROR] StartImage(Windows) returned failure: %#llx!\n",
-                        (unsigned long long)ErrorStatus);
-    if (n != (size_t)-1 && n < sizeof(buffer)) {
-      UINTN bytes = n;
-      (VOID)log->Write(log, &bytes, buffer);
-      (VOID)log->Flush(log);
-    }
+    UINTN bytes = Bytes;
+    (VOID)log->Write(log, &bytes, (VOID *)Buffer);
+    (VOID)log->Flush(log);
     (VOID)log->Close(log);
   }
   (VOID)root->Close(root);
+}
+
+VOID GuBootAppendLog(const char *Format, ...) {
+  if (!Format)
+    return;
+  CHAR8 buffer[512];
+  va_list args;
+  va_start(args, Format);
+  size_t n = GuFormatV(buffer, sizeof(buffer), Format, args);
+  va_end(args);
+  if (n == (size_t)-1 || n == 0 || n >= sizeof(buffer))
+    return;
+  if (Log) {
+    UINTN bytes = n;
+    (VOID)Log->Write(Log, &bytes, buffer);
+    (VOID)Log->Flush(Log);
+    return;
+  }
+  GuBootAppendBuffer(buffer, (UINTN)n);
+}
+
+static VOID GuBootLogError(EFI_STATUS ErrorStatus) {
+  CHAR8 buffer[256];
+  size_t n = GuFormat(buffer, sizeof(buffer),
+                      "\n[FATAL ERROR] StartImage(Windows) returned failure: %#llx!\n",
+                      (unsigned long long)ErrorStatus);
+  if (n != (size_t)-1 && n < sizeof(buffer)) {
+    GuBootAppendBuffer(buffer, (UINTN)n);
+  }
 }
 
 EFI_STATUS GuBootWindows(VOID) {

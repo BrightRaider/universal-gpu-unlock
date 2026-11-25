@@ -6,6 +6,15 @@ For packaged binaries and downloads, visit [GitHub Releases](https://github.com/
 
 ---
 
+## [v1.9.3] - 2026-11-25
+### Added & Hardened (Local Dev — Plan-C StartImage Guard + Etappe-A Diagnostik)
+- **Befund aus `RUN0099.TXT` (`v1.9.2`):** Mit `AdaUnlockDxe.efi` (`v1.9.2`) über `Boot0000` (Windows Boot Manager) + `Confirm-SecureBootUEFI: True` blieben `vgk`, `vgc` (`1116`) und `LeagueClient` (`3212`) stabil ohne Vanguard-Fehler aktiv, `HKLM\HARDWARE\ACPI\FADT` meldete jedoch noch `FirmwareCtrl=0xDC8BB000` (`RealFACS`) statt `ShadowFACS` (`0xDC637400`), da `ConfigurationTable` nach `ReadyToBoot` bzw. vor `bootmgfw.efi` wieder auf `RealRSDP` stand oder `ReadyToBoot` übergangen wurde.
+- **`gBS->StartImage`-Guard für OS-Loader (`src/dxe_main.c`, `src/version.h`):**
+  - `AdaUnlockInstallStartImageHook()` umschließt `BootServices->StartImage` (inkl. `Hdr.CRC32`-Aktualisierung über `AdaUnlockUpdateBootServicesCrc32()`), sobald Plan C (`Gu.s3_registered`) scharf ist.
+  - `AdaUnlockHookedStartImage()` prüft über `EFI_LOADED_IMAGE_PROTOCOL->ImageCodeType == EfiLoaderCode` (`AdaUnlockIsOsLoaderImage()`), ob ein OS-Loader (`bootmgfw.efi` / `winload.efi`) oder ein Post-`ReadyToBoot`-Aufruf gestartet wird. Nicht-OS-Treiber (`EfiBootServicesCode`) vor `ReadyToBoot` belassen `RealRSDP` unverändert; beim Start des OS-Loaders re-aktiviert `AdaUnlockApplyPlanCNow()` idempotent `GuAcpiInstallEbsHook()` + `GuAcpiApplyShadowConfigTable()` (tiefengeschachtelt über `mStartImageDepth` für `bootmgfw.efi -> winload.efi`). Bei Rückkehr zur Firmware (`mStartImageDepth == 0`) stellt `GuAcpiRestoreConfigTable()` wieder `RealRSDP` her.
+- **Forensisches Boot-Log-Append (`src/boot_io.c`, `src/boot_io.h`):** Extraktion von `GuBootAppendBuffer()` und neue Funktion `GuBootAppendLog()`, um Hook-Registrierung (`ReadyToBoot` + `StartImageHook`) sowie `pre_acpi -> post_acpi`-Zeiger direkt vor `bootmgfw.efi` / `winload.efi` sauber in `RUNxxxx.TXT` zu protokollieren (`ExitBootServices` bleibt 100 % frei von BootServices-Aufrufen).
+- **Erweiterte Host-Tests (`tests/test_dxe_main.c`):** Validiert zusätzlich `EfiBootServicesCode`-Durchreichung ohne vorzeitige `ShadowRSDP`-Aktivierung, erzwungene `ShadowRSDP`-Re-Aktivierung in `StartImage(EfiLoaderCode)` bei fehlgeschlagenem `CreateEventEx`, tiefengeschachteltes `bootmgfw -> winload` und `GuAcpiRestoreConfigTable()` bei Rückkehr auf Tiefe `0` (`MSVC_HOST_TESTS=PASS`).
+
 ## [v1.9.2] - 2026-11-25
 ### Added & Changed (Local Dev — Pre-Hardware S3+Vanguard Test)
 - **Plan-C S3 Hook Activation in DXE Driver (`src/dxe_main.c`, `src/version.h`):**

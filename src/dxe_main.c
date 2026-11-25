@@ -10,6 +10,7 @@
 #include "multi_gpu.h"
 #include "s3_facs.h"
 #include "compat/compat.h"
+#include <Protocol/LoadedImage.h>
 
 /* Standard UEFI ReadyToBoot event group GUID:
  * 7ce88fb3-4bd7-4679-87a8-a8d8dee50d2b */
@@ -25,13 +26,18 @@ static EFI_EVENT mReadyToBootEvent = NULL;
 static EFI_EVENT mPlanCReadyToBootEvent = NULL;
 static BOOLEAN mDriverExecuted = FALSE;
 static BOOLEAN mPlanCActivated = FALSE;
+static BOOLEAN mReadyToBootFired = FALSE;
+static EFI_IMAGE_START mOrigStartImage = NULL;
+static BOOLEAN mStartImageHookActive = FALSE;
+static UINTN mStartImageDepth = 0;
+static UINTN mStartImageLogCount = 0;
 
-static VOID AdaUnlockRegisterReadyToBoot(EFI_SYSTEM_TABLE *t,
-                                         EFI_EVENT_NOTIFY callback,
-                                         EFI_EVENT *out_event) {
-  if (!t || !t->BootServices || !callback || !out_event) return;
+static EFI_STATUS AdaUnlockRegisterReadyToBoot(EFI_SYSTEM_TABLE *t,
+                                               EFI_EVENT_NOTIFY callback,
+                                               EFI_EVENT *out_event) {
+  if (!t || !t->BootServices || !callback || !out_event) return EFI_INVALID_PARAMETER;
   if (t->BootServices->CreateEventEx != NULL) {
-    (VOID) t->BootServices->CreateEventEx(
+    return t->BootServices->CreateEventEx(
         EVT_NOTIFY_SIGNAL,
         TPL_CALLBACK,
         callback,
@@ -39,8 +45,9 @@ static VOID AdaUnlockRegisterReadyToBoot(EFI_SYSTEM_TABLE *t,
         &ReadyToBootEventGroupGuid,
         out_event
     );
-  } else if (t->BootServices->CreateEvent != NULL) {
-    (VOID) t->BootServices->CreateEvent(
+  }
+  if (t->BootServices->CreateEvent != NULL) {
+    return t->BootServices->CreateEvent(
         EVT_SIGNAL_READY_TO_BOOT,
         TPL_CALLBACK,
         callback,
@@ -48,19 +55,125 @@ static VOID AdaUnlockRegisterReadyToBoot(EFI_SYSTEM_TABLE *t,
         out_event
     );
   }
+  return EFI_UNSUPPORTED;
+}
+
+static VOID AdaUnlockUpdateBootServicesCrc32(EFI_SYSTEM_TABLE *t) {
+  if (!t || !t->BootServices || !t->BootServices->CalculateCrc32) return;
+  t->BootServices->Hdr.CRC32 = 0;
+  (VOID)t->BootServices->CalculateCrc32(
+      t->BootServices,
+      t->BootServices->Hdr.HeaderSize,
+      &t->BootServices->Hdr.CRC32
+  );
+}
+
+static VOID *AdaUnlockGetAcpiTablePtr(CONST EFI_SYSTEM_TABLE *t) {
+  if (!t || !t->ConfigurationTable) return NULL;
+  static const EFI_GUID acpi20 = GU_EFI_ACPI_20_TABLE_GUID;
+  static const EFI_GUID acpi10 = GU_EFI_ACPI_10_TABLE_GUID;
+  VOID *fallback10 = NULL;
+  for (UINTN i = 0; i < t->NumberOfTableEntries; i++) {
+    if (memcmp(&t->ConfigurationTable[i].VendorGuid, &acpi20, sizeof(EFI_GUID)) == 0) {
+      return t->ConfigurationTable[i].VendorTable;
+    }
+    if (!fallback10 &&
+        memcmp(&t->ConfigurationTable[i].VendorGuid, &acpi10, sizeof(EFI_GUID)) == 0) {
+      fallback10 = t->ConfigurationTable[i].VendorTable;
+    }
+  }
+  return fallback10;
+}
+
+static BOOLEAN AdaUnlockIsOsLoaderImage(EFI_HANDLE ImageHandle, EFI_MEMORY_TYPE *out_type) {
+  if (out_type) *out_type = (EFI_MEMORY_TYPE)0x7fffffffU;
+  if (!ImageHandle || !mDxeTable || !mDxeTable->BootServices || !mDxeTable->BootServices->HandleProtocol) {
+    return FALSE;
+  }
+  static EFI_GUID loaded_guid = EFI_LOADED_IMAGE_PROTOCOL_GUID;
+  EFI_LOADED_IMAGE_PROTOCOL *loaded = NULL;
+  EFI_STATUS s = mDxeTable->BootServices->HandleProtocol(ImageHandle, &loaded_guid, (VOID **)&loaded);
+  if (EFI_ERROR(s) || !loaded) return FALSE;
+  if (out_type) *out_type = loaded->ImageCodeType;
+  return loaded->ImageCodeType == EfiLoaderCode;
+}
+
+static EFI_STATUS EFIAPI AdaUnlockHookedStartImage(EFI_HANDLE ImageHandle,
+                                                   UINTN *ExitDataSize,
+                                                   CHAR16 **ExitData);
+
+static EFI_STATUS AdaUnlockInstallStartImageHook(EFI_SYSTEM_TABLE *t) {
+  if (!t || !t->BootServices || !t->BootServices->StartImage) return EFI_INVALID_PARAMETER;
+  if (mStartImageHookActive) return EFI_SUCCESS;
+  if (t->BootServices->StartImage == AdaUnlockHookedStartImage) {
+    mStartImageHookActive = TRUE;
+    return EFI_SUCCESS;
+  }
+  mOrigStartImage = t->BootServices->StartImage;
+  t->BootServices->StartImage = AdaUnlockHookedStartImage;
+  AdaUnlockUpdateBootServicesCrc32(t);
+  mStartImageHookActive = TRUE;
+  return EFI_SUCCESS;
+}
+
+/* Unconditionally re-assert Plan C EBS hook + ShadowRSDP in ConfigurationTable. */
+static VOID AdaUnlockApplyPlanCNow(EFI_STATUS *out_ebs, UINT32 *out_patched) {
+  EFI_STATUS ebs_s = GuAcpiInstallEbsHook(mDxeTable);
+  UINT32 patched = GuAcpiApplyShadowConfigTable();
+  (VOID)AdaUnlockInstallStartImageHook(mDxeTable);
+  mPlanCActivated = TRUE;
+  if (out_ebs) *out_ebs = ebs_s;
+  if (out_patched) *out_patched = patched;
 }
 
 /* Activate Plan C Shadow ACPI ConfigurationTable and ExitBootServices hook right
  * before the OS loader starts, keeping RealRSDP exposed during early BDS. */
 static VOID AdaUnlockActivatePlanC(BOOLEAN can_log) {
   if (!mDxeTable || !Gu.s3_registered || mPlanCActivated) return;
-  mPlanCActivated = TRUE;
-  (VOID) GuAcpiInstallEbsHook(mDxeTable);
-  UINT32 patched = GuAcpiApplyShadowConfigTable();
+  UINT32 patched = 0;
+  AdaUnlockApplyPlanCNow(NULL, &patched);
   if (can_log && patched > 0) {
     GuLog("DXE-DRIVER: Plan C Shadow ACPI (%u table(s)) + ExitBootServices hook activated.\n",
           (unsigned)patched);
   }
+}
+
+static EFI_STATUS EFIAPI AdaUnlockHookedStartImage(EFI_HANDLE ImageHandle,
+                                                   UINTN *ExitDataSize,
+                                                   CHAR16 **ExitData) {
+  if (!mOrigStartImage) return EFI_NOT_READY;
+
+  EFI_MEMORY_TYPE code_type = (EFI_MEMORY_TYPE)0x7fffffffU;
+  BOOLEAN is_os_loader = AdaUnlockIsOsLoaderImage(ImageHandle, &code_type);
+
+  if (Gu.s3_registered && (is_os_loader || mReadyToBootFired || mPlanCActivated)) {
+    VOID *pre_acpi = AdaUnlockGetAcpiTablePtr(mDxeTable);
+    mStartImageDepth++;
+    EFI_STATUS ebs_s = EFI_SUCCESS;
+    UINT32 patched = 0;
+    AdaUnlockApplyPlanCNow(&ebs_s, &patched);
+    VOID *post_acpi = AdaUnlockGetAcpiTablePtr(mDxeTable);
+
+    if (mStartImageLogCount < 2) {
+      mStartImageLogCount++;
+      GuBootAppendLog(
+          "DXE-DRIVER: Plan C StartImage(depth=%u type=%u rtb=%u): acpi=%p->%p patched=%u ebs=%#llx\n",
+          (unsigned)mStartImageDepth, (unsigned)code_type,
+          (unsigned)mReadyToBootFired, pre_acpi, post_acpi,
+          (unsigned)patched, (unsigned long long)ebs_s);
+    }
+
+    EFI_STATUS s = mOrigStartImage(ImageHandle, ExitDataSize, ExitData);
+
+    mStartImageDepth--;
+    if (mStartImageDepth == 0) {
+      (VOID)GuAcpiRestoreConfigTable();
+      mPlanCActivated = FALSE;
+    }
+    return s;
+  }
+
+  return mOrigStartImage(ImageHandle, ExitDataSize, ExitData);
 }
 
 static VOID EFIAPI AdaUnlockOnPlanCReadyToBoot(EFI_EVENT event, VOID *context) {
@@ -71,8 +184,15 @@ static VOID EFIAPI AdaUnlockOnPlanCReadyToBoot(EFI_EVENT event, VOID *context) {
     mPlanCReadyToBootEvent = NULL;
   }
 
-  if (!mDriverExecuted) return;
+  if (!mDriverExecuted || mReadyToBootFired) return;
+  mReadyToBootFired = TRUE;
+
+  VOID *pre_acpi = AdaUnlockGetAcpiTablePtr(mDxeTable);
   AdaUnlockActivatePlanC(FALSE);
+  VOID *post_acpi = AdaUnlockGetAcpiTablePtr(mDxeTable);
+
+  GuBootAppendLog("DXE-DRIVER: Plan C ReadyToBoot fired: acpi=%p->%p activated=%u\n",
+                  pre_acpi, post_acpi, (unsigned)mPlanCActivated);
 }
 
 static VOID EFIAPI AdaUnlockOnReadyToBoot(EFI_EVENT event, VOID *context) {
@@ -180,6 +300,7 @@ finish:
 
     mDriverExecuted = TRUE;
     if (event != NULL) {
+      mReadyToBootFired = TRUE;
       AdaUnlockActivatePlanC(TRUE);
     }
 
@@ -203,14 +324,20 @@ EFI_STATUS EFIAPI AdaUnlockDriverEntryPoint(EFI_HANDLE image, EFI_SYSTEM_TABLE *
    * allowing S3 boot script registration on AMI Aptio V motherboards before SMRAM lockdown. */
   AdaUnlockOnReadyToBoot(NULL, NULL);
 
-  /* 2. Register ReadyToBoot callback:
+  /* 2. Register deferred Plan C activation hooks:
    * - Retry full unlock at ReadyToBoot if PCI devices were not ready during early BDS.
    * - Otherwise, if Plan C S3 is armed, defer ConfigurationTable / EBS hook activation
-   *   until ReadyToBoot so early BDS keeps seeing RealRSDP. */
+   *   until ReadyToBoot AND wrap BootServices->StartImage so ShadowRSDP is guaranteed
+   *   active when the OS loader (EfiLoaderCode) executes. */
   if (!mDriverExecuted) {
-    AdaUnlockRegisterReadyToBoot(t, AdaUnlockOnReadyToBoot, &mReadyToBootEvent);
+    (VOID)AdaUnlockRegisterReadyToBoot(t, AdaUnlockOnReadyToBoot, &mReadyToBootEvent);
   } else if (Gu.s3_registered && !mPlanCActivated) {
-    AdaUnlockRegisterReadyToBoot(t, AdaUnlockOnPlanCReadyToBoot, &mPlanCReadyToBootEvent);
+    EFI_STATUS rtb_s = AdaUnlockRegisterReadyToBoot(t, AdaUnlockOnPlanCReadyToBoot, &mPlanCReadyToBootEvent);
+    EFI_STATUS start_s = AdaUnlockInstallStartImageHook(t);
+    GuBootAppendLog(
+        "DXE-DRIVER: Plan C deferred hooks armed (ReadyToBoot=%#llx ev=%p, StartImageHook=%#llx orig=%#llx)\n",
+        (unsigned long long)rtb_s, mPlanCReadyToBootEvent,
+        (unsigned long long)start_s, (unsigned long long)(UINTN)mOrigStartImage);
   }
 
   return EFI_SUCCESS;
