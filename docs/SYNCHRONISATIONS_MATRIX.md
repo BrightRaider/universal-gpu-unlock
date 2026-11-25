@@ -27,11 +27,12 @@ flowchart TD
         DEP_COMM["tools/Deploy-UsbCommon.ps1<br/>(Deploy-UniversalToUsb)"]
     end
 
-    subgraph CLI["CLI / Setup Tools (PowerShell / Batch)"]
-        SETUP_PS["Setup-AdaUnlock.ps1<br/>(Preflight & Drive Scanner)"]
-        SETUP_BAT["Setup.bat / Update-USB.bat"]
-        PART_BAT["Create-Unlock-Partition.bat<br/>tools/Create-Unlock-Partition.ps1<br/>(512MB FAT32 Creator)"]
-        TOOLS_WIN["Check-GPU-Unlock.bat<br/>Toggle-Turing-GSP.bat<br/>Toggle-Sleep-Button.bat"]
+    subgraph CLI["CLI / Setup Tools (PowerShell / Batch / Python)"]
+        SETUP_PS["tools/Setup-AdaUnlock.ps1<br/>(Preflight & Drive Scanner)"]
+        SETUP_BAT["Setup.bat<br/>tools/Update-USB.bat"]
+        PART_BAT["tools/Create-Unlock-Partition.bat<br/>tools/Create-Unlock-Partition.ps1<br/>(512MB FAT32 Creator)"]
+        TOOLS_WIN["Check-GPU-Unlock.bat<br/>Launch-Dashboard.bat<br/>tools/Toggle-Turing-GSP.bat<br/>tools/Toggle-Sleep-Button.bat<br/>tools/Setup-FastResume.bat"]
+        COCKPIT["tools/gpu_dashboard.py<br/>tools/gu_system_info.py<br/>tools/quick_check.py"]
     end
 
     subgraph GUI["Universal Control Center (WPF GUI)"]
@@ -42,14 +43,14 @@ flowchart TD
     end
 
     subgraph TESTS["Test Harness (MSVC)"]
-        TEST_RUN["tests/Run-MsvcHostTests.ps1<br/>(9 Host Test Suites)"]
+        TEST_RUN["tests/Run-MsvcHostTests.ps1<br/>(11 Host Test Suites)"]
     end
 
     subgraph DOCS["Dokumentation & Release"]
-        README["README.md"]
+        README["README.md / bin/README.md"]
         DOKU["DOKUMENTATION.md"]
         BIN_DOKU["bin/DOKUMENTATION.md"]
-        CHANGELOG["CHANGELOG.md"]
+        CHANGELOG["CHANGELOG.md / bin/CHANGELOG.md"]
         ZIP["Universal_GPU_Unlock_vX.X.X.zip<br/>(Einheitliches Release-Paket)"]
     end
 
@@ -57,7 +58,7 @@ flowchart TD
     DEV --> DEP_COMM & SETUP_PS & UCC_DET & TESTS
     NVRAM & APP --> BIN_BOOT & BIN_DXE
     REL & S3 --> BIN_BOOT & BIN_DXE
-    DEP_COMM --> SETUP_PS & UCC_DEP
+    DEP_COMM --> SETUP_PS & UCC_DEP & COCKPIT
     UCC_DET --> UCC_PS
     UCC_XAML --> UCC_PS
     BIN_BOOT & BIN_DXE --> ZIP
@@ -71,25 +72,25 @@ flowchart TD
 
 | Wenn sich folgendes ändert ... | ... müssen zwingend diese Dateien aktualisiert & synchronisiert werden | Prüf- / Verifikationsschritt |
 | :--- | :--- | :--- |
-| **Versionsnummer (z. B. Bump von v1.8.29 auf v1.8.30)** | 1. `src/version.h` (`GU_VERSION_STRING`, `GU_VERSION_TAG`, etc.)<br/>2. `CHANGELOG.md` (Neuer Versionsabschnitt mit Datum)<br/>3. `README.md` (Badge in Zeile 7 & Download-Link in Zeile 30)<br/>4. `bin/BOOTX64.EFI` & `bin/AdaUnlockDxe.efi` (neu kompilieren & signieren)<br/>5. `Universal_GPU_Unlock_v<VERSION>.zip` (neu packen) | `Select-String -Path "bin\*.EFI" -Pattern "vX.X.X"`<br/>`powershell tests/Run-MsvcHostTests.ps1` |
-| **ESP-Speicherplatz, Partitionierung oder Kaltstart-Persistenz** | 1. `src/driver_nvram.c` (`StageArchAssetsToVolume`, Fehlerbehandlung `EFI_VOLUME_FULL`)<br/>2. `src/app.c` (`RunInstall`, Bildschirm-Meldung)<br/>3. `Setup-AdaUnlock.ps1` (Preflight-Warnung für <250 MB ESP)<br/>4. `tools/Universal-Control-Center-Detection.ps1` (`Get-SystemWindowsEspPartition`, Check `EspSize`)<br/>5. `tools/Universal-Control-Center.xaml` (Tab 2 Pre-Flight Safety, Tab 3 Deployer, Tab 4 Internal ESP)<br/>6. `tools/Universal-Control-Center.ps1` (Event Handler, Deploy-Dialoge, Status)<br/>7. `README.md` & `DOKUMENTATION.md` & `bin/DOKUMENTATION.md` (Option `[P]` & FAT32 Workaround) | WPF XAML Test (`XamlReader::Load`)<br/>`tests/test_driver_nvram.c`<br/>`tests/test_s3_resume.c` |
-| **S3 Sleep Persistence (`[P]` Modus)** | 1. `src/s3_resume.c` / `src/s3_resume.h` / `src/s3_save.h`<br/>2. `src/app.c` (Menüpunkt `[P]`)<br/>3. `tools/Deploy-UsbCommon.ps1` (`hide_s3.cfg` Handler)<br/>4. `tools/Toggle-Sleep-Button.bat` & `tools/Setup-FastResume.bat`<br/>5. `tools/Universal-Control-Center.xaml` & `Universal-Control-Center.ps1` (Checkbox `ChkHideS3`)<br/>6. `DOKUMENTATION.md` (Abschnitt S3 Sleep Persistence)<br/>7. `tests/test_s3_resume.c` | `tests/test_s3_resume.c` (MSVC Host Test Suite 8) |
-| **Silicon-Erkennung bereits entsperrter GPUs (`already_unlocked`)** | 1. `src/port.h` (`already_unlocked` in `GU_PLATFORM`)<br/>2. `src/profile.h` & `src/profile.c` (`GuIsUnlocked()`, `Registers()`, `GuPrepare()` Handover)<br/>3. `src/multi_gpu.c` (`GuUnlockAllGpus` Bypass redundanter Transaktionen & S3 Registrierung)<br/>4. `src/app.c` (`RunUnlock` Status-Monitor, `RunFailure` Freeze-Schutz via Windows-Boot)<br/>5. `src/boot_io.c` (Live Silicon Status Banner im Menü)<br/>6. `DOKUMENTATION.md` (Abschnitt 11)<br/>7. `tests/test_already_unlocked.c` | `tests/test_already_unlocked.c` (MSVC Host Test Suite 10) |
-| **Multi-GPU / Headless / Framebuffer-Logik** | 1. `src/unlock_release.c` (`GuUnlockPrepareNextGpu`, GOP Rotation)<br/>2. `src/gpu_discovery.c` (Sequential Loop & Logging)<br/>3. `src/multi_gpu.c` / `src/multi_gpu.h`<br/>4. `tests/test_multi_gpu_second_preflight.c`<br/>5. `README.md` & `DOKUMENTATION.md` (Abschnitt Headless & Multi-GPU) | `tests/test_multi_gpu_second_preflight.c` (MSVC Host Test Suite 9) |
-| **Neue unterstützte GPUs / PCI Device IDs** | 1. `src/gpu_device_ids.h` (`GU_ADA_DEVICE_IDS`, `GU_AMPERE_DEVICE_IDS`, `GU_TURING_DEVICE_IDS`)<br/>2. `tools/Deploy-UsbCommon.ps1` (Liest Header automatisch)<br/>3. `tools/Universal-Control-Center-Detection.ps1` (Liest Header automatisch)<br/>4. `Setup-AdaUnlock.ps1` (Liest Header automatisch)<br/>5. `tests/test_turing_local.c` / `tests/test_gpu_inventory.c`<br/>6. `README.md` (Community Verified Hardware Tabelle) | `tests/test_gpu_inventory.c`<br/>`tests/test_turing_local.c` |
-| **Dokumentations-Update (`DOKUMENTATION.md`)** | 1. `DOKUMENTATION.md`<br/>2. `bin/DOKUMENTATION.md` (Kopie muss immer bitgenau synchron sein!)<br/>3. `Universal_GPU_Unlock_v<VERSION>.zip` (enthält beide Dateien) | `diff DOKUMENTATION.md bin/DOKUMENTATION.md` |
+| **Versionsnummer (z. B. Bump von v2.0.0 auf v2.0.1)** | 1. `src/version.h` & `bin/version.h` (`GU_VERSION_STRING`, `GU_VERSION_TAG`, etc.)<br/>2. `CHANGELOG.md` & `bin/CHANGELOG.md` (Neuer Versionsabschnitt mit Datum; ältere Historie in `docs/CHANGELOG_ARCHIVE.md`)<br/>3. `README.md` & `bin/README.md` (Badge & Download-Link)<br/>4. `bin/BOOTX64.EFI` & `bin/AdaUnlockDxe.efi` (neu kompilieren & signieren)<br/>5. `Universal_GPU_Unlock_v<VERSION>.zip` (neu packen) | `Select-String -Path "bin\*.EFI" -Pattern "vX.X.X"`<br/>`powershell tests/Run-MsvcHostTests.ps1` |
+| **ESP-Speicherplatz, Partitionierung oder Kaltstart-Persistenz** | 1. `src/driver_nvram.c` (`OpenOrCreateDirRecursive`, `StageArchAssetsToVolume`, `CopyFileBetweenVolumes`, Fehlerbehandlung `EFI_VOLUME_FULL`)<br/>2. `src/app.c` (`RunInstall`, Bildschirm-Meldung)<br/>3. `tools/Setup-AdaUnlock.ps1` (Preflight-Checks für BitLocker, Secure Boot, ESP-Größe, S0ix)<br/>4. `tools/Universal-Control-Center-Detection.ps1` (`Get-SystemWindowsEspPartition`, Check `EspSize`)<br/>5. `tools/Universal-Control-Center.xaml` (Tab 2 Pre-Flight Safety, Tab 3 Deployer, Tab 4 Internal ESP)<br/>6. `tools/Universal-Control-Center.ps1` (Event Handler, Deploy-Dialoge, Status)<br/>7. `README.md`, `DOKUMENTATION.md`, `docs/OPERATIONS_AND_PERSISTENCE.md` & `bin/`-Kopien | WPF XAML Test (`XamlReader::Load`)<br/>`tests/test_driver_nvram.c`<br/>`tests/test_s3_resume.c` |
+| **S3 Sleep Persistence (`[P]` / `[I]` Modus & Telemetry)** | 1. `src/s3_resume.c` / `src/s3_resume.h` / `src/s3_facs.c` / `src/s3_save.h`<br/>2. `src/app.c` / `src/dxe_main.c` (`[P]` / `[I]` / `GuAcpiRefreshShadowChain`)<br/>3. `tools/Deploy-UsbCommon.ps1` (`hide_s3.cfg` Handler)<br/>4. `tools/Toggle-Sleep-Button.bat` & `tools/Setup-FastResume.bat`<br/>5. `tools/gu_system_info.py`, `tools/gpu_dashboard.py`, `tools/quick_check.py` (S3-ARMED-Telemetrie & `--reapply-pl`)<br/>6. `tools/Universal-Control-Center.xaml` & `tools/Universal-Control-Center.ps1` (Checkbox `ChkHideS3`)<br/>7. `DOKUMENTATION.md` & `docs/OPERATIONS_AND_PERSISTENCE.md` | `tests/test_s3_resume.c`<br/>`tests/test_dxe_main.c`<br/>`python tools/quick_check.py --no-pause` |
+| **Silicon-Erkennung bereits entsperrter GPUs (`already_unlocked`)** | 1. `src/port.h` (`already_unlocked` in `GU_PLATFORM`)<br/>2. `src/profile.h` & `src/profile.c` (`GuIsUnlocked()`, `Registers()`, `GuPrepare()` Handover)<br/>3. `src/multi_gpu.c` (`GuUnlockAllGpus` Bypass redundanter Transaktionen & S3 Registrierung)<br/>4. `src/app.c` (`RunUnlock` Status-Monitor, `RunFailure` Freeze-Schutz via Windows-Boot)<br/>5. `src/boot_io.c` (Live Silicon Status Banner im Menü)<br/>6. `DOKUMENTATION.md` (Abschnitt 11)<br/>7. `tests/test_already_unlocked.c` | `tests/test_already_unlocked.c` (MSVC Host Test Suite) |
+| **Multi-GPU / Headless / Framebuffer-Logik** | 1. `src/unlock_release.c` (`GuUnlockPrepareNextGpu`, GOP Rotation)<br/>2. `src/gpu_discovery.c` (Sequential Loop & Logging)<br/>3. `src/multi_gpu.c` / `src/multi_gpu.h`<br/>4. `tests/test_multi_gpu_second_preflight.c`<br/>5. `README.md` & `DOKUMENTATION.md` (Abschnitt Headless & Multi-GPU) | `tests/test_multi_gpu_second_preflight.c` (MSVC Host Test Suite) |
+| **Neue unterstützte GPUs / PCI Device IDs** | 1. `src/gpu_device_ids.h` (`GU_ADA_DEVICE_IDS`, `GU_AMPERE_DEVICE_IDS`, `GU_TURING_DEVICE_IDS`)<br/>2. `tools/Deploy-UsbCommon.ps1` (Liest Header automatisch)<br/>3. `tools/Universal-Control-Center-Detection.ps1` (Liest Header automatisch)<br/>4. `tools/Setup-AdaUnlock.ps1` (Liest Header automatisch)<br/>5. `tests/test_turing_local.c` / `tests/test_gpu_inventory.c`<br/>6. `README.md` (Community Verified Hardware Tabelle) | `tests/test_gpu_inventory.c`<br/>`tests/test_turing_local.c` |
+| **Dokumentations-Update (`README`, `DOKUMENTATION`, `CHANGELOG`)** | 1. `README.md`, `DOKUMENTATION.md`, `CHANGELOG.md`<br/>2. `bin/README.md`, `bin/DOKUMENTATION.md`, `bin/CHANGELOG.md` (Kopien müssen immer bitgenau synchron sein!)<br/>3. `Universal_GPU_Unlock_v<VERSION>.zip` (enthält alle synchronisierten Dateien) | SHA-256 / Diff gegen `bin/*` |
 
 ---
 
 ## 3. Standard-Checkliste vor jedem Release / Push
 
-- [ ] **1. Single Source of Truth:** Ist `src/version.h` aktuell?
+- [ ] **1. Single Source of Truth:** Sind `src/version.h` und `bin/version.h` aktuell & synchron?
 - [ ] **2. EFI Binaries:** Sind `bin/BOOTX64.EFI` und `bin/AdaUnlockDxe.efi` mit der aktuellen Version kompiliert und Authenticode-signiert?
 - [ ] **3. Duale Toolchain synchron:**
-  - Ist das Konsolen-Setup (`Setup-AdaUnlock.ps1`) auf dem gleichen Stand wie das GUI (`Universal-Control-Center.ps1` / `.xaml` / `.Detection.ps1`)?
-- [ ] **4. Test Suite:** Laufen alle 9 MSVC-Host-Tests fehlerfrei durch (`powershell tests/Run-MsvcHostTests.ps1`)?
-- [ ] **5. GUI Validierung:** Lässt sich die XAML der GUI ohne Parser-Fehler laden (`[System.Windows.Markup.XamlReader]::Load`)?
-- [ ] **6. Doku-Kopie:** Ist `bin/DOKUMENTATION.md` identisch mit `DOKUMENTATION.md`?
+  - Sind Launcher & Setup (`Setup.bat`, `tools/Setup-AdaUnlock.ps1`, `tools/Update-USB.bat`, `tools/Create-Unlock-Partition.bat`), WPF-GUI (`tools/Universal-Control-Center.ps1` / `.xaml` / `.Detection.ps1`) und Cockpit (`Launch-Dashboard.bat`, `tools/gpu_dashboard.py`, `tools/gu_system_info.py`) auf demselben Stand?
+- [ ] **4. Test Suite:** Laufen alle 11 MSVC-Host-Tests fehlerfrei durch (`powershell -ExecutionPolicy Bypass -File tests/Run-MsvcHostTests.ps1`)?
+- [ ] **5. GUI & Python Validierung:** Lässt sich die XAML der GUI ohne Parser-Fehler laden (`[System.Windows.Markup.XamlReader]::Load`) und bestehen `py_compile` + Telemetrie-Smoke-Checks?
+- [ ] **6. Doku-Kopien:** Sind `bin/README.md`, `bin/DOKUMENTATION.md` und `bin/CHANGELOG.md` bitgenau identisch mit ihren Root-Gegenstücken?
 - [ ] **7. Release-Paket:** Wurde das All-in-One-Paket `Universal_GPU_Unlock_v<VERSION>.zip` via `git archive` frisch gepackt?
 - [ ] **8. Datenschutz & Sicherheit:** Keine Pfade mit Benutzernamen oder private Details in Commit-Messages oder Dateien?
 - [ ] **9. Git Rules:** Keine Auto-Closing Keywords (`fixes #X`), sondern ausschliesslich Referenzen (`refs #X`)?
