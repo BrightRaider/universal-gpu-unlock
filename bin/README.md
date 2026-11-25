@@ -17,8 +17,8 @@
 </a>
 
 <p>
-  <b>An automated, universal 1-click UEFI pre-boot unlocker for NVIDIA RTX 40 (Ada), RTX 30 (Ampere) & RTX 20 (Turing) series.</b><br>
-  Unlocks full enterprise-grade Tensor Core compute across Windows 10/11, PyTorch, CUDA, and WSL2.
+  <b>Universal 1-click UEFI Tensor Core unlocker for NVIDIA RTX 40 (Ada), RTX 30 (Ampere) &amp; RTX 20 (Turing) GPUs.</b><br>
+  <b>Persistent ACPI S3 Sleep</b> · Stickless Auto-Unlock · Secure Boot &amp; Vanguard Ready · PyTorch, CUDA &amp; WSL2.
 </p>
 
 <br>
