@@ -11,7 +11,8 @@ void free(void *);
 VOID GuLog(const char *format, ...) { (void)format; }
 static EFI_HANDLE TargetEsp;
 EFI_HANDLE GuBootGetTargetEspVolume(VOID) { return TargetEsp; }
-const GU_ARCH_ASSETS *GuGetArchAssets(VOID) { return NULL; }
+static const GU_ARCH_ASSETS *MockArchAssets = NULL;
+const GU_ARCH_ASSETS *GuGetArchAssets(VOID) { return MockArchAssets; }
 
 static int failures;
 #define CHECK(c) do { if (!(c)) { printf("FAIL line %d: %s\n", __LINE__, #c); failures++; } } while (0)
@@ -60,28 +61,33 @@ static EFI_STATUS EFIAPI SetVar(CHAR16 *n, EFI_GUID *g, UINT32 a, UINTN s, VOID 
 
 /* ---- Mock volumes: USB stick (handle 2) and internal ESP (handle 3) ---- */
 #define FILE_BYTES 4096U
-#define USB_HANDLE ((EFI_HANDLE)(UINTN)2)
-#define ESP_HANDLE ((EFI_HANDLE)(UINTN)3)
+#define USB_HANDLE      ((EFI_HANDLE)(UINTN)2)
+#define ESP_HANDLE      ((EFI_HANDLE)(UINTN)3)
+#define UNLOCK_HANDLE   ((EFI_HANDLE)(UINTN)4)
+#define SMALLFAT_HANDLE ((EFI_HANDLE)(UINTN)5)
+#define DATAFAT_HANDLE  ((EFI_HANDLE)(UINTN)6)
 typedef struct VOL VOL;
 typedef struct { EFI_FILE_PROTOCOL p; VOL *v; } MFILE;
 struct VOL {
   EFI_SIMPLE_FILE_SYSTEM_PROTOCOL fs; /* must stay first */
   UINT8 path[64];
-  const CHAR16 *files[2];
-  int has_bootmgfw, fail_write, short_write, deleted;
-  UINTN written;
+  const CHAR16 *files[8];
+  int has_bootmgfw, has_fs_info, read_only, fail_write, short_write, deleted, fail_after_writes;
+  UINT64 vol_size, free_space, asset_written_bytes;
+  CHAR16 label[32];
+  UINTN written, total_writes;
   CHAR16 written_name[64];
   MFILE root, dir, rfile, wfile;
 };
-static VOL Usb, Esp;
-static int esp_present;
+static VOL Usb, Esp, UnlockVol, SmallFatVol, DataFatVol;
+static int esp_present, unlock_present, small_fat_present, data_fat_present;
 
 static EFI_STATUS EFIAPI FOpen(EFI_FILE_PROTOCOL *This, EFI_FILE_PROTOCOL **New, CHAR16 *Name, UINT64 Mode, UINT64 Attr) {
   VOL *v = ((MFILE *)This)->v;
   if (Attr & EFI_FILE_DIRECTORY) { *New = &v->dir.p; return EFI_SUCCESS; }
   if (Mode & EFI_FILE_MODE_CREATE) { wcopy(v->written_name, Name, 64); *New = &v->wfile.p; return EFI_SUCCESS; }
   if (v->has_bootmgfw && weq(Name, L"\\EFI\\Microsoft\\Boot\\bootmgfw.efi")) { *New = &v->rfile.p; return EFI_SUCCESS; }
-  for (int i = 0; i < 2; i++)
+  for (int i = 0; i < 8; i++)
     if (v->files[i] && weq(Name, v->files[i])) { *New = &v->rfile.p; return EFI_SUCCESS; }
   /* An existing copy, opened by full path ([R]) or relative to \EFI\Drivers (copy). */
   if (v->written && (weq(Name, L"\\EFI\\Drivers\\AdaUnlockDxe.efi") || weq(Name, L"AdaUnlockDxe.efi"))) {
@@ -106,13 +112,33 @@ static EFI_STATUS EFIAPI FWrite(EFI_FILE_PROTOCOL *This, UINTN *Size, VOID *Buff
   VOL *v = ((MFILE *)This)->v;
   (void)Buffer;
   if (v->fail_write) return EFI_DEVICE_ERROR;
+  if (v->fail_after_writes && v->total_writes >= (UINTN)v->fail_after_writes) return EFI_VOLUME_FULL;
+  if (v->has_fs_info && v->free_space < *Size) return EFI_VOLUME_FULL;
   if (v->short_write) *Size /= 2;
   v->written = *Size;
+  v->total_writes++;
+  v->asset_written_bytes += *Size;
   return EFI_SUCCESS;
 }
 static EFI_STATUS EFIAPI FGetInfo(EFI_FILE_PROTOCOL *This, EFI_GUID *Type, UINTN *Size, VOID *Buffer) {
+  VOL *v = ((MFILE *)This)->v;
+  if (Type && !memcmp(Type, &FsInfoGuid, sizeof(*Type))) {
+    if (!v->has_fs_info) return EFI_UNSUPPORTED;
+    UINTN need = sizeof(GU_EFI_FILE_SYSTEM_INFO) + 64;
+    if (*Size < need) { *Size = need; return EFI_BUFFER_TOO_SMALL; }
+    memset(Buffer, 0, need);
+    GU_EFI_FILE_SYSTEM_INFO *fsi = Buffer;
+    fsi->Size = need;
+    fsi->ReadOnly = v->read_only ? TRUE : FALSE;
+    fsi->VolumeSize = v->vol_size;
+    fsi->FreeSpace = v->free_space;
+    fsi->BlockSize = 4096;
+    wcopy(fsi->VolumeLabel, v->label, 32);
+    *Size = need;
+    return EFI_SUCCESS;
+  }
   EFI_FILE_INFO *info = Buffer;
-  (void)This; (void)Type;
+  (void)This;
   if (*Size < sizeof(*info)) { *Size = sizeof(*info); return EFI_BUFFER_TOO_SMALL; }
   memset(info, 0, sizeof(*info));
   info->Size = sizeof(*info);
@@ -146,8 +172,16 @@ static void mkvol(VOL *v, int usb, UINT8 sig) {
 
 /* ---- Mock boot services ---- */
 static EFI_LOADED_IMAGE_PROTOCOL Loaded;
+static VOL *VolForHandle(EFI_HANDLE h) {
+  if (h == USB_HANDLE) return &Usb;
+  if (h == ESP_HANDLE) return &Esp;
+  if (h == UNLOCK_HANDLE) return &UnlockVol;
+  if (h == SMALLFAT_HANDLE) return &SmallFatVol;
+  if (h == DATAFAT_HANDLE) return &DataFatVol;
+  return NULL;
+}
 static EFI_STATUS EFIAPI Handle(EFI_HANDLE h, EFI_GUID *g, VOID **o) {
-  VOL *v = h == USB_HANDLE ? &Usb : h == ESP_HANDLE ? &Esp : NULL;
+  VOL *v = VolForHandle(h);
   if (!memcmp(g, &LoadedGuid, sizeof(*g))) { *o = &Loaded; return EFI_SUCCESS; }
   if (!v) return EFI_UNSUPPORTED;
   if (!memcmp(g, &PathGuid, sizeof(*g))) { *o = v->path; return EFI_SUCCESS; }
@@ -156,10 +190,13 @@ static EFI_STATUS EFIAPI Handle(EFI_HANDLE h, EFI_GUID *g, VOID **o) {
 }
 static EFI_STATUS EFIAPI Locate(EFI_LOCATE_SEARCH_TYPE t, EFI_GUID *g, VOID *k, UINTN *n, EFI_HANDLE **b) {
   (void)t; (void)g; (void)k;
-  *b = malloc(2 * sizeof(EFI_HANDLE));
+  *b = malloc(5 * sizeof(EFI_HANDLE));
   (*b)[0] = USB_HANDLE;
   *n = 1;
   if (esp_present) (*b)[(*n)++] = ESP_HANDLE;
+  if (unlock_present) (*b)[(*n)++] = UNLOCK_HANDLE;
+  if (small_fat_present) (*b)[(*n)++] = SMALLFAT_HANDLE;
+  if (data_fat_present) (*b)[(*n)++] = DATAFAT_HANDLE;
   return EFI_SUCCESS;
 }
 static EFI_STATUS EFIAPI Alloc(EFI_MEMORY_TYPE t, UINTN s, VOID **o) { (void)t; *o = malloc(s); return *o ? EFI_SUCCESS : EFI_OUT_OF_RESOURCES; }
@@ -171,11 +208,28 @@ static EFI_SYSTEM_TABLE St;
 
 static void reset(void) {
   memset(Vars, 0, sizeof(Vars));
-  writes = 0; order_err = 0; esp_present = 0; TargetEsp = NULL;
+  writes = 0; order_err = 0;
+  esp_present = 0; unlock_present = 0; small_fat_present = 0; data_fat_present = 0;
+  TargetEsp = NULL; MockArchAssets = NULL;
   mkvol(&Usb, 1, 0xA0);
   mkvol(&Esp, 0, 0xB0);
+  mkvol(&UnlockVol, 0, 0xC0);
+  mkvol(&SmallFatVol, 0, 0xD0);
+  mkvol(&DataFatVol, 0, 0xE0);
   Usb.files[0] = L"\\EFI\\Drivers\\AdaUnlockDxe.efi";
   Esp.has_bootmgfw = 1;
+  wcopy(UnlockVol.label, L"GPU_UNLOCK", 32);
+  UnlockVol.has_fs_info = 1;
+  UnlockVol.vol_size = 512ULL * 1024 * 1024;
+  UnlockVol.free_space = 500ULL * 1024 * 1024;
+  wcopy(SmallFatVol.label, L"EXTRA_EFI", 32);
+  SmallFatVol.has_fs_info = 1;
+  SmallFatVol.vol_size = 512ULL * 1024 * 1024;
+  SmallFatVol.free_space = 450ULL * 1024 * 1024;
+  wcopy(DataFatVol.label, L"DATA_FAT", 32);
+  DataFatVol.has_fs_info = 1;
+  DataFatVol.vol_size = 10ULL * 1024 * 1024 * 1024;
+  DataFatVol.free_space = 8ULL * 1024 * 1024 * 1024;
 }
 static void foreign(const CHAR16 *n) {
   UINT8 o[64] = {1,0,0,0,4,0,'V',0,0,0,0x7f,0xff,4,0};
@@ -320,6 +374,58 @@ int main(void) {
   CHECK(GuDisableDriverOption(&St) == EFI_NOT_FOUND && writes == 0);
   order_err = EFI_DEVICE_ERROR;
   CHECK(GuDisableDriverOption(&St) == EFI_DEVICE_ERROR && writes == 0);
+
+  /* Dedicated 512MB GPU_UNLOCK fallback when 100MB primary ESP lacks free space. */
+  static GU_ARCH_ASSETS mock_ada;
+  memset(&mock_ada, 0, sizeof(mock_ada));
+  mock_ada.arch_name = "Ada";
+  mock_ada.entries[0].path = L"\\AD102-ASSETS\\gsp_ga10x.bin";
+  mock_ada.entries[0].name = "ad102/gsp_ga10x.bin";
+  mock_ada.entries[0].bytes = 84277400U;
+
+  reset();
+  esp_present = 1; unlock_present = 1;
+  MockArchAssets = &mock_ada;
+  Usb.files[1] = L"\\AD102-ASSETS\\gsp_ga10x.bin";
+  Esp.has_fs_info = 1; Esp.vol_size = 100ULL * 1024 * 1024; Esp.free_space = 64ULL * 1024 * 1024;
+  CHECK(GuInstallDriverOption(image, &St) == EFI_SUCCESS);
+  CHECK(GuDriverInstalledOnEsp());
+  CHECK(Esp.total_writes == 0); /* skipped upfront without wasting writes on full 100MB ESP */
+  CHECK(UnlockVol.total_writes == 2 && UnlockVol.written == FILE_BYTES);
+  CHECK(entry_on(L"Driver0000", &UnlockVol));
+  CHECK(GuRemoveDriverOption(&St) == EFI_SUCCESS);
+  CHECK(UnlockVol.deleted == 1 && find(L"Driver0000") == NULL);
+
+  /* Rollback removes partial AdaUnlockDxe.efi from primary ESP when asset staging hits VOLUME_FULL. */
+  reset();
+  esp_present = 1; unlock_present = 1;
+  MockArchAssets = &mock_ada;
+  Usb.files[1] = L"\\AD102-ASSETS\\gsp_ga10x.bin";
+  Esp.has_fs_info = 0;
+  Esp.fail_after_writes = 1; /* DriverFile write succeeds, asset write hits VOLUME_FULL */
+  CHECK(GuInstallDriverOption(image, &St) == EFI_SUCCESS);
+  CHECK(GuDriverInstalledOnEsp());
+  CHECK(Esp.deleted == 1 && Esp.written == 0);
+  CHECK(UnlockVol.total_writes == 2 && entry_on(L"Driver0000", &UnlockVol));
+  /* Check manual small FAT32 partition (<2GiB) works even without GPU_UNLOCK label. */
+  reset();
+  esp_present = 1; small_fat_present = 1;
+  MockArchAssets = &mock_ada;
+  Usb.files[1] = L"\\AD102-ASSETS\\gsp_ga10x.bin";
+  Esp.has_fs_info = 1; Esp.vol_size = 100ULL * 1024 * 1024; Esp.free_space = 60ULL * 1024 * 1024;
+  CHECK(GuInstallDriverOption(image, &St) == EFI_SUCCESS);
+  CHECK(GuDriverInstalledOnEsp());
+  CHECK(SmallFatVol.total_writes == 2 && entry_on(L"Driver0000", &SmallFatVol));
+
+  /* Giant unrelated FAT32 data volume (>2GiB, unlabeled) must NOT be chosen automatically. */
+  reset();
+  esp_present = 1; data_fat_present = 1;
+  MockArchAssets = &mock_ada;
+  Usb.files[1] = L"\\AD102-ASSETS\\gsp_ga10x.bin";
+  Esp.has_fs_info = 1; Esp.vol_size = 100ULL * 1024 * 1024; Esp.free_space = 60ULL * 1024 * 1024;
+  CHECK(GuInstallDriverOption(image, &St) == EFI_SUCCESS);
+  CHECK(!GuDriverInstalledOnEsp());
+  CHECK(DataFatVol.total_writes == 0 && entry_on(L"Driver0000", &Usb));
 
   if (failures) printf("test_driver_nvram: %d FAILED\n", failures);
   else printf("test_driver_nvram: all checks passed\n");

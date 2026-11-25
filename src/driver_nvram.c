@@ -13,6 +13,21 @@ static EFI_GUID LoadedGuid = EFI_LOADED_IMAGE_PROTOCOL_GUID;
 static EFI_GUID PathGuid = EFI_DEVICE_PATH_PROTOCOL_GUID;
 static EFI_GUID FsGuid = EFI_SIMPLE_FILE_SYSTEM_PROTOCOL_GUID;
 static EFI_GUID InfoGuid = EFI_FILE_INFO_ID;
+static EFI_GUID FsInfoGuid = {
+    0x09576e93, 0x6d3f, 0x11d2, {0x8e, 0x39, 0x00, 0xa0, 0xc9, 0x69, 0x72, 0x3b}};
+
+typedef struct {
+  UINT64  Size;
+  BOOLEAN ReadOnly;
+  UINT64  VolumeSize;
+  UINT64  FreeSpace;
+  UINT32  BlockSize;
+  CHAR16  VolumeLabel[1];
+} GU_EFI_FILE_SYSTEM_INFO;
+
+#define GU_MAX_FS_HANDLES       64U
+#define GU_MAX_AUTO_PART_BYTES  (2ULL * 1024ULL * 1024ULL * 1024ULL)
+#define GU_FALLBACK_DRIVER_BYTES (256ULL * 1024ULL)
 
 #ifndef LOAD_OPTION_ACTIVE
 #define LOAD_OPTION_ACTIVE 0x00000001U
@@ -246,7 +261,7 @@ static BOOLEAN StageArchAssetsToVolume(EFI_BOOT_SERVICES *bs, EFI_HANDLE src_vol
         EFI_STATUS s = CopyFileBetweenVolumes(bs, src_vol, path, dst_vol, dir, name);
         if (s != EFI_SUCCESS) {
           all_ok = FALSE;
-          GuLog("StageArchAssetsToVolume: failed to stage %s to ESP (s=%#llx)%s\n",
+          GuLog("StageArchAssetsToVolume: failed to stage %s to internal volume (s=%#llx)%s\n",
                 arch->entries[i].name, (unsigned long long)s,
                 s == EFI_VOLUME_FULL ? " [VOLUME FULL: requires ~85MB free for Ada/Ampere, ~30MB for Turing]" : "");
         }
@@ -254,6 +269,127 @@ static BOOLEAN StageArchAssetsToVolume(EFI_BOOT_SERVICES *bs, EFI_HANDLE src_vol
     }
   }
   return all_ok;
+}
+
+static CHAR16 AsciiToUpper16(CHAR16 c) {
+  return (c >= L'a' && c <= L'z') ? (CHAR16)(c - L'a' + L'A') : c;
+}
+
+static BOOLEAN StrEqNoCase16(const CHAR16 *a, const CHAR16 *b) {
+  if (!a || !b) return FALSE;
+  while (*a && *b) {
+    if (AsciiToUpper16(*a) != AsciiToUpper16(*b)) return FALSE;
+    a++;
+    b++;
+  }
+  return *a == *b;
+}
+
+static BOOLEAN IsInternalNonUsbFsHandle(EFI_BOOT_SERVICES *bs, EFI_HANDLE h) {
+  if (!bs || !h) return FALSE;
+  EFI_DEVICE_PATH_PROTOCOL *p = NULL;
+  if (bs->HandleProtocol(h, &PathGuid, (VOID **)&p) != EFI_SUCCESS || !p) return FALSE;
+  BOOLEAN is_usb = FALSE, is_media = FALSE;
+  return WalkDevicePath(p, &is_usb, &is_media) && is_media && !is_usb;
+}
+
+static BOOLEAN GetVolumeFsStats(EFI_BOOT_SERVICES *bs, EFI_HANDLE vol,
+                                BOOLEAN *out_ro, UINT64 *out_vol_sz,
+                                UINT64 *out_free_sz, CHAR16 *out_label, UINTN label_cap) {
+  if (out_ro) *out_ro = FALSE;
+  if (out_vol_sz) *out_vol_sz = 0;
+  if (out_free_sz) *out_free_sz = 0;
+  if (out_label && label_cap) out_label[0] = 0;
+  if (!bs || !vol) return FALSE;
+
+  EFI_SIMPLE_FILE_SYSTEM_PROTOCOL *fs = NULL;
+  EFI_FILE_PROTOCOL *root = NULL;
+  if (bs->HandleProtocol(vol, &FsGuid, (VOID **)&fs) != EFI_SUCCESS || !fs) return FALSE;
+  if (fs->OpenVolume(fs, &root) != EFI_SUCCESS || !root || !root->GetInfo) {
+    if (root) root->Close(root);
+    return FALSE;
+  }
+
+  UINT64 buf[32];
+  UINTN sz = sizeof(buf);
+  EFI_STATUS s = root->GetInfo(root, &FsInfoGuid, &sz, buf);
+  root->Close(root);
+  if (s != EFI_SUCCESS || sz < offsetof(GU_EFI_FILE_SYSTEM_INFO, VolumeLabel)) return FALSE;
+
+  const GU_EFI_FILE_SYSTEM_INFO *info = (const GU_EFI_FILE_SYSTEM_INFO *)buf;
+  if (out_ro) *out_ro = info->ReadOnly;
+  if (out_vol_sz) *out_vol_sz = info->VolumeSize;
+  if (out_free_sz) *out_free_sz = info->FreeSpace;
+  if (out_label && label_cap > 0) {
+    UINTN max_chars = (sz - offsetof(GU_EFI_FILE_SYSTEM_INFO, VolumeLabel)) / sizeof(CHAR16);
+    UINTN i = 0;
+    while (i < max_chars && i + 1 < label_cap && info->VolumeLabel[i]) {
+      out_label[i] = info->VolumeLabel[i];
+      i++;
+    }
+    out_label[i] = 0;
+  }
+  return TRUE;
+}
+
+static UINT64 GetFileByteSize(EFI_BOOT_SERVICES *bs, EFI_HANDLE vol, const CHAR16 *path) {
+  if (!bs || !vol || !path) return 0;
+  EFI_SIMPLE_FILE_SYSTEM_PROTOCOL *fs = NULL;
+  EFI_FILE_PROTOCOL *root = NULL, *file = NULL;
+  if (bs->HandleProtocol(vol, &FsGuid, (VOID **)&fs) != EFI_SUCCESS || !fs) return 0;
+  if (fs->OpenVolume(fs, &root) != EFI_SUCCESS || !root) return 0;
+  UINT64 out_size = 0;
+  if (root->Open(root, &file, (CHAR16 *)path, EFI_FILE_MODE_READ, 0) == EFI_SUCCESS && file) {
+    UINT64 info_buf[128];
+    UINTN info_sz = sizeof(info_buf);
+    if (file->GetInfo(file, &InfoGuid, &info_sz, info_buf) == EFI_SUCCESS &&
+        info_sz >= sizeof(EFI_FILE_INFO)) {
+      out_size = ((const EFI_FILE_INFO *)info_buf)->FileSize;
+    }
+    file->Close(file);
+  }
+  root->Close(root);
+  return out_size;
+}
+
+static UINT64 CalcRequiredInternalBytes(EFI_BOOT_SERVICES *bs, EFI_HANDLE src_vol,
+                                        const CHAR16 *src_driver_path) {
+  UINT64 driver_sz = GetFileByteSize(bs, src_vol, src_driver_path);
+  if (driver_sz == 0) driver_sz = GU_FALLBACK_DRIVER_BYTES;
+
+  UINT64 assets_sz = 0;
+  const GU_ARCH_ASSETS *arch = GuGetArchAssets();
+  if (arch) {
+    for (UINTN i = 0; i < GU_ASSET_COUNT; i++) {
+      if (arch->entries[i].path && arch->entries[i].bytes > 0) {
+        assets_sz += (UINT64)arch->entries[i].bytes;
+      }
+    }
+    if (assets_sz > 0) assets_sz += 1048576ULL; /* 1 MiB FAT32 cluster overhead */
+  }
+  return driver_sz + assets_sz;
+}
+
+static VOID DeleteDriverFileIfPresent(EFI_BOOT_SERVICES *bs, EFI_HANDLE vol) {
+  if (!bs || !vol) return;
+  EFI_SIMPLE_FILE_SYSTEM_PROTOCOL *fs = NULL;
+  EFI_FILE_PROTOCOL *root = NULL, *file = NULL;
+  if (bs->HandleProtocol(vol, &FsGuid, (VOID **)&fs) == EFI_SUCCESS && fs &&
+      fs->OpenVolume(fs, &root) == EFI_SUCCESS && root) {
+    if (root->Open(root, &file, (CHAR16 *)DriverFile,
+                   EFI_FILE_MODE_READ | EFI_FILE_MODE_WRITE, 0) == EFI_SUCCESS && file) {
+      (VOID)file->Delete(file);
+    }
+    root->Close(root);
+  }
+}
+
+static VOID AddCandidateUnique(EFI_HANDLE *list, UINTN *count, UINTN cap, EFI_HANDLE h) {
+  if (!h || *count >= cap) return;
+  for (UINTN i = 0; i < *count; i++) {
+    if (list[i] == h) return;
+  }
+  list[(*count)++] = h;
 }
 
 static EFI_HANDLE LocateInternalEspVolume(EFI_BOOT_SERVICES *bs) {
@@ -266,28 +402,63 @@ static EFI_HANDLE LocateInternalEspVolume(EFI_BOOT_SERVICES *bs) {
   if (s != EFI_SUCCESS || !h) return NULL;
 
   for (UINTN i = 0; i < count; i++) {
-    EFI_DEVICE_PATH_PROTOCOL *p = NULL;
-    if (bs->HandleProtocol(h[i], &PathGuid, (VOID **)&p) != EFI_SUCCESS || !p) continue;
-
-    /* Only a well-formed media/disk path that is not USB qualifies. */
-    BOOLEAN is_usb = FALSE, is_media = FALSE;
-    if (WalkDevicePath(p, &is_usb, &is_media) && is_media && !is_usb) {
-      EFI_SIMPLE_FILE_SYSTEM_PROTOCOL *fs = NULL;
-      EFI_FILE_PROTOCOL *root = NULL, *mgfw = NULL;
-      if (bs->HandleProtocol(h[i], &FsGuid, (VOID **)&fs) == EFI_SUCCESS && fs &&
-          fs->OpenVolume(fs, &root) == EFI_SUCCESS && root) {
-        if (root->Open(root, &mgfw, L"\\EFI\\Microsoft\\Boot\\bootmgfw.efi", EFI_FILE_MODE_READ, 0) == EFI_SUCCESS && mgfw) {
-          mgfw->Close(mgfw);
-          root->Close(root);
-          target = h[i];
-          break;
-        }
-        root->Close(root);
-      }
+    if (IsInternalNonUsbFsHandle(bs, h[i]) &&
+        DriverFilePresentOnVolume(bs, h[i], L"\\EFI\\Microsoft\\Boot\\bootmgfw.efi") == EFI_SUCCESS) {
+      target = h[i];
+      break;
     }
   }
   bs->FreePool(h);
   return target;
+}
+
+static UINTN CollectInternalInstallCandidates(EFI_BOOT_SERVICES *bs,
+                                            EFI_HANDLE src_vol,
+                                            UINT64 needed_bytes,
+                                            EFI_HANDLE *out_list,
+                                            UINTN out_cap) {
+  UINTN total = 0;
+  EFI_HANDLE primary_esp = LocateInternalEspVolume(bs);
+  if (primary_esp && primary_esp != src_vol) {
+    AddCandidateUnique(out_list, &total, out_cap, primary_esp);
+  }
+
+  EFI_HANDLE *h = NULL;
+  UINTN fs_count = 0;
+  if (bs->LocateHandleBuffer(ByProtocol, &FsGuid, NULL, &fs_count, &h) != EFI_SUCCESS || !h) {
+    return total;
+  }
+
+  EFI_HANDLE labeled[GU_MAX_FS_HANDLES];
+  EFI_HANDLE small_fat[GU_MAX_FS_HANDLES];
+  UINTN labeled_n = 0, small_n = 0;
+
+  for (UINTN i = 0; i < fs_count; i++) {
+    EFI_HANDLE cand = h[i];
+    if (!cand || cand == src_vol || cand == primary_esp) continue;
+    if (!IsInternalNonUsbFsHandle(bs, cand)) continue;
+
+    BOOLEAN ro = FALSE;
+    UINT64 vol_sz = 0, free_sz = 0;
+    CHAR16 label[64];
+    BOOLEAN fs_ok = GetVolumeFsStats(bs, cand, &ro, &vol_sz, &free_sz, label, 64);
+    if (fs_ok && ro) continue;
+
+    BOOLEAN is_marked =
+        (fs_ok && (StrEqNoCase16(label, L"GPU_UNLOCK") || StrEqNoCase16(label, L"UNLOCK_ESP"))) ||
+        DriverFilePresentOnVolume(bs, cand, L"\\GPU-UNLOCK") == EFI_SUCCESS ||
+        DriverFilePresentOnVolume(bs, cand, DriverFile) == EFI_SUCCESS;
+    if (is_marked) {
+      AddCandidateUnique(labeled, &labeled_n, GU_MAX_FS_HANDLES, cand);
+    } else if (fs_ok && vol_sz > 0 && vol_sz <= GU_MAX_AUTO_PART_BYTES && free_sz >= needed_bytes) {
+      AddCandidateUnique(small_fat, &small_n, GU_MAX_FS_HANDLES, cand);
+    }
+  }
+  bs->FreePool(h);
+
+  for (UINTN i = 0; i < labeled_n; i++) AddCandidateUnique(out_list, &total, out_cap, labeled[i]);
+  for (UINTN i = 0; i < small_n; i++) AddCandidateUnique(out_list, &total, out_cap, small_fat[i]);
+  return total;
 }
 
 EFI_STATUS GuInstallDriverOption(EFI_HANDLE image, EFI_SYSTEM_TABLE *t) {
@@ -322,26 +493,45 @@ EFI_STATUS GuInstallDriverOption(EFI_HANDLE image, EFI_SYSTEM_TABLE *t) {
   if (slot == GU_DRIVER_SCAN_SLOTS) return EFI_OUT_OF_RESOURCES;
 
   EFI_HANDLE install_vol = loaded->DeviceHandle;
-  EFI_HANDLE esp_vol = LocateInternalEspVolume(bs);
   BOOLEAN is_internal = FALSE;
+  UINT64 needed_bytes = CalcRequiredInternalBytes(bs, loaded->DeviceHandle, src_driver_path);
+  EFI_HANDLE candidates[GU_MAX_FS_HANDLES];
+  UINTN cand_count = CollectInternalInstallCandidates(
+      bs, loaded->DeviceHandle, needed_bytes, candidates, GU_MAX_FS_HANDLES);
 
-  if (esp_vol && esp_vol != loaded->DeviceHandle) {
-    /* Copy AdaUnlockDxe.efi to the Internal NVMe-ESP */
-    s = CopyFileBetweenVolumes(bs, loaded->DeviceHandle, src_driver_path,
-                               esp_vol, L"\\EFI\\Drivers", L"AdaUnlockDxe.efi");
-    if (s == EFI_SUCCESS) {
-      /* Also stage active architecture assets to the Internal ESP */
-      if (StageArchAssetsToVolume(bs, loaded->DeviceHandle, esp_vol)) {
-        install_vol = esp_vol;
-        is_internal = TRUE;
-        GuLog("GuInstallDriverOption: Successfully deployed AdaUnlockDxe.efi and assets to Internal ESP\\EFI\\Drivers\n");
-      } else {
-        GuLog("GuInstallDriverOption: Warning: ESP has insufficient free space for firmware assets (requires ~85MB for Ada/Ampere, ~30MB for Turing). Falling back to USB medium.\n");
-      }
-    } else {
-      GuLog("GuInstallDriverOption: Warning: ESP copy failed (s=%#llx), falling back to USB medium\n",
-            (unsigned long long)s);
+  for (UINTN ci = 0; ci < cand_count; ci++) {
+    EFI_HANDLE cand = candidates[ci];
+    BOOLEAN ro = FALSE;
+    UINT64 vol_sz = 0, free_sz = 0;
+    CHAR16 label[64];
+    BOOLEAN fs_ok = GetVolumeFsStats(bs, cand, &ro, &vol_sz, &free_sz, label, 64);
+    if (fs_ok && (ro || free_sz < needed_bytes)) {
+      GuLog("GuInstallDriverOption: Skipping internal volume %u (free=%llu MB < needed=%llu MB)\n",
+            (unsigned)ci, (unsigned long long)(free_sz >> 20), (unsigned long long)(needed_bytes >> 20));
+      continue;
     }
+
+    s = CopyFileBetweenVolumes(bs, loaded->DeviceHandle, src_driver_path,
+                               cand, L"\\EFI\\Drivers", L"AdaUnlockDxe.efi");
+    if (s == EFI_SUCCESS) {
+      if (StageArchAssetsToVolume(bs, loaded->DeviceHandle, cand)) {
+        install_vol = cand;
+        is_internal = TRUE;
+        GuLog("GuInstallDriverOption: Successfully deployed AdaUnlockDxe.efi and assets to internal volume #%u (label=%ls)\n",
+              (unsigned)ci, (fs_ok && label[0]) ? label : L"(ESP)");
+        break;
+      }
+      /* Avoid leaving an incomplete orphan driver copy on a full ESP before trying next candidate. */
+      DeleteDriverFileIfPresent(bs, cand);
+      GuLog("GuInstallDriverOption: Warning: volume #%u has insufficient free space for firmware assets (requires ~85MB for Ada/Ampere, ~30MB for Turing).\n",
+            (unsigned)ci);
+    } else {
+      GuLog("GuInstallDriverOption: Warning: internal volume #%u copy failed (s=%#llx)\n",
+            (unsigned)ci, (unsigned long long)s);
+    }
+  }
+  if (!is_internal && cand_count > 0) {
+    GuLog("GuInstallDriverOption: Falling back to USB medium.\n");
   }
 
   /* The entry always names \EFI\Drivers\AdaUnlockDxe.efi. On the USB drive that
@@ -476,19 +666,20 @@ EFI_STATUS GuRemoveDriverOption(EFI_SYSTEM_TABLE *t) {
     if (s != EFI_SUCCESS && result == EFI_SUCCESS) result = s;
   }
 
-  /* Also clean up AdaUnlockDxe.efi from the Internal ESP if accessible */
+  /* Also clean up AdaUnlockDxe.efi from Internal ESP and any dedicated unlock partition */
   if (t->BootServices) {
-    EFI_HANDLE esp_vol = LocateInternalEspVolume(t->BootServices);
-    if (esp_vol) {
-      EFI_SIMPLE_FILE_SYSTEM_PROTOCOL *fs = NULL;
-      EFI_FILE_PROTOCOL *root = NULL, *file = NULL;
-      if (t->BootServices->HandleProtocol(esp_vol, &FsGuid, (VOID **)&fs) == EFI_SUCCESS && fs &&
-          fs->OpenVolume(fs, &root) == EFI_SUCCESS && root) {
-        if (root->Open(root, &file, (CHAR16 *)DriverFile, EFI_FILE_MODE_READ | EFI_FILE_MODE_WRITE, 0) == EFI_SUCCESS && file) {
-          (VOID)file->Delete(file);
+    EFI_HANDLE primary_esp = LocateInternalEspVolume(t->BootServices);
+    if (primary_esp) DeleteDriverFileIfPresent(t->BootServices, primary_esp);
+
+    EFI_HANDLE *h = NULL;
+    UINTN fs_count = 0;
+    if (t->BootServices->LocateHandleBuffer(ByProtocol, &FsGuid, NULL, &fs_count, &h) == EFI_SUCCESS && h) {
+      for (UINTN i = 0; i < fs_count; i++) {
+        if (h[i] && h[i] != primary_esp && IsInternalNonUsbFsHandle(t->BootServices, h[i])) {
+          DeleteDriverFileIfPresent(t->BootServices, h[i]);
         }
-        root->Close(root);
       }
+      t->BootServices->FreePool(h);
     }
   }
 

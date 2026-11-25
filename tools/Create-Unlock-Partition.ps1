@@ -5,6 +5,7 @@
 [CmdletBinding()]
 param(
     [string]$TargetDrive = $null,
+    [switch]$Hidden,
     [switch]$NonInteractive
 )
 
@@ -16,6 +17,7 @@ if (-not $isAdmin) {
     Write-Host "====================================================================" -ForegroundColor Cyan
     $cmd = "-NoProfile -ExecutionPolicy Bypass -File `"$PSCommandPath`""
     if ($TargetDrive) { $cmd += " -TargetDrive `"$TargetDrive`"" }
+    if ($Hidden) { $cmd += " -Hidden" }
     if ($NonInteractive) { $cmd += " -NonInteractive" }
     Start-Process powershell -ArgumentList $cmd -Verb RunAs
     exit
@@ -238,12 +240,33 @@ if ($newPart -and $newPart.DriveLetter) {
     }
 }
 
+$hiddenSelected = [bool]$Hidden
+if (-not $Hidden -and -not $NonInteractive -and $newPart -and $newPart.DriveLetter) {
+    $hideAns = Read-Host "  Hide drive letter from Windows Explorer (keep partition invisible, recommended)? (Y/n)"
+    $hiddenSelected = ($hideAns -notmatch '^[nN]')
+}
+
+$hiddenApplied = $false
+if ($formatSuccess -and $newPart -and $hiddenSelected) {
+    try {
+        Set-Partition -DiskNumber $diskNum -PartitionNumber $newPart.PartitionNumber -NoDefaultDriveLetter $true -ErrorAction Stop
+        if ($newPart.DriveLetter) {
+            Remove-PartitionAccessPath -DiskNumber $diskNum -PartitionNumber $newPart.PartitionNumber -AccessPath "$($newPart.DriveLetter):\" -ErrorAction Stop
+        }
+        $hiddenApplied = $true
+        Write-Host "        [OK] Drive letter removed and NoDefaultDriveLetter set (hidden in Explorer)." -ForegroundColor Green
+    } catch {
+        Write-Host "        [WARN] Could not hide drive letter automatically: $($_.Exception.Message)" -ForegroundColor Yellow
+    }
+}
+
 Write-Host ""
 Write-Host "====================================================================" -ForegroundColor Cyan
 if ($formatSuccess -and $newPart) {
     Write-Host "  SUCCESS: Dedicated 512 MB FAT32 Unlock Partition is Ready!" -ForegroundColor Green
     Write-Host "====================================================================" -ForegroundColor Cyan
-    Write-Host "  * Drive Letter:    $($newPart.DriveLetter):" -ForegroundColor White
+    $driveDisplay = if ($hiddenApplied) { "(Hidden - No Drive Letter)" } else { "$($newPart.DriveLetter):" }
+    Write-Host "  * Drive Letter:    $driveDisplay" -ForegroundColor White
     Write-Host "  * Volume Label:    GPU_UNLOCK" -ForegroundColor White
     Write-Host "  * File System:     FAT32 (UEFI Boot Compliant)" -ForegroundColor White
     Write-Host "  * Physical Disk:   Disk $diskNum ($($selectedCandidate.DiskName))" -ForegroundColor White

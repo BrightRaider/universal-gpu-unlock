@@ -6,6 +6,16 @@ For packaged binaries and downloads, visit [GitHub Releases](https://github.com/
 
 ---
 
+## [v1.9.5] - 2026-11-25
+
+### Fixed / Added (Local Dev — Stickless `[I]` Multi-Volume Fallback & Hidden `GPU_UNLOCK` Partition)
+- **Internal Multi-Volume Unlock Selection (`src/driver_nvram.c`):** Fixed `LocateInternalEspVolume()` for `[I]` so it no longer checks only the primary Windows ESP (which fails with `EFI_VOLUME_FULL` on standard 100 MB Windows ESPs when copying `AdaUnlockDxe.efi` + 80.37 MB Ada `gsp_ga10x.bin`). `[I]` now checks actual volume free space via `EFI_FILE_SYSTEM_INFO` (`FsInfoGuid`) and selects internal non-USB FAT32 candidates in priority order: (1) Primary ESP (if `FreeSpace >= needed_bytes`), (2) dedicated unlock partition labeled `GPU_UNLOCK` / `UNLOCK_ESP` or carrying `\EFI\Drivers\AdaUnlockDxe.efi` (with enough space), (3) writable small internal FAT32 partition (`<= 2 GiB`) with enough space.
+- **Partial-Write Rollback & Multi-Volume `[R]` Cleanup (`src/driver_nvram.c`):** If copying `gsp_ga10x.bin` or architecture assets fails mid-install (e.g. `EFI_VOLUME_FULL`), `AdaUnlockDxe.efi` is cleanly deleted from that volume before trying the next candidate or falling back to USB. `GuRemoveDriverOption()` (`[R]`) cleans up `\EFI\Drivers\AdaUnlockDxe.efi` across all matching internal volumes and USB.
+- **Hidden Partition Option (`tools/Create-Unlock-Partition.ps1`):** Added `-Hidden` flag (plus interactive prompt defaulting to hide) that sets `NoDefaultDriveLetter` (`$true`) and removes any assigned drive letter so the `512 MB FAT32` `GPU_UNLOCK` partition stays invisible in Windows Explorer while remaining mountable by UEFI at boot.
+- **Verification:** Added 4 new host tests in `tests/test_driver_nvram.c` (100 MB ESP -> `GPU_UNLOCK` fallback & `[R]` cleanup, asset-stage `VOLUME_FULL` rollback, unlabeled `<= 2 GiB` FAT32 fallback, ignoring `> 2 GiB` FAT32 data volumes); `tests/Run-MsvcHostTests.ps1` passed (`MSVC_HOST_TESTS=PASS`).
+
+---
+
 ## [v1.9.4] - 2026-11-25
 ### Fixed & Hardened (Local Dev — Live Plan-C ACPI Chain Refresh)
 - **Ursache des Early-Boot-BSOD in `v1.9.3` (`RUN0100.TXT` vs `RUN0087.TXT`):** Zwischen `Driver####` (`AdaUnlockDriverEntryPoint`) und `StartImage(bootmgfw.efi)` aktualisiert AMI BDS sowohl `RealXSDT` (`Chk 0xee -> 0x13`) als auch `RealFADT` (`Chk 0x77 -> 0x7a`, identisch zum Live-Windows-Stand) und setzt `ConfigurationTable` nach `ReadyToBoot` erneut auf `RealRSDP` (`0xdc8c1014`). Das bloße Zurückschalten auf den alten `Driver####`-Klon in `v1.9.3` übergab Windows veraltete `XSDT`/`FADT`-Daten vor `vgk.sys`/Event-12/Minidump (Rückbau per `[R]` in `RUN0103.TXT`).
