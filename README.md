@@ -4,7 +4,7 @@
 ### High-Performance Tensor Core Rate-Limiter Bypass for NVIDIA GPUs
 
 [![GitHub Release](https://img.shields.io/github/v/release/BrightRaider/universal-gpu-unlock?color=blue&logo=github)](https://github.com/BrightRaider/universal-gpu-unlock/releases/latest)
-[![Release Version](https://img.shields.io/badge/Release-v1.9.1%20(Latest)-blue?logo=github)](https://github.com/BrightRaider/universal-gpu-unlock/releases/tag/v1.9.1)
+[![Release Version](https://img.shields.io/badge/Release-v1.9.2%20(Local%20Dev)-blue?logo=github)](https://github.com/BrightRaider/universal-gpu-unlock/releases)
 [![Downloads](https://img.shields.io/github/downloads/BrightRaider/universal-gpu-unlock/total?color=green&logo=github)](https://github.com/BrightRaider/universal-gpu-unlock/releases)
 [![Stars](https://img.shields.io/github/stars/BrightRaider/universal-gpu-unlock?style=social)](https://github.com/BrightRaider/universal-gpu-unlock)
 [![Safety](https://img.shields.io/badge/Safety-RAM--Only-success.svg)](#-safety--anti-cheat)
@@ -27,12 +27,12 @@
 
 ## ⚡ 60-Second Quick Start
 
-1. **Prepare USB Drive:** Download **[Universal_GPU_Unlock_v1.9.1.zip](https://github.com/BrightRaider/universal-gpu-unlock/releases/latest)**, extract it, insert a USB drive (FAT32), and run `Setup.bat` (formats & sets up all boot files automatically).
+1. **Prepare USB Drive:** Download **[Universal_GPU_Unlock_v1.9.2.zip](https://github.com/BrightRaider/universal-gpu-unlock/releases/latest)**, extract it, insert a USB drive (FAT32), and run `Setup.bat` (formats & sets up all boot files automatically).
    - *(Existing USB sticks can be updated by running `Update-USB.bat`).*
 2. **Boot & Unlock:** Restart your PC, open your boot menu (`F8` / `F11` / `F12`), boot from the USB drive, and select:
    - `[U]` **Standard Unlock:** RAM-only, temporary unlock (reverts cleanly to factory stock on power off). Multi-GPU systems unlock all cards sequentially.
    - `[P]` **S3 Persistence:** Universal sleep-aware unlock mode via ACPI FACS Trampoline & Reserved Arena with dynamic Intel/AMD/PCIe-switch topology, dynamic Ada VBIOS/chip geometry, S0ix preflight check, and D3cold gate (preserves Tensor Core unlock across S3 Suspend-to-RAM cycles).
-   - `[I]` **Install to NVRAM:** Permanent, stickless auto-unlock on every cold boot via internal ESP & NVRAM.
+   - `[I]` **Install to NVRAM:** Permanent auto-unlock on every cold boot via `AdaUnlockDxe.efi` (`Driver####`), including deferred `ReadyToBoot` Plan-C S3 hook activation when S3 preparation succeeds.
    - `[R]` **Remove DXE Driver:** Cleanly uninstalls and deregisters the driver from UEFI NVRAM & internal ESP.
    - `[S]` **Stock Windows:** Diagnostic hardware scan, logs to USB, normal boot without unlock.  
    *(Tip: The boot menu features a 30-second countdown. Press `[Space]` at any time to pause and read in peace).*
@@ -57,6 +57,7 @@ If your motherboard blocks the USB drive or DXE driver with a signature verifica
 1. **Keep Secure Boot enabled** with factory keys intact (if your BIOS blocks the USB drive or `AdaUnlockDxe.efi`, **append** `AdaUnlock_SecureBoot.cer` to `db` — never erase or replace the factory keys).
 2. **Install `[I]` once:** Boot from the USB drive (`F8` / `F11` / `F12`), press **`[I]`** to register `AdaUnlockDxe.efi` in UEFI NVRAM, and let the PC reboot.
 3. **Boot Windows normally (never boot via USB):** Always start Windows directly via **Windows Boot Manager** rather than selecting the USB boot option. *(If your 100 MB Windows ESP falls back to USB storage for Ada/Ampere assets, leave the USB drive plugged in or create a 512 MB FAT32 partition with `Create-Unlock-Partition.bat` — just make sure Windows boots from the internal Windows Boot Manager.)*
+4. **Local Dev S3 Sleep (`v1.9.2`):** `AdaUnlockDxe.efi` (`v1.9.2`) activates the prepared Plan-C Shadow ACPI table and `ExitBootServices` sandwich hook at `ReadyToBoot` (hardware verification for combined S3 Sleep + Riot Vanguard pending).
 
 ---
 

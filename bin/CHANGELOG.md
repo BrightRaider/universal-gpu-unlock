@@ -6,6 +6,14 @@ For packaged binaries and downloads, visit [GitHub Releases](https://github.com/
 
 ---
 
+## [v1.9.2] - 2026-11-25
+### Added & Changed (Local Dev — Pre-Hardware S3+Vanguard Test)
+- **Plan-C S3 Hook Activation in DXE Driver (`src/dxe_main.c`, `src/version.h`):**
+  - Added `AdaUnlockRegisterReadyToBoot()`, `AdaUnlockActivatePlanC()`, and `AdaUnlockOnPlanCReadyToBoot()` so `AdaUnlockDxe.efi` keeps `RealRSDP` and `gBS->ExitBootServices` untouched during early BDS dispatch and activates `GuAcpiInstallEbsHook()` + `GuAcpiApplyShadowConfigTable()` at `ReadyToBoot` whenever `Gu.s3_registered` is armed (`mPlanCActivated` prevents double activation).
+  - In the `ReadyToBoot` fallback unlock path (`event != NULL`), `AdaUnlockOnReadyToBoot()` activates Plan C immediately after unlock success while `GuBootOpen` logging is active.
+  - Supports UEFI 2.x `CreateEventEx(ReadyToBootEventGroupGuid)` with fallback to UEFI 1.x `CreateEvent(EVT_SIGNAL_READY_TO_BOOT)`.
+- **DXE Main Host Tests (`tests/test_dxe_main.c`, `tests/Run-MsvcHostTests.ps1`):** Added MSVC host test suite validating early-BDS deferral -> `ReadyToBoot` Plan-C activation and idempotency, `mock_s3_armed = FALSE` no-S3 guard, `!mDriverExecuted` `ReadyToBoot` fallback activation, and UEFI 1.x `CreateEvent` fallback (`MSVC_HOST_TESTS=PASS`).
+
 ## [v1.9.1] - 2026-11-24
 ### Added & Hardened
 - **Riot Vanguard & Secure Boot Dokumentation (`README.md`, `DOKUMENTATION.md`, `docs/OPERATIONS_AND_PERSISTENCE.md`):** Verifizierte Anleitung für *Valorant* / *League of Legends* ergänzt (Secure Boot mit Factory-Keys aktiv lassen bzw. `AdaUnlock_SecureBoot.cer` nur per Append ergänzen, DXE-Treiber `[I]` registrieren und Windows direkt über den Windows Boot Manager starten).

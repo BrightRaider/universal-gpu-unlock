@@ -1,7 +1,7 @@
 # Technische Dokumentation: Universal GPU Unlock (Multi-Gen)
 
 > **Tool:** Universal GPU Unlock  
-> **Version:** v1.9.1  
+> **Version:** v1.9.2  
 > **Architekturen:** NVIDIA Ada Lovelace (RTX 40), Ampere (RTX 30), Turing (RTX 20 / CMP)  
 > **Unterstützte Betriebssysteme:** Windows 10, Windows 11, WSL2 / Ubuntu CUDA Container  
 
@@ -27,7 +27,7 @@ Beim Booten vom USB-Stick erscheint ein 30-Sekunden-Countdown:
 | :---: | :--- | :--- |
 | **`[U]`** | **Standard Unlock** | Bewährter, robuster Unlock im RAM. Kehrt beim Kaltstart sauber in den Originalzustand zurück. |
 | **`[P]`** | **S3 Persistence Unlock** | Experimenteller Boot-Script-Modus, der den Unlock-Status auch über Sleep/Standby (S3) aufrechterhält. |
-| **`[I]`** | **Install to NVRAM** | Kopiert den `AdaUnlockDxe.efi`-Treiber in die interne EFI-Partition (`\EFI\Drivers\`) und trägt ihn in die UEFI-NVRAM-Bootreihenfolge ein (automatischer stickloser Unlock bei jedem Start). |
+| **`[I]`** | **Install to NVRAM** | Kopiert den `AdaUnlockDxe.efi`-Treiber in die EFI-Partition (`\EFI\Drivers\`) und trägt ihn in die UEFI-NVRAM-Bootreihenfolge ein (automatischer Unlock bei jedem Start; ab `v1.9.2` inkl. `ReadyToBoot`-Aktivierung des Plan-C-S3-Hooks). |
 | **`[R]`** | **Remove DXE Driver** | Bereinigt den DXE-Treiber vollständig aus dem UEFI-NVRAM und der internen ESP-Partition. |
 | **`[S]`** | **Stock Windows** | Führt Hardwarescans und Logging auf den USB-Stick durch, überspringt den Unlock und bootet normales Windows. |
 | **`[Leertaste]`** | **Pause Countdown** | Hält den 30-Sekunden-Timer an, um das Menü in Ruhe lesen und bedienen zu können. |
@@ -71,6 +71,7 @@ Die Binärdateien (`BOOTX64.EFI` und `AdaUnlockDxe.efi`) sind mit einem dedizier
 1. **Secure Boot aktiv lassen** (`Standard`-Modus mit Factory-Keys; falls dein BIOS den USB-Stick oder `AdaUnlockDxe.efi` blockiert, **`AdaUnlock_SecureBoot.cer` per Append** zu `db` hinzufügen — Factory-Keys niemals löschen oder ersetzen).
 2. **Einmalig `[I]` installieren:** Einmal vom USB-Stick booten (`F8` / `F11` / `F12`), **`[I]`** drücken (`AdaUnlockDxe.efi` wird im UEFI-NVRAM eingetragen) und neu starten lassen.
 3. **Windows normal starten (nicht vom USB-Stick booten):** Danach immer regulär direkt über den **Windows Boot Manager (`bootmgfw.efi`)** starten *(reicht eine 100-MB-ESP nicht für Ada/Ampere-Assets aus, bleibt der USB-Stick als Speicher eingesteckt oder du legst per `Create-Unlock-Partition.bat` eine 512-MB-FAT32-Partition an — gestartet wird aber immer über den internen Windows Boot Manager)*.
+4. **Lokaler Entwicklungsstand S3-Sleep mit `[I]` (`v1.9.2`):** `AdaUnlockDxe.efi` (`v1.9.2`) aktiviert den vorbereiteten Plan-C-Shadow-ACPI-Pfad und `ExitBootServices`-Sandwich-Hook bei `ReadyToBoot`, um den regulären `bootmgfw.efi`-Start für Riot Vanguard mit S3-Persistenz zu verbinden *(Hardware-Test von S3 + Vanguard zusammen noch offen)*.
 
 ---
 
@@ -184,6 +185,9 @@ Für Grafikkarten der Ada Lovelace-Reihe (RTX 4090 / AD102) mit GSP-Firmware und
     - **`PciIo`-GUID-Fix & Fallback:** Korrektur der `EFI_PCI_IO_PROTOCOL_GUID` in `src/s3_facs.c` auf die offizielle EDK2-GUID (`PciIo.h`); `EFI_PCI_IO_PROTOCOL` dient nur noch als reiner Fallback bei fehlendem `RootBridgeIo`.
     - **Direkte Eltern-Brücke & kein `0:3:1`-Fallback:** `GuFindRootPortLinkReg()` und `probe_addrs[0..3]` verwenden die PCIe-Capability (`0x10`, `LinkReg = CapOffset + 0x10`) der direkten Eltern-Brücke (`bridges[count - 1]`). Jeder blinde Fallback auf `0:3:1` (`0x80001900` / `0x80001960`) entfällt; bei `0` gefundenen Brücken für `target_gpu_bus > 0` bricht `GuAcpiInstallShadowFacs()` mit `ERROR` und `EFI_NOT_FOUND` sauber ohne FACS-Mutation ab.
     - **Verifikation (`v1.9.1`):** Test `[11]` deckt zusätzlich AMI Aptio V (`0` PciIo-Brücken auf `0:3:1`), Intel `0:1:0` ohne `PciIo`, 2-Stufen-Switch (Root Port ohne `PciIo`), `PciIo`-Fallback und den `0`-Brücken-Abbruch ab (`9.798` Checks, `MSVC_HOST_TESTS=PASS`).
+11. **Plan-C-S3-Aktivierung im DXE-Treiber `AdaUnlockDxe.efi` (`v1.9.2`, lokal):**
+    - **Verzögerte `ReadyToBoot`-Aktivierung (`src/dxe_main.c`):** Während des frühen BDS-Dispatch (`AdaUnlockDriverEntryPoint()`) bleiben `ConfigurationTable` (`RealRSDP`) und `gBS->ExitBootServices` unberührt. Erst beim `ReadyToBoot`-Event (`AdaUnlockOnPlanCReadyToBoot()`, bzw. im Fallback-Pfad `AdaUnlockOnReadyToBoot()` mit `event != NULL`) ruft `AdaUnlockActivatePlanC()` idempotent (`mPlanCActivated`) `GuAcpiInstallEbsHook()` und `GuAcpiApplyShadowConfigTable()` auf, sofern `Gu.s3_registered` gesetzt ist (unterstützt UEFI 2.x `CreateEventEx` und UEFI 1.x `CreateEvent`).
+    - **Zielsetzung & Teststatus:** Kombination aus regulärem Start über den Windows Boot Manager (`bootmgfw.efi`) für Riot Vanguard und Plan-C-S3-Persistenz (`test_dxe_main` in `MSVC_HOST_TESTS=PASS`; kombinierte Live-Verifikation mit S3-Sleep + Vanguard auf Hardware steht noch aus).
 
 ---
 
@@ -1466,6 +1470,9 @@ In Version `v1.9.0` ermittelt `GuDiscoverUpstreamBridgeChain()` den vorgelagerte
 
 ### 13.42 Die v1.9.1 Architektur: `EFI_PCI_ROOT_BRIDGE_IO_PROTOCOL`-Pfad & Riot-Vanguard-Doku
 In Version `v1.9.1` nutzt `GuDiscoverUpstreamBridgeChain()` primär `EFI_PCI_ROOT_BRIDGE_IO_PROTOCOL` (Segmentabgleich & rekursiver Walk ab Bus `0` für Root Ports ohne `PciIo`), korrigiert die `EFI_PCI_IO_PROTOCOL_GUID` als sauberen Fallback, entfernt den festen `0:3:1`-Fallback zugunsten eines klaren `EFI_NOT_FOUND`-Abbruchs (`9.798` Checks inkl. erweitertem Test `[11]`) und ergänzt die verifizierte Riot-Vanguard-Anleitung via Option `[I]` (`AdaUnlockDxe.efi`) + regulärem Windows Boot Manager (`bootmgfw.efi`).
+
+### 13.43 Die v1.9.2 Architektur (Lokal): Plan-C-S3-Aktivierung im DXE-Treiber (`ReadyToBoot` + `ExitBootServices`)
+In Version `v1.9.2` aktiviert `AdaUnlockDxe.efi` (`src/dxe_main.c`) den bereits im frühen BDS-Lauf vorbereiteten Plan-C-S3-Zustand (`Gu.s3_registered`): `AdaUnlockDriverEntryPoint()` registriert `AdaUnlockOnPlanCReadyToBoot()` über `AdaUnlockRegisterReadyToBoot()`, sodass `AdaUnlockActivatePlanC()` (`GuAcpiInstallEbsHook()` + `GuAcpiApplyShadowConfigTable()`) erst bei `ReadyToBoot` unmittelbar vor Übergabe an den OS-Loader greift und frühe BDS-/SMM-Komponenten weiterhin `RealRSDP` sehen. Bei späterem `ReadyToBoot`-Fallback-Unlock (`event != NULL`) aktiviert `AdaUnlockOnReadyToBoot()` Plan C direkt und idempotent (`mPlanCActivated`). Abgesichert durch `tests/test_dxe_main.c` in `MSVC_HOST_TESTS=PASS` (kombinierte Live-Verifikation mit S3-Sleep + Riot Vanguard auf Testsystem ausstehend).
 
 
 

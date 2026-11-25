@@ -20,6 +20,7 @@ $flags = '/nologo /W3 /TC /D__KERNEL__ /DGU_UEFI_PORT /DGU_AD104_TRANSACTION /DG
 # Test name -> extra sources from src\ that the test links against.
 $tests = [ordered]@{
     'test_driver_nvram'  = @()
+    'test_dxe_main'      = @()
     'test_boot_select'   = @()
     'test_csm_handover'  = @()
     'test_gpu_inventory' = @('gpu_inventory.c')

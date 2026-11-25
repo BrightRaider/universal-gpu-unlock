@@ -8,6 +8,7 @@
 #include "boot_io.h"
 #include "driver_nvram.h"
 #include "multi_gpu.h"
+#include "s3_facs.h"
 #include "compat/compat.h"
 
 /* Standard UEFI ReadyToBoot event group GUID:
@@ -21,7 +22,58 @@ static const EFI_GUID ReadyToBootEventGroupGuid =
 static EFI_HANDLE mDxeImage = NULL;
 static EFI_SYSTEM_TABLE *mDxeTable = NULL;
 static EFI_EVENT mReadyToBootEvent = NULL;
+static EFI_EVENT mPlanCReadyToBootEvent = NULL;
 static BOOLEAN mDriverExecuted = FALSE;
+static BOOLEAN mPlanCActivated = FALSE;
+
+static VOID AdaUnlockRegisterReadyToBoot(EFI_SYSTEM_TABLE *t,
+                                         EFI_EVENT_NOTIFY callback,
+                                         EFI_EVENT *out_event) {
+  if (!t || !t->BootServices || !callback || !out_event) return;
+  if (t->BootServices->CreateEventEx != NULL) {
+    (VOID) t->BootServices->CreateEventEx(
+        EVT_NOTIFY_SIGNAL,
+        TPL_CALLBACK,
+        callback,
+        NULL,
+        &ReadyToBootEventGroupGuid,
+        out_event
+    );
+  } else if (t->BootServices->CreateEvent != NULL) {
+    (VOID) t->BootServices->CreateEvent(
+        EVT_SIGNAL_READY_TO_BOOT,
+        TPL_CALLBACK,
+        callback,
+        NULL,
+        out_event
+    );
+  }
+}
+
+/* Activate Plan C Shadow ACPI ConfigurationTable and ExitBootServices hook right
+ * before the OS loader starts, keeping RealRSDP exposed during early BDS. */
+static VOID AdaUnlockActivatePlanC(BOOLEAN can_log) {
+  if (!mDxeTable || !Gu.s3_registered || mPlanCActivated) return;
+  mPlanCActivated = TRUE;
+  (VOID) GuAcpiInstallEbsHook(mDxeTable);
+  UINT32 patched = GuAcpiApplyShadowConfigTable();
+  if (can_log && patched > 0) {
+    GuLog("DXE-DRIVER: Plan C Shadow ACPI (%u table(s)) + ExitBootServices hook activated.\n",
+          (unsigned)patched);
+  }
+}
+
+static VOID EFIAPI AdaUnlockOnPlanCReadyToBoot(EFI_EVENT event, VOID *context) {
+  (VOID)context;
+
+  if (event && mDxeTable && mDxeTable->BootServices && mDxeTable->BootServices->CloseEvent) {
+    mDxeTable->BootServices->CloseEvent(event);
+    mPlanCReadyToBootEvent = NULL;
+  }
+
+  if (!mDriverExecuted) return;
+  AdaUnlockActivatePlanC(FALSE);
+}
 
 static VOID EFIAPI AdaUnlockOnReadyToBoot(EFI_EVENT event, VOID *context) {
   (VOID)context;
@@ -127,6 +179,9 @@ finish:
           (unsigned)unlocked_count, (unsigned)device_count);
 
     mDriverExecuted = TRUE;
+    if (event != NULL) {
+      AdaUnlockActivatePlanC(TRUE);
+    }
 
     (VOID)GuBootSyncLog();
 
@@ -148,26 +203,14 @@ EFI_STATUS EFIAPI AdaUnlockDriverEntryPoint(EFI_HANDLE image, EFI_SYSTEM_TABLE *
    * allowing S3 boot script registration on AMI Aptio V motherboards before SMRAM lockdown. */
   AdaUnlockOnReadyToBoot(NULL, NULL);
 
-  /* 2. Fallback: If PCI devices were not yet ready in early BDS, register ReadyToBoot callback */
+  /* 2. Register ReadyToBoot callback:
+   * - Retry full unlock at ReadyToBoot if PCI devices were not ready during early BDS.
+   * - Otherwise, if Plan C S3 is armed, defer ConfigurationTable / EBS hook activation
+   *   until ReadyToBoot so early BDS keeps seeing RealRSDP. */
   if (!mDriverExecuted) {
-    if (t->BootServices->CreateEventEx != NULL) {
-      (VOID) t->BootServices->CreateEventEx(
-          EVT_NOTIFY_SIGNAL,
-          TPL_CALLBACK,
-          AdaUnlockOnReadyToBoot,
-          NULL,
-          &ReadyToBootEventGroupGuid,
-          &mReadyToBootEvent
-      );
-    } else if (t->BootServices->CreateEvent != NULL) {
-      (VOID) t->BootServices->CreateEvent(
-          EVT_SIGNAL_READY_TO_BOOT,
-          TPL_CALLBACK,
-          AdaUnlockOnReadyToBoot,
-          NULL,
-          &mReadyToBootEvent
-      );
-    }
+    AdaUnlockRegisterReadyToBoot(t, AdaUnlockOnReadyToBoot, &mReadyToBootEvent);
+  } else if (Gu.s3_registered && !mPlanCActivated) {
+    AdaUnlockRegisterReadyToBoot(t, AdaUnlockOnPlanCReadyToBoot, &mPlanCReadyToBootEvent);
   }
 
   return EFI_SUCCESS;
