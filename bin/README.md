@@ -21,6 +21,10 @@
   Unlocks full enterprise-grade Tensor Core compute across Windows 10/11, PyTorch, CUDA, and WSL2.
 </p>
 
+<br>
+
+<img src="docs/images/dashboard-v2.0.0.png" alt="Universal GPU Unlock v2.0.0 Dashboard — Live S3 ARMED Telemetry &amp; 1-W Power-Limit Control" width="760" />
+
 </div>
 
 ---
@@ -204,9 +208,9 @@ All version releases, bug fixes, and device expansions are maintained in the sep
 ├── AD102-ASSETS/                <- Ada microcode payloads (4090, 4080, 4070TiS)
 ├── GA102-ASSETS/                <- Ampere microcode payloads (3090, 3080, 3070, 3060)
 ├── TU102-ASSETS/                <- Turing microcode staging payloads (2080Ti, 2080, 2070, 2060)
-├── src/                         <- Full C source code for the universal UEFI application
+├── src/                         <- Full C source code, MSVC EFI build scripts & Build-Release-Zip.ps1
 ├── tests/                       <- Host tests with mocked UEFI services (no GPU required)
-├── docs/                        <- Operational whitepapers & CHANGELOG_ARCHIVE.md
+├── docs/                        <- Operational whitepapers, CHANGELOG_ARCHIVE.md & images/
 ├── Setup.bat                    <- Unified Launcher (1: USB Setup, 2: Update USB, 3: Hidden 512MB Partition)
 ├── Launch-Dashboard.bat         <- Primary GUI Cockpit (Benchmarks, S3 Armed Status, Power Limit Slider)
 ├── Check-GPU-Unlock.bat         <- Standalone CLI benchmark & hardware check (TFLOPS, S3, PL, ReBAR, PCIe)

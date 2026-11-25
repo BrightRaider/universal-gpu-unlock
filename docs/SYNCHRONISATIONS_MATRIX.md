@@ -91,6 +91,6 @@ flowchart TD
 - [ ] **4. Test Suite:** Laufen alle 11 MSVC-Host-Tests fehlerfrei durch (`powershell -ExecutionPolicy Bypass -File tests/Run-MsvcHostTests.ps1`)?
 - [ ] **5. GUI & Python Validierung:** Lässt sich die XAML der GUI ohne Parser-Fehler laden (`[System.Windows.Markup.XamlReader]::Load`) und bestehen `py_compile` + Telemetrie-Smoke-Checks?
 - [ ] **6. Doku-Kopien:** Sind `bin/README.md`, `bin/DOKUMENTATION.md` und `bin/CHANGELOG.md` bitgenau identisch mit ihren Root-Gegenstücken?
-- [ ] **7. Release-Paket:** Wurde das All-in-One-Paket `Universal_GPU_Unlock_v<VERSION>.zip` via `git archive` frisch gepackt?
+- [ ] **7. Release-Paket:** Wurde das All-in-One-Paket `Universal_GPU_Unlock_v<VERSION>.zip` sauber aus `HEAD` über `src/Build-Release-Zip.ps1` (`git archive` + `.gitattributes` `export-ignore`, ohne `.github/`, `.gitignore`, `.gitattributes`, `REDDIT_POST.md`, `scratch/`, `*.obj`) frisch gepackt?
 - [ ] **8. Datenschutz & Sicherheit:** Keine Pfade mit Benutzernamen oder private Details in Commit-Messages oder Dateien?
 - [ ] **9. Git Rules:** Keine Auto-Closing Keywords (`fixes #X`), sondern ausschliesslich Referenzen (`refs #X`)?

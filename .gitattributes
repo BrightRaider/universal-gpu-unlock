@@ -1,0 +1,4 @@
+# Keep development/CI metadata out of clean release archives (`git archive --format=zip`)
+.github export-ignore
+.gitignore export-ignore
+.gitattributes export-ignore

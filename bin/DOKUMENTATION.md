@@ -272,7 +272,7 @@ Ab `v2.0.0` ist das Wurzelverzeichnis konsequent auf **3 klare Einstiegspunkte**
 - **`Launch-Dashboard.bat`:** 1-Klick GUI Cockpit (`tools/gpu_dashboard.py` — Live-`S3 ARMED`-Ampel, stufenloser Power-Limit-Slider inkl. Wake-Reapply, Baseline-Vergleich, Multi-GPU-Auswahl, Benchmark & Werkzeug-Buttons).
 - **`Check-GPU-Unlock.bat`:** 1-Klick CLI-Verifikation (`tools/quick_check.py` — TFLOPS, `S3 Persistence`, Power Limit, CUDA-Verhältnis, ReBAR, PCIe-Link und letzter Windows-Wake).
 
-Alle Hilfsskripte und erweiterten Diagnose-Werkzeuge (`Setup-AdaUnlock.ps1`, `Update-USB.bat`, `Create-Unlock-Partition.*`, `Setup-FastResume.bat`, `Toggle-Sleep-Button.bat`, `Toggle-Turing-GSP.bat`, `Universal-Control-Center.*`) liegen einheitlich unter `tools/` ohne alte Root-Wrapper.
+Alle Hilfsskripte und erweiterten Diagnose-Werkzeuge (`Setup-AdaUnlock.ps1`, `Update-USB.bat`, `Create-Unlock-Partition.*`, `Setup-FastResume.bat`, `Toggle-Sleep-Button.bat`, `Toggle-Turing-GSP.bat`, `Universal-Control-Center.*`) liegen einheitlich unter `tools/` ohne alte Root-Wrapper. Das UI-Showcase-Bild des Cockpits liegt unter `docs/images/dashboard-v2.0.0.png`. Für saubere Release-Pakete ohne Meta-/Dev-Dateien (`.github/`, `.gitignore`, `.gitattributes`, `REDDIT_POST.md`, `scratch/`, `*.obj`) stehen `.gitattributes` (`export-ignore`) und `src/Build-Release-Zip.ps1` (`git archive HEAD`) bereit.
 
 ---
 
