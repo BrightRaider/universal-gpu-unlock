@@ -31,37 +31,42 @@
 
 ## ⚡ 60-Second Quick Start
 
-1. **Prepare USB Drive:** Download **[Universal_GPU_Unlock_v2.0.0.zip](https://github.com/BrightRaider/universal-gpu-unlock/releases/latest)**, extract it, insert a FAT32 USB drive, and run `Setup.bat` (`[1]` new USB setup with BitLocker/Secure Boot/S0ix pre-flight checks, `[2]` update existing USB, `[3]` create hidden 512 MB internal `GPU_UNLOCK` partition).
-2. **Boot & Unlock:** Restart your PC, open your boot menu (`F8` / `F11` / `F12`), boot from the USB drive, and select:
-   - `[U]` **Standard Unlock:** RAM-only, temporary unlock (reverts cleanly to factory stock on power off). Multi-GPU systems unlock all cards sequentially.
-   - `[P]` **S3 Persistence:** Verified sleep-aware unlock mode via Tier 1 Boot-Script / Tier 2 ACPI FACS Shadow Trampoline & Reserved Arena with dynamic Intel/AMD/PCIe-switch topology, `RootBridgeIo` bus walk, dynamic Ada VBIOS/chip geometry, S0ix preflight check, and D3cold gate (preserves Tensor Core unlock across ACPI S3 Suspend-to-RAM cycles).
-   - `[I]` **Install to NVRAM:** Permanent stickless auto-unlock on every cold boot via `AdaUnlockDxe.efi` (`Driver####`), including `ReadyToBoot` + `StartImage` (`EfiLoaderCode`) live-refreshed Plan-C S3 activation. Verifies free bytes (`EFI_FILE_SYSTEM_INFO`), creates `\EFI\Drivers` and asset directories recursively (`OpenOrCreateDirRecursive()`), streams files in `1 MiB` chunks, and selects internal non-USB FAT32 targets in priority order: Primary Windows ESP -> `GPU_UNLOCK` / `UNLOCK_ESP` -> small internal FAT32 (`<= 2 GiB`).
-   - `[R]` **Remove DXE Driver:** Cleanly uninstalls and deregisters the driver from UEFI NVRAM and all internal volumes.
-   - `[S]` **Stock Windows:** Diagnostic hardware scan, logs to USB, normal boot without unlock.  
-   *(Tip: The boot menu features a 30-second countdown. Press `[Space]` at any time to pause and read in peace).*
-3. **Verify & Control:** In Windows, run `Launch-Dashboard.bat` (GUI Cockpit) or `Check-GPU-Unlock.bat` (CLI) to verify unlocked Tensor Core throughput!
-   - **Dashboard Cockpit (`v2.0.0`):** Includes a live **`S3 ARMED` status indicator** (`GetPwrCapabilities` + kernel `FADT` + `RUN*.TXT`), a **stepless 1-W Power-Limit slider** with clickable **`Eco` / `Stock` / `Max`** snap markers + readback verification + optional **Re-apply PL on S3 Wake** (plus *Gaming / Quiet* and *AI / Compute* 1-click profiles), Before/After benchmark baseline comparison, and 1-click launchers for all utilities in `tools/`.
+1. **Prepare (`Setup.bat`):** Download & extract **[Universal_GPU_Unlock_v2.0.0.zip](https://github.com/BrightRaider/universal-gpu-unlock/releases/latest)**, insert a FAT32 USB drive, and run `Setup.bat`:
+   - `[1]` **New USB setup** *(with automatic BitLocker / Secure Boot / S0ix pre-flight checks)*
+   - `[2]` **Update existing USB**
+   - `[3]` **Create hidden `512 MB` `GPU_UNLOCK` partition** *(optional — enables stickless boot on `100 MB` Windows ESPs)*
+2. **Boot & Unlock:** Restart from the USB drive (`F8` / `F11` / `F12`) and press one key *(press `[Space]` anytime to pause the 30s menu timer)*:
+   - `[U]` **Standard Unlock:** Volatile RAM-only unlock (reverts cleanly to stock on power-off).
+   - `[P]` **S3 Persistence:** Keeps the unlock active across Windows Sleep / Standby (ACPI S3).
+   - `[I]` **Stickless Auto-Unlock (`NVRAM`):** Installs `AdaUnlockDxe.efi` (`Driver####`) so Windows unlocks automatically on cold boots and survives ACPI S3 sleep — no USB drive required afterward.
+   - `[R]` **Remove DXE Driver:** Cleanly uninstalls `[I]` from UEFI NVRAM and internal partitions.
+   - `[S]` **Stock Windows:** Diagnostic scan & log only (boots stock).
+3. **Verify & Control:** In Windows, run **`Launch-Dashboard.bat`** (GUI Cockpit: live `S3 ARMED` indicator, 1-W power-limit slider with S3-wake re-apply, baseline comparison) or **`Check-GPU-Unlock.bat`** (CLI benchmark & `FMLA32/16` check).
 
 > [!TIP]
-> **Troubleshooting & Optimization:** If your display remains blank on boot, set **CSM to Disabled** in your BIOS. To unlock maximum memory throughput (+10% to +15%), enable **Above 4G Decoding** and **Resizable BAR**.
+> **First-Boot Checklist:** Set **CSM = Disabled** (Pure UEFI) in your BIOS to avoid blank screens or Error 43, and enable **Above 4G Decoding** + **Resizable BAR** for full memory throughput (+10% to +15%).
 
 ---
 
-## 🔒 Secure Boot Configuration
+## 🔒 Secure Boot & Anti-Cheat
 
-If your motherboard blocks the USB drive or DXE driver with a signature verification warning:
-
-- **Without Anti-Cheat (easiest):** Temporarily set **Secure Boot** to **Disabled** (or OS Type: *Other OS*) in your BIOS.
-- **Keep Secure Boot enabled (Windows 11):**  
-  In your BIOS under **Security ➔ Secure Boot ➔ Key Management** (or *Custom Key Management*), select **Append / Enroll DB Key** (Authorized Signatures `db`), browse to the USB drive, and add `AdaUnlock_SecureBoot.cer` **without deleting your existing factory keys**. Save and reboot (`F10`).
+- **Without Anti-Cheat (easiest):** Temporarily set **Secure Boot** to **Disabled** (or *Other OS*) in BIOS.
+- **Keep Secure Boot enabled (Windows 11):** In BIOS under **Security ➔ Secure Boot ➔ Key Management ➔ Authorized Signatures (`db`)**, select **Append / Enroll DB Key**, choose `AdaUnlock_SecureBoot.cer` from your USB drive, and save (`F10`). *(Always **append** — never delete existing Microsoft/OEM factory keys!)*
 
 ### Riot Vanguard (*Valorant* / *League of Legends*)
 
-1. **Keep Secure Boot enabled** with factory keys intact (if your BIOS blocks the USB drive or `AdaUnlockDxe.efi`, **append** `AdaUnlock_SecureBoot.cer` to `db` — never erase or replace the factory keys).
-2. **Install `[I]` once:** Boot from the USB drive (`F8` / `F11` / `F12`), press **`[I]`** to register `AdaUnlockDxe.efi` in UEFI NVRAM, and let the PC reboot.
-3. **Boot Windows normally (never boot via USB):** Always start Windows directly via **Windows Boot Manager** rather than selecting the USB boot option. *(If your 100 MB Windows ESP is too small for Ada/Ampere assets, run `Setup.bat` option `[3]` / `tools\Create-Unlock-Partition.bat` to create a hidden 512 MB FAT32 `GPU_UNLOCK` partition for stickless `[I]` — just make sure Windows boots from the internal Windows Boot Manager.)*
-4. **S3 Sleep + Riot Vanguard (`v1.9.4+` / `v2.0.0`, bench-verified):** `AdaUnlockDxe.efi` calls `GuAcpiRefreshShadowChain()` inside `StartImage` (`EfiLoaderCode`) so `ShadowFADT`/`ShadowXSDT`/`ShadowRSDP` are freshly cloned from final post-BDS firmware ACPI tables right before `bootmgfw.efi` / `winload.efi`. Confirmed on an RTX 4090 bench (`RUN0105.TXT`) with `Confirm-SecureBootUEFI: True`, `FirmwareCtrl = 0xDC637400` (`ShadowFACS`), clean Riot Vanguard / *League of Legends* runs before and after a ~9-hour S3 sleep (`02:44:12` -> `11:40:57`), and post-wake cuBLAS Tensor Core throughput of **247.43 TFLOPS** (`FP16 COMPUTE_16F`, `4096x4096`) / **232.72 TFLOPS** (`FP16 COMPUTE_32F`). *(Requires classic ACPI S3 enabled in BIOS, not Modern Standby `S0ix`. Ampere/Turing/multi-GPU S3 logs welcome via GitHub Issues!)*
-5. **Stickless `[I]` Multi-Volume Fallback & Empty-Partition Fix (`v1.9.5` -> `v2.0.0`, bench-verified):** `src/driver_nvram.c` inspects free bytes via `EFI_FILE_SYSTEM_INFO` (`FsInfoGuid`) and selects internal non-USB FAT32 targets in priority order: Primary ESP -> `GPU_UNLOCK`/`UNLOCK_ESP` (or existing `\EFI\Drivers\AdaUnlockDxe.efi`) -> small internal FAT32 (`<= 2 GiB`), with automatic partial-write rollback on `VOLUME_FULL`, recursive directory creation (`OpenOrCreateDirRecursive()`), `1 MiB` streaming chunked copy, and multi-volume `[R]` cleanup. `Setup.bat [3]` (`tools/Create-Unlock-Partition.ps1 -Hidden`) creates a `512 MB FAT32` `GPU_UNLOCK` partition with `NoDefaultDriveLetter` (`$true`) and no Windows drive letter. Verified via `tests/Run-MsvcHostTests.ps1` (`MSVC_HOST_TESTS=PASS`) and live on RTX 4090 (`RUN0110.TXT` & final `v2.0.0` stickless build, `25.11.2026`): `[I]` deployed to hidden `GPU_UNLOCK` (100 MB ESP untouched), followed by a clean stickless reboot with zero USB drives mounted (`LastBootUpTime: 25.11.2026 13:51:31`, `Confirm-SecureBootUEFI: True`, `FirmwareCtrl = 0xDC637400`, `vgk` Running + `vgtray` active, **224.52 TFLOPS** `FP16`, `FMLA32/16 0.59x`) and a stickless ACPI S3 sleep/wake cycle (`13:58:53` wake, `vgk` Running + `vgtray` + `Riot Client` active, **221.19 TFLOPS** `FP16` with live `16%` external-load notice). *(Note: if Windows Fast Startup `0xC00000D4` stops `vgk.sys` after an unexpected reset/power loss, perform one normal Windows Restart.)*
+1. **Keep Secure Boot enabled** with factory keys intact *(append `AdaUnlock_SecureBoot.cer` to `db` only if your BIOS blocks the unsigned drive/driver)*.
+2. **Install `[I]` once:** Boot from USB once (`F8` / `F11` / `F12`) and press **`[I]`**. *(If your Windows ESP is only `100 MB`, run `Setup.bat [3]` first to create the hidden `512 MB` `GPU_UNLOCK` partition for stickless Ada/Ampere assets.)*
+3. **Boot Windows normally:** Unplug the USB drive and boot via **Windows Boot Manager** (`bootmgfw.efi`) — never from the USB boot entry.
+
+<details>
+<summary><b>Verified Vanguard + Stickless S3 Bench Notes (Click to expand)</b></summary>
+
+- **S3 Sleep + Vanguard (`v1.9.4+` / `v2.0.0`):** `AdaUnlockDxe.efi` refreshes post-BDS ACPI shadow tables right before OS handoff (`GuAcpiRefreshShadowChain()` in `StartImage`), keeping `ShadowFACS` armed alongside `Confirm-SecureBootUEFI: True` across both stickless reboots (**224.52 TFLOPS FP16**) and ACPI S3 sleep/wake (**221.19 TFLOPS FP16** with `vgk` Running, `vgtray`, and `Riot Client` active; requires classic **ACPI S3** in BIOS, not Modern Standby `S0ix`).
+- **Fast Startup note:** If an unexpected power loss/reset triggers Windows Fast Startup `0xC00000D4` and temporarily stops `vgk.sys`, run one normal Windows **Restart** (bypasses `hiberfil.sys`).
+- **Full Technical & Persistence Whitepaper:** [OPERATIONS_AND_PERSISTENCE.md](docs/OPERATIONS_AND_PERSISTENCE.md) · [DOKUMENTATION.md](DOKUMENTATION.md)
+
+</details>
 
 ---
 
@@ -73,23 +78,18 @@ If your motherboard blocks the USB drive or DXE driver with a signature verifica
 | **RTX 30 Series** | **Ampere** | RTX 3090, RTX 3090 Ti, RTX 3080 Ti, RTX 3080 (10/12GB), RTX 3070 Ti, RTX 3070, RTX 3060 Ti, RTX 3060, RTX 3050 (8GB/Laptop), RTX 2050 Mobile, CMP 90HX | `0x2204`, `0x2208`, `0x2206`, `0x220a`, `0x2216`, `0x2207`, `0x2482`, `0x2484`, `0x2487`, `0x2488`, `0x2489`, `0x2503`, `0x2504`, `0x2507`, `0x2508`, `0x2520`, `0x2560`, `0x2582`, `0x25ec`, `0x25ed` |
 | **RTX 20 Series** | **Turing** (TU102 / TU104 / TU106, verified: [#15](https://github.com/BrightRaider/universal-gpu-unlock/issues/15), [#18](https://github.com/BrightRaider/universal-gpu-unlock/issues/18)) | RTX 2080 Ti, TITAN RTX, RTX 2080 / SUPER, RTX 2070 / SUPER, RTX 2060 / SUPER, CMP 50HX, CMP 40HX, Quadro RTX | `0x1E04`, `0x1E07`, `0x1E02`, `0x1E81`, `0x1E82`, `0x1E87`, `0x1E84`, `0x1E89`, `0x1F02`, `0x1F07`, `0x1F06`, `0x1F0B`, `0x1F47`, `0x1F03`, `0x1F08`, `0x1F12`, `0x1E09`, `0x1EB0`, `0x1EB1`, `0x1E30`, `0x1E35` |
 
-- **Any Vendor:** Compatible with Founders Edition, ASUS, MSI, Gigabyte, ZOTAC, PNY, Palit, Gainward, etc.
-- **Any Platform:** Intel (Z690, Z790, Z890, B760, Z390) and AMD (AM4/AM5, X570, B550, B650, X670E, X870E).
-- **Multi-Drive:** Prefers `bootmgfw.efi` and follows your firmware's boot order when several Windows volumes exist.
-- **Multi-GPU & Headless Compute:** Unlocks primary or dedicated compute GPUs. Discrete cards can operate completely headless as dedicated AI/compute accelerators with all monitors connected to integrated graphics (e.g. AMD Ryzen Raphael iGPU or Intel UHD) — resolving [#14](https://github.com/BrightRaider/universal-gpu-unlock/issues/14).
-- **ASUS & AMI Console Topology Verified:** Multi-display console detachment verified on ASUS PRIME Z690-A at **127.61 TFLOPS** (100% unrestricted compute) on EVGA GeForce RTX 3080 Ti — resolving [#16](https://github.com/BrightRaider/universal-gpu-unlock/issues/16).
-- **ASRock AM4 & CSM Resolution Verified:** Budget AM4 POST discovery and CSM legacy video conflict resolved on ASRock A520M-HVS at **106.05 TFLOPS** (+95.7% boost, unrestricted compute) on Gainward GeForce RTX 3080 Phoenix — refs [#17](https://github.com/BrightRaider/universal-gpu-unlock/issues/17).
-- **Ampere & Turing Verified:** GA106 (RTX 3060), GA104 (RTX 3060 Ti), GA102 (RTX 3080, RTX 3080 Ti, RTX 3090) as well as TU102 (RTX 2080 Ti) and TU106 (CMP 40HX) are confirmed. On Turing (RTX 20 Series), the pre-boot unlock transaction completes cleanly and full enterprise compute throughput (>85–105 TFLOPS) is activated with GSP firmware mode (`tools\Toggle-Turing-GSP.bat`) — refs [#15](https://github.com/BrightRaider/universal-gpu-unlock/issues/15), refs [#18](https://github.com/BrightRaider/universal-gpu-unlock/issues/18).
-- **Boot-Loop Safeguard (`ATTEMPT.FLG`):** Automatically protects systems from reboot loops. A volatile progress flag is staged to disk before register mutations and cleaned only after verified completion. If a mutation ever hangs, the next boot immediately engages `[SAFEGUARD ACTIVE]`, clears the flag, and chainloads Windows in safe factory mode.
-- **GFW Usable-Memory Delta Tolerance:** Incorporates a 32 MiB aperture tolerance in preflight layout calculation, preventing `-ERANGE` (-34) errors caused by firmware aperture reservations on 24GB+ cards (RTX 3090 Ti & 4090).
-- **`SLOT-REVIVE` Engine:** Proactive GOP decoupling via DriverBinding followed by D0 power state forcing and PCIe bridge Secondary Bus Reset (SBR) to wake unresponsive slots on OEM systems (Dell/HP) or warm reboot.
-- **Stickless Internal NVMe-ESP Persistence (`[I]` Mode) & ESP Storage Notice:** Installs `AdaUnlockDxe.efi` and architecture firmware assets to your internal EFI System Partition (`\EFI\Drivers\`) and registers it in UEFI `DriverOrder`, so the USB stick is no longer needed.
-  * **ESP Space Requirements:** Ada (RTX 40) and Ampere (RTX 30) require **~85 MB free space** for NVIDIA's monolithic signed GSP-RM firmware (`gsp_ga10x.bin`). Turing (RTX 20 / CMP) requires only **~28 MB**.
-  * **Standard 100 MB Windows ESP:** Windows OEM setups create a 100 MB ESP with only ~30–50 MB free. On Turing cards, the unified installer automatically deploys only the compact Turing assets (~28 MB), fitting standard 100 MB partitions out of the box. On Ada/Ampere cards, if space is insufficient, `[I]` safely falls back to registering the USB drive.
-  * **Workarounds & Best Practices for Ada / Ampere:**
-    1. **Option `[P]` (S3 Sleep Persistence - Recommended):** If you use Sleep / Standby (Suspend-to-RAM) instead of a cold shutdown, no ESP space is needed at all! Unlock once via USB `[P]`, and the GPU stays unlocked across sleep cycles.
-    2. **Dedicated FAT32 Partition (1-Click Tool):** Run `Setup.bat` option `[3]` (or `tools\Create-Unlock-Partition.bat` / the button in Universal Control Center) to safely shrink 512 MB from any internal SSD and format a dedicated hidden FAT32 `GPU_UNLOCK` partition. UEFI mounts it automatically on boot, allowing `[I]` to store assets cleanly (verified in [#19](https://github.com/BrightRaider/universal-gpu-unlock/issues/19)).
-    3. **Resize ESP:** Use a partition manager to increase the ESP from 100 MB to 500 MB.
+- **Any Vendor & Platform:** Works across Founders Edition / AIB partners, Intel (`Z390`–`Z890`) & AMD (`AM4`/`AM5`), multi-drive Windows setups, and **Multi-GPU / Headless Compute** (e.g. monitors on iGPU, discrete GPU compute-only — [#14](https://github.com/BrightRaider/universal-gpu-unlock/issues/14), [#16](https://github.com/BrightRaider/universal-gpu-unlock/issues/16), [#17](https://github.com/BrightRaider/universal-gpu-unlock/issues/17)).
+- **ESP Space for Stickless `[I]`:** **Turing** needs ~28 MB (fits standard `100 MB` Windows ESPs automatically). **Ada & Ampere** need ~85 MB — use `Setup.bat [3]` to create a hidden `512 MB` `GPU_UNLOCK` partition, keep the USB drive plugged in as storage (`bootmgfw.efi` still boots Windows), or use `[P]` S3 Sleep ([#19](https://github.com/BrightRaider/universal-gpu-unlock/issues/19)).
+
+<details>
+<summary><b>⚙️ Platform & UEFI Engine Highlights (Turing GSP, Multi-GPU, Safeguards)</b></summary>
+
+- **Turing GSP Mode (`RTX 20` / `CMP 40HX`):** After pre-boot unlock, run `tools\Toggle-Turing-GSP.bat` once as Administrator in Windows to enable full enterprise compute throughput ([#15](https://github.com/BrightRaider/universal-gpu-unlock/issues/15), [#18](https://github.com/BrightRaider/universal-gpu-unlock/issues/18)).
+- **ASUS, AMI & ASRock AM4 Topologies:** Multi-display detachment (`127.61 TFLOPS` RTX 3080 Ti on ASUS PRIME Z690-A, [#16](https://github.com/BrightRaider/universal-gpu-unlock/issues/16)) and budget AM4 discovery (`106.05 TFLOPS` RTX 3080 on ASRock A520M-HVS, [#17](https://github.com/BrightRaider/universal-gpu-unlock/issues/17)) verified on hardware.
+- **`SLOT-REVIVE` & 32 MiB GFW Tolerance:** Decouples GOP via DriverBinding and pulses Secondary Bus Reset (SBR) on unresponsive OEM slots while preventing `-ERANGE` (`-34`) on 24GB+ cards.
+- **Boot-Loop Safeguard (`ATTEMPT.FLG`):** Stages a volatile progress flag before register writes; on any incomplete boot, `[SAFEGUARD ACTIVE]` restores clean stock handoff automatically.
+
+</details>
 
 <details>
 <summary><b>🔍 Community-Verified Hardware & Live Benchmarks (Click to expand)</b></summary>
@@ -149,19 +149,15 @@ The unlock removes artificial firmware restrictions on the **Tensor Cores (GEMM 
 
 ## 🛡️ Safety & Anti-Cheat
 
-- **Volatile (RAM-only):** The unlock lives in GPU registers and is gone after a full power-off. Without the `[I]` driver installed, the next boot is stock. On the test bench, the card always booted stock again after a power-off.
-- **Official NVIDIA Drivers:** Runs seamlessly with standard, unmodified NVIDIA Game Ready and Studio drivers (`nvlddmkm.sys`).
-- **Anti-Cheat:** No driver patches, kernel hooks, or runtime memory injection (`UEFISecureBootEnabled` stays `1`). **Riot Vanguard (*Valorant* / *League of Legends*)** works with **Secure Boot Enabled** via Option **`[I]` (`AdaUnlockDxe.efi`)** and a normal **Windows Boot Manager** boot (see [Secure Boot Configuration](#-secure-boot-configuration)). Easy Anti-Cheat, BattlEye, and Ricochet were not tested systematically.
-- **Pre-Flight Safety Engine:** Combines UEFI boot-loop safeguard (`ATTEMPT.FLG`), `SLOT-REVIVE` bus/D0 wake + read-only OEM `0x18` zeroed Root-Port diagnostics (`GuLogZeroedRootPortHint`), targeted `ConnectController` display handover (no global `AllHandles` reconnect, avoiding OVMF/`virtio-fs` hangs), 32 MiB GFW aperture tolerance, and headless `cmd=0x0` discovery with Windows pre-flight checks for **BitLocker**, **Secure Boot**, **ESP size**, and **ACPI S3 vs. Modern Standby (`S0ix`)** directly inside `Setup.bat` and the Control Center.
-- **Load-Aware Verification (`refs #22`):** `Check-GPU-Unlock.bat` and `Launch-Dashboard.bat` query pre-benchmark GPU load (`nvidia-smi utilization.gpu`) and compare `FMLA32` (`allow_fp16_reduced_precision_reduction=False`) vs. `FMLA16` (`True`) so background renders/games/upscalers no longer trigger false `STOCK RATE-LIMITER ACTIVE` warnings. *(On Ampere, `FMLA32/FMLA16` stays ~`1.00x` unlocked vs. ~`0.50x` clamped; on Ada `sm_89` and Turing `sm_75`, `~0.50–0.63x` reflects native hardware precision piping even when unlocked.)*
-- **Fast Resume & Idle Relock Guard:** Includes **`tools\Setup-FastResume.bat`** to enable Windows Hibernation and create a desktop **Fast-Unlock-Sleep** shortcut (~3s wake-up) plus the **Idle Relock Guard** (`RMDisableRtd3` + PCIe ASPM off) so Optimus laptops and secondary headless compute GPUs never drop their unlocked state during idle timeouts.
-- **Sleep Protection (for Cold-Boot `[U]` Users):** Includes **`tools\Toggle-Sleep-Button.bat`** (accessible via the Dashboard *Sleep Shortcut* button) to hide/restore the "Sleep" button in the Windows Start menu if you use `[U]` instead of `[P]`.
+- **Volatile (RAM-only):** The unlock lives in GPU registers and resets cleanly to factory stock on cold power-off (`0` permanent VBIOS writes).
+- **Official NVIDIA Drivers:** Runs with unmodified NVIDIA Game Ready and Studio drivers (`nvlddmkm.sys`).
+- **Anti-Cheat:** No driver patches, kernel hooks, or runtime memory injection (`UEFISecureBootEnabled` stays `1`). **Riot Vanguard (*Valorant* / *League of Legends*)** works with **Secure Boot Enabled** via `[I]` (`AdaUnlockDxe.efi`) and a normal **Windows Boot Manager** boot (see [Secure Boot & Anti-Cheat](#-secure-boot--anti-cheat)). Easy Anti-Cheat, BattlEye, and Ricochet were not tested systematically.
+- **Load- & S3-Aware Verification (`refs #22`):** `Check-GPU-Unlock.bat` and `Launch-Dashboard.bat` measure live pre-bench GPU load (`nvidia-smi` > 15%) and `FMLA32/FMLA16` precision ratios so active background workloads never trigger false `STOCK RATE-LIMITER ACTIVE` alerts.
+- **Sleep & Hibernation Helpers:** Includes `tools\Setup-FastResume.bat` (Hibernate shortcut + Idle Relock Guard `RMDisableRtd3` / PCIe ASPM off for Optimus & headless GPUs) and `tools\Toggle-Sleep-Button.bat` (hide Start Menu Sleep when using `[U]`).
 
 > [!WARNING]
-> **Windows S4 Hibernate vs. Pre-Boot ReBAR Overrides:** Universal GPU Unlock uses a pure SS-register unlock and never mutates pre-boot ReBAR BAR1 registers (`0x610`/`0xBC0`) or forces `ConnectController` GOP reconnects during resume — keeping pure-SS S4 Hibernate safe. Do **not** combine third-party pre-boot ReBAR overrides (`ReBarDxe` / `0x610`/`0xBC0`) with Windows S4 Hibernation (`Setup-FastResume.bat` / `shutdown /h`), as that combination causes hard `Kernel-Power 41` hangs (and forced GOP reconnects during S4 resume trigger TDR reboots).
-- **44-Cycle Testbench:** 44 supervised runs on my primary RTX 4090 platform. The last 18 (RUN0027 – RUN0044) all passed. The earlier runs were prototyping.
-- **Operational Deep-Dive:** Read the comprehensive telemetry and persistence whitepaper:  
-  👉 **[Operational Architecture, Persistence & Secure Boot Telemetry](docs/OPERATIONS_AND_PERSISTENCE.md)**
+> **Windows S4 Hibernate vs. Pre-Boot ReBAR Overrides:** Universal GPU Unlock uses a pure SS-register unlock without mutating pre-boot ReBAR BAR1 registers (`0x610`/`0xBC0`), keeping pure-SS S4 Hibernate safe. Do **not** combine third-party pre-boot ReBAR overrides (`ReBarDxe` / `0x610`/`0xBC0`) with Windows S4 Hibernation (`Setup-FastResume.bat` / `shutdown /h`), as that combination causes `Kernel-Power 41` hangs (and forced GOP reconnects during S4 resume trigger TDR reboots).
+- **Operational & Persistence Deep-Dive:** Read the full telemetry, UEFI safeguard, and S3 architecture guide in **[OPERATIONS_AND_PERSISTENCE.md](docs/OPERATIONS_AND_PERSISTENCE.md)**.
 
 ---
 
