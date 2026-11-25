@@ -15,7 +15,7 @@ NVIDIA beschränkt Consumer- und Mining-Grafikkarten in ihrer Firmware bei FP16-
 ### 1.2 Grenzen & Gaming-Verhalten
 - **Kein Gaming-Boost:** Der Unlock beeinflusst weder Shader-, Rasterizer- noch DLSS-Leistung in Spielen. In reinen PC-Spielen beträgt der Performance-Gewinn 0 %.
 - **100 % RAM-Only / Reversibel:** Es findet kein permanenter Flash des Grafik-VBIOS statt. Nach vollständigem Ausschalten des Systems (Kaltstart) befindet sich die GPU wieder im Originalzustand.
-- **Kompatibel mit Secure Boot & Anti-Cheat:** Durch Authenticode-Signierung bleibt Secure Boot aktiv (wichtig für Riot Vanguard / Windows 11).
+- **Kompatibel mit Secure Boot & Anti-Cheat:** Durch Authenticode-Signierung bleibt Secure Boot aktiv; Riot Vanguard (*Valorant* / *League of Legends*) funktioniert über Option **`[I]`** (`AdaUnlockDxe.efi`) mit normalem Start über den Windows Boot Manager (`bootmgfw.efi`) (siehe [Kapitel 4](#4-secure-boot-konfiguration)).
 
 ---
 
@@ -60,12 +60,17 @@ Grafikkarten ohne Display-Ausgänge (wie die NVIDIA CMP 40HX auf TU106-Basis) od
 
 Die Binärdateien (`BOOTX64.EFI` und `AdaUnlockDxe.efi`) sind mit einem dedizierten Authenticode-Zertifikat signiert.
 
-- **Option A (Einfachste Methode):** Secure Boot im BIOS vorübergehend auf **Disabled** stellen.
+- **Option A (Ohne Anti-Cheat, einfachste Methode):** Secure Boot im BIOS vorübergehend auf **Disabled** stellen.
 - **Option B (Secure Boot aktiv lassen):**
   1. Im BIOS Setup unter **Security ➔ Secure Boot ➔ Key Management** (bzw. *Custom Key Management*).
-  2. Unter **Authorized Signatures (`db`)** auf **Append Key** / **Enroll Signature** klicken.
+  2. Unter **Authorized Signatures (`db`)** auf **Append Key** / **Enroll Signature** klicken (*nicht* bestehende Microsoft-/OEM-Factory-Keys löschen oder ersetzen!).
   3. Auf den USB-Stick navigieren und **`AdaUnlock_SecureBoot.cer`** auswählen.
   4. Mit **F10** speichern und neu starten.
+
+### 4.1 Riot Vanguard (*Valorant* / *League of Legends*)
+1. **Secure Boot aktiv lassen** (`Standard`-Modus mit Factory-Keys; falls dein BIOS den USB-Stick oder `AdaUnlockDxe.efi` blockiert, **`AdaUnlock_SecureBoot.cer` per Append** zu `db` hinzufügen — Factory-Keys niemals löschen oder ersetzen).
+2. **Einmalig `[I]` installieren:** Einmal vom USB-Stick booten (`F8` / `F11` / `F12`), **`[I]`** drücken (`AdaUnlockDxe.efi` wird im UEFI-NVRAM eingetragen) und neu starten lassen.
+3. **Windows normal starten (nicht vom USB-Stick booten):** Danach immer regulär direkt über den **Windows Boot Manager (`bootmgfw.efi`)** starten *(reicht eine 100-MB-ESP nicht für Ada/Ampere-Assets aus, bleibt der USB-Stick als Speicher eingesteckt oder du legst per `Create-Unlock-Partition.bat` eine 512-MB-FAT32-Partition an — gestartet wird aber immer über den internen Windows Boot Manager)*.
 
 ---
 
@@ -1440,6 +1445,27 @@ In Version `v1.8.62` habe ich die Telemetrie-Sichtbarkeit für den Windows Kerne
 
 5. **Test-Suite & Regressionsschutz:**
    - Alle 8.749 Checks in 10 MSVC Host Test Suites erfolgreich (`MSVC_HOST_TESTS=PASS`).
+
+### 13.36 Die v1.8.63 Architektur: Pre-Booter MMIO-Diagnose-Snapshot
+In Version `v1.8.63` habe ich das 32-Bit-S3-Trampolin (`src/s3_facs.c`, `src/s3_facs.h`) um einen nicht-invasiven Pre-Booter-Snapshot (`+0xF0..+0x104`: `WPR2_LO`, `WPR2_HI`, `0x00100ce0`, `0x00118234`, `0x001100f4`, `0x00110100`) erweitert (`1.490` Bytes Trampolingröße, `L50` in `capture_s3_telem.ps1`, `8.755` Host-Checks).
+
+### 13.37 Die v1.8.64 Architektur: GSP FWSEC-FRTS WPR2-Partitionierung im S3-Trampolin
+In Version `v1.8.64` führt das 32-Bit-Trampolin vor dem SEC2 Booter die komplette 7-stufige FWSEC-FRTS-Sequenz auf der GSP-Engine (`0x00110000`) mit persistentem `64`-KB-FWSEC-Puffer (`Gu.s3_fwsec_dma`, `EfiReservedMemoryType`, `DMA_live = 0`) sowie Post-FWSEC-Telemetrie (`+0x108..+0x118`) aus (`1.954` Bytes Trampolingröße, `8.767` Host-Checks).
+
+### 13.38 Die v1.8.65 Architektur: Konsolidierung aller 6 GPU-DMA-Puffer in der Arena
+In Version `v1.8.65` werden alle 6 GPU-DMA-Strukturen (`20.662` von `21.000` Pages) in einen einzigen `EfiReservedMemoryType`-Deskriptor gelegt (`DMA_live = 0`, ohne separates ACPI-NVS-Kopieren; unberührte Metadaten-Kopie `Gu.s3_meta_cpu`/`Gu.s3_meta_dma`), ergänzt um Mailbox 1 (`+0x11C`) und `Find-MetaDmaAddress` in `capture_s3_telem.ps1` (`1.965` Bytes, Test `[10]`, `8.778` Host-Checks).
+
+### 13.39 Die v1.8.66 Architektur: Port-`0x80`-GSP-HALT-Gate & `0x0A00`-Envelope
+In Version `v1.8.66` habe ich nach FWSEC-FRTS ein Port-`0x80`-getaktetes `gsp_halt_poll`-Gate (bis `1.000.000` Iterationen auf `0x00110100 & 0x10`) eingebaut, das Code-Envelope auf `0x0A00` (`2.560` Bytes; Low-Data `0x0A00..0x0AEF`, `GDT/IDTR` `0x0B00..0x0B37`) erweitert und Diagnose-Snapshots (`+0x120..+0x148`) sowie `log_coldboot_gsp_pmc_diag()` ergänzt (`2.098` Bytes Trampolin, `8.791` Host-Checks).
+
+### 13.40 Die v1.8.67 Architektur: Port-`0x80`-SEC2-Poll, `[meta_dma]`-Probe & Dual-S3-Verifikation
+In Version `v1.8.67` wartet das Trampolin Port-`0x80`-getaktet bis `6.000.000` Iterationen auf den SEC2 Booter (`0x67b00001`), pollt `100.000` Iterationen bis zum SEC2-Halt und sichert `[meta_dma]` an `+0x14C` (`2.140` Bytes). Zwei aufeinanderfolgende S3-Sleep/Wake-Zyklen wurden am RTX-4090-Testsystem mit `290,51` TFLOPS FP16 / `291,99` TFLOPS BF16 (`4096x4096`) live verifiziert (`8.795` Host-Checks).
+
+### 13.41 Die v1.9.0 Architektur: Universal-S3 Phase 1 (Dynamische Brücken & VBIOS-Geometrie)
+In Version `v1.9.0` ermittelt `GuDiscoverUpstreamBridgeChain()` den vorgelagerten PCIe-Brückenpfad dynamisch (`GU_S3_MAX_BRIDGES = 4`, 16-MB-Bridge-Memory-Window-Formel, `GU_S3_RESUME_CONTEXT` `version = 2`, `216` Bytes), überträgt geparste Ada-FWSEC-/SEC2-VBIOS-Geometrien ins Trampolin (`2.281` Bytes, `279` Bytes Reserve) und ergänzt Pre-FWSEC GFW-BOOT-/VRAM-Gate (bis `2.000.000` Iterationen), striktes `< 0x000A0000`-Allokations-Gate sowie ACPI FADT Bit 21 (`S0ix`) & `XFirmwareWakingVector` Preflight (`9.782` Checks inkl. Test `[11]`).
+
+### 13.42 Die v1.9.1 Architektur: `EFI_PCI_ROOT_BRIDGE_IO_PROTOCOL`-Pfad & Riot-Vanguard-Doku
+In Version `v1.9.1` nutzt `GuDiscoverUpstreamBridgeChain()` primär `EFI_PCI_ROOT_BRIDGE_IO_PROTOCOL` (Segmentabgleich & rekursiver Walk ab Bus `0` für Root Ports ohne `PciIo`), korrigiert die `EFI_PCI_IO_PROTOCOL_GUID` als sauberen Fallback, entfernt den festen `0:3:1`-Fallback zugunsten eines klaren `EFI_NOT_FOUND`-Abbruchs (`9.798` Checks inkl. erweitertem Test `[11]`) und ergänzt die verifizierte Riot-Vanguard-Anleitung via Option `[I]` (`AdaUnlockDxe.efi`) + regulärem Windows Boot Manager (`bootmgfw.efi`).
 
 
 
