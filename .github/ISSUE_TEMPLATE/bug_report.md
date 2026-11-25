@@ -9,7 +9,7 @@ assignees: []
 ### 🖥️ Hardware & Platform Information
 - **GPU Model:** (e.g. RTX 4090, RTX 3080 10GB, RTX 2080 Ti)
 - **Motherboard / Chipset:** (e.g. ASUS ROG X670E, MSI Z790, Gigabyte B550)
-- **Release Version:** (e.g. v1.7.3)
+- **Release Version:** (e.g. v2.0.0)
 - **Storage Configuration:** (e.g. 1x NVMe M.2, 2x SSDs, etc.)
 - **Display Setup:** (e.g. 1x DP on target GPU, multi-monitor, etc.)
 
