@@ -103,13 +103,8 @@ Anti-cheat engines do **not** forbid users from owning and administering their m
 Because the GPU unlock is strictly **volatile (RAM-only)**, internal GPU register states interact directly with Windows ACPI power states:
 
 ### 1. Windows Fast Startup ("Hiberboot" / Hybrid S4)
-By default, Windows 10/11 "Shut Down" does not actually power off the system cleanly; it saves the Windows kernel session to disk in a hybrid hibernation state (`hiberfil.sys`). Upon powering back on, the motherboard may skip early DXE driver dispatching to reduce POST time, or the GPU may not enter a true cold state.
-* **Best Practice:** Disable Windows Fast Startup to ensure every power cycle performs a genuine hardware cold POST:
-  ```powershell
-  # Run in elevated Administrator PowerShell or Command Prompt:
-  powercfg /h off
-  ```
-  *(Alternatively: Control Panel -> Power Options -> Choose what the power buttons do -> Uncheck "Turn on fast startup").*
+By default, Windows 10/11 "Shut Down" does not actually power off the system cleanly; it saves the Windows kernel session to disk in a hybrid hibernation state (`hiberfil.sys`). While routine shutdowns often appear to work fine, an unexpected power loss (`Kernel-Power 41`) or boot/partition layout change can cause the next Fast Startup resume to abort with `Kernel-Boot ID 29` (`0xC00000D4`, `STATUS_NOT_SAME_DEVICE`), leaving `vgk.sys` stopped at boot (`WIN32_EXIT_CODE: 31`) and triggering Riot Vanguard's `restartRequired=true` prompt until a genuine Windows **Restart** (which bypasses `hiberfil.sys`) completes.
+* **Recovery & Best Practice:** If Vanguard stops after an unexpected reset, perform a clean Windows **Restart** (not Shut Down). To disable only Fast Startup permanently while keeping ACPI S3 Sleep intact, uncheck *"Turn on fast startup"* in Control Panel -> Power Options (or set `HiberbootEnabled = 0` under `HKLM\SYSTEM\CurrentControlSet\Control\Session Manager\Power`; `powercfg /h off` disables both Fast Startup and Hibernate).
 
 ### 2. Standby / Sleep (ACPI S3 / Modern Standby)
 Entering S3 Sleep cuts power to the GPU execution clusters. Upon waking, `nvlddmkm.sys` resets the graphics card from the physical onboard VBIOS, restoring factory rate-limiters.
