@@ -7,6 +7,7 @@
 > * **DO NOT OPEN GITHUB ISSUES FOR REBARUEFI:** Any issues opened on this repository regarding motherboard BIOS flashing errors, boot loops, black screens, or ReBarUEFI configuration will be **closed immediately without support**.
 > * **RISK OF MOTHERBOARD BRICK:** Modifying motherboard BIOS ROMs with third-party DXE drivers carries a real risk of soft-bricking your motherboard. Only attempt this if your motherboard features physical **USB BIOS Flashback** or a dual-BIOS switch!
 > * **YOUR GPU UNLOCK IS ALREADY 100% ACTIVE:** Your GPU compute rate-limiter bypass operates on BAR0 and is **already running at 100% full hardware compute capacity** (e.g. 25.82 TFLOPS on RTX 2060). ReBAR does NOT increase raw tensor compute TFLOPS; it only optimizes PCIe texture/weight transfer speeds.
+> * **DO NOT COMBINE WITH WINDOWS S4 HIBERNATE:** Pre-boot ReBAR overrides (`ReBarDxe` / `0x610`/`0xBC0` aperture overrides) combined with Windows S4 Hibernation (`Setup-FastResume.bat` / `shutdown /h`) can trigger hard `Kernel-Power 41` hangs. Disable Hibernation (`powercfg /h off`) if testing BIOS ReBarUEFI modifications, or keep S4 without pre-boot ReBAR overrides.
 
 ---
 

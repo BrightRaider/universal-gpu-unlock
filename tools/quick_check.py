@@ -26,14 +26,18 @@ C_RESET = "\033[0m"
 # Shared helpers live next to this script (tools/gu_system_info.py).
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from gu_system_info import (  # noqa: E402
-    CARD_PROFILES,
     apply_saved_power_limits,
+    benchmark_gemm,
+    classify_unlock_status,
     find_nvidia_smi,
     get_firmware_mode,
+    get_gpu_utilization,
     get_last_wake_time,
     get_power_limit_info,
     get_rebar_info,
     get_s3_armed_status,
+    measure_fmla_ratio,
+    resolve_card_profile,
 )
 
 
@@ -68,31 +72,6 @@ def copy_to_clipboard(text):
             pass
     return False
 
-def benchmark_gemm(device, dtype, size=4096, warmup=5, runs=25):
-    if hasattr(torch.backends, "cudnn") and hasattr(torch.backends.cudnn, "benchmark"):
-        torch.backends.cudnn.benchmark = True
-    flops = 2.0 * (size ** 3)
-    a = torch.randn((size, size), dtype=dtype, device=device)
-    b = torch.randn((size, size), dtype=dtype, device=device)
-    
-    for _ in range(warmup):
-        c = torch.matmul(a, b)
-    torch.cuda.synchronize(device)
-    
-    start_ev = torch.cuda.Event(enable_timing=True)
-    end_ev = torch.cuda.Event(enable_timing=True)
-    
-    start_ev.record()
-    for _ in range(runs):
-        c = torch.matmul(a, b)
-    end_ev.record()
-    torch.cuda.synchronize(device)
-    
-    avg_ms = start_ev.elapsed_time(end_ev) / runs
-    tflops = (flops / (avg_ms * 1e-3)) / 1e12
-    del a, b, c
-    return avg_ms, tflops
-
 def evaluate_gpu(dev_idx, dev_count, fw_str):
     device = torch.device(f"cuda:{dev_idx}")
     gpu_name = torch.cuda.get_device_name(dev_idx)
@@ -100,57 +79,56 @@ def evaluate_gpu(dev_idx, dev_count, fw_str):
     sm_count = props.multi_processor_count
     arch = f"sm_{props.major}{props.minor}"
 
-    profile = None
-    gpu_lower = gpu_name.lower()
-    for key, prof in CARD_PROFILES.items():
-        if key in gpu_lower:
-            profile = prof
-            break
-
-    if profile is None:
-        if props.major == 8 and props.minor == 9:
-            threshold = sm_count * 1.35
-        elif props.major == 8 and props.minor == 6:
-            threshold = sm_count * 1.15
-        elif props.major == 7 and props.minor == 5:
-            threshold = sm_count * 0.65
-        else:
-            threshold = sm_count * 1.0
-        profile = {"min_unlocked": threshold * 1.15, "threshold": threshold, "stock_typical": threshold * 0.70}
-
+    # Sample pre-benchmark GPU load before allocating CUDA tensors.
+    util_info = get_gpu_utilization(dev_idx)
+    profile = resolve_card_profile(gpu_name, props.major, props.minor, sm_count)
     size = 4096
 
-    # 1. Primary Benchmark: FP16 Tensor Cores
-    ms_fp16, tflops_fp16 = benchmark_gemm(device, torch.float16, size=size, warmup=8, runs=25)
+    matmul = getattr(getattr(torch.backends, "cuda", None), "matmul", None)
+    has_fmla_flag = matmul is not None and hasattr(matmul, "allow_fp16_reduced_precision_reduction")
+    has_tf32 = props.major >= 8 and matmul is not None and hasattr(matmul, "allow_tf32")
+    orig_fmla = getattr(matmul, "allow_fp16_reduced_precision_reduction", True) if matmul else True
+    orig_tf32 = getattr(matmul, "allow_tf32", True) if matmul else True
 
-    # 2. Secondary Benchmark: BF16 Tensor Cores (Ampere / Ada sm_80+ only; Turing sm_75 lacks hardware BF16)
-    has_bf16 = props.major >= 8 and hasattr(torch.cuda, "is_bf16_supported") and torch.cuda.is_bf16_supported()
-    if has_bf16:
-        ms_bf16, tflops_bf16 = benchmark_gemm(device, torch.bfloat16, size=size, warmup=4, runs=15)
-    else:
-        ms_bf16, tflops_bf16 = 0.0, 0.0
+    try:
+        # 1. Primary Benchmark: FP16 Tensor Cores (FMLA16 when supported)
+        if has_fmla_flag:
+            matmul.allow_fp16_reduced_precision_reduction = True
+        ms_fp16, tflops_fp16 = benchmark_gemm(torch, device, torch.float16, size=size, warmup=8, runs=25)
 
-    # 3. TF32 Tensor Cores (Ampere / Ada, allow_tf32=True)
-    has_tf32 = props.major >= 8 and hasattr(torch.backends.cuda.matmul, "allow_tf32")
-    orig_tf32 = getattr(torch.backends.cuda.matmul, "allow_tf32", True)
-    if has_tf32:
-        torch.backends.cuda.matmul.allow_tf32 = True
-        ms_tf32, tflops_tf32 = benchmark_gemm(device, torch.float32, size=size, warmup=4, runs=15)
-    else:
-        ms_tf32, tflops_tf32 = 0.0, 0.0
+        # 1b. Load-Independent Indicator: FMLA32 (reduced=False) vs FMLA16 (reduced=True)
+        fmla_info = measure_fmla_ratio(torch, device, size=size, tflops_fmla16=tflops_fp16)
 
-    # 4. Physical Negative Control: Standard FP32 CUDA Cores (allow_tf32=False)
-    if hasattr(torch.backends.cuda.matmul, "allow_tf32"):
-        torch.backends.cuda.matmul.allow_tf32 = False
-    ms_fp32, tflops_fp32 = benchmark_gemm(device, torch.float32, size=size, warmup=4, runs=15)
+        # 2. Secondary Benchmark: BF16 Tensor Cores (Ampere / Ada sm_80+ only; Turing sm_75 lacks hardware BF16)
+        has_bf16 = props.major >= 8 and hasattr(torch.cuda, "is_bf16_supported") and torch.cuda.is_bf16_supported()
+        if has_bf16:
+            ms_bf16, tflops_bf16 = benchmark_gemm(torch, device, torch.bfloat16, size=size, warmup=4, runs=15)
+        else:
+            ms_bf16, tflops_bf16 = 0.0, 0.0
 
-    if hasattr(torch.backends.cuda.matmul, "allow_tf32"):
-        torch.backends.cuda.matmul.allow_tf32 = orig_tf32
+        # 3. TF32 Tensor Cores (Ampere / Ada, allow_tf32=True)
+        if has_tf32:
+            matmul.allow_tf32 = True
+            ms_tf32, tflops_tf32 = benchmark_gemm(torch, device, torch.float32, size=size, warmup=4, runs=15)
+        else:
+            ms_tf32, tflops_tf32 = 0.0, 0.0
 
-    torch.cuda.empty_cache()
+        # 4. Physical Negative Control: Standard FP32 CUDA Cores (allow_tf32=False)
+        if has_tf32:
+            matmul.allow_tf32 = False
+        ms_fp32, tflops_fp32 = benchmark_gemm(torch, device, torch.float32, size=size, warmup=4, runs=15)
+    finally:
+        if has_fmla_flag:
+            matmul.allow_fp16_reduced_precision_reduction = orig_fmla
+        if has_tf32:
+            matmul.allow_tf32 = orig_tf32
+        torch.cuda.empty_cache()
 
-    is_unlocked = tflops_fp16 >= profile["threshold"]
+    verdict = classify_unlock_status(tflops_fp16, profile, util_info, fmla_info, props.major, props.minor)
+    is_unlocked = verdict["is_unlocked"]
+    code = verdict["code"]
     ratio = tflops_fp16 / tflops_fp32 if tflops_fp32 > 0 else 1.0
+    fmla_ratio = verdict["fmla_ratio"]
 
     bar1, fb, rebar_active = get_rebar_info(dev_idx)
     gen_max, width_max, is_throttled = get_pcie_info(dev_idx)
@@ -158,6 +136,14 @@ def evaluate_gpu(dev_idx, dev_count, fw_str):
     prefix = f"GPU [{dev_idx + 1}/{dev_count}]: " if dev_count > 1 else ""
     print(f"  {prefix}Hardware        : {gpu_name}")
     print(f"  {prefix}Architecture    : {arch} ({sm_count} Streaming Multiprocessors)")
+    if util_info.get("gpu_util") is not None:
+        u_gpu = util_info["gpu_util"]
+        u_mem = util_info.get("mem_util")
+        mem_txt = f", {u_mem:.0f}% Mem" if u_mem is not None else ""
+        if util_info["under_load"]:
+            print(f"  {prefix}Pre-Bench Load  : {C_YELLOW}[!] {u_gpu:.0f}% GPU{mem_txt} (External workload active!){C_RESET}")
+        else:
+            print(f"  {prefix}Pre-Bench Load  : {C_GREEN}[OK] {u_gpu:.0f}% GPU{mem_txt} (Idle){C_RESET}")
     if rebar_active is True:
         print(f"  {prefix}Resizable BAR   : {C_GREEN}[OK] ENABLED (BAR1: {bar1} MiB / VRAM: {fb} MiB){C_RESET}")
     elif rebar_active is False:
@@ -174,6 +160,11 @@ def evaluate_gpu(dev_idx, dev_count, fw_str):
     print(f"  {prefix}Matrix Dimension: {size}x{size} Dense Matrix Multiply (GEMM)")
     print("-" * 72)
     print(f"  [1] FP16 Tensor Cores   : {tflops_fp16:>6.2f} TFLOPS ({ms_fp16:.3f} ms)  -> Primary Rate-Limiter Metric")
+    if fmla_info.get("supported") and fmla_info.get("fmla32_tflops") is not None:
+        print(
+            f"  [1b] FP16 FMLA32 Strict : {fmla_info['fmla32_tflops']:>6.2f} TFLOPS ({fmla_info['fmla32_ms']:.3f} ms)"
+            f"  -> FP32-Accum Indicator"
+        )
     if has_bf16:
         print(f"  [2] BF16 Tensor Cores   : {tflops_bf16:>6.2f} TFLOPS ({ms_bf16:.3f} ms)  -> Bfloat16 AI Training Format")
     elif props.major == 7:
@@ -184,26 +175,51 @@ def evaluate_gpu(dev_idx, dev_count, fw_str):
     print("-" * 72)
     print("  PHYSICAL PROOF OF MECHANISM (Negative Control Analysis):")
     print(f"  * Tensor/CUDA Ratio     : {ratio:.2f}x execution throughput multiplier")
+    if fmla_ratio is not None:
+        if verdict["supports_fmla_verdict"]:
+            fmla_note = "~1.00x = unlocked vs. ~0.50x = stock clamped"
+        else:
+            fmla_note = "native 1:2 FMLA32:FMLA16 hardware ratio on this architecture"
+        print(f"  * FMLA32/FMLA16 Ratio   : {fmla_ratio:.2f}x ({fmla_note})")
     print(f"  * FP32 CUDA Baseline    : {tflops_fp32:.2f} TFLOPS (Factory stock compute preserved)")
-    if is_unlocked:
+    if code == "UNLOCKED":
         print("  * Hardware Invariance   : Confirms rate-limiter bypass WITHOUT core overclocking.")
+    elif code == "UNLOCKED_UNDER_LOAD":
+        print("  * Hardware Invariance   : FMLA32/FMLA16 ratio confirms unlock despite background GPU load.")
+    elif code == "EXTERNAL_LOAD":
+        print("  * Hardware Status       : Raw TFLOPS suppressed by concurrent GPU load (status inconclusive).")
+    elif code == "UNLOCKED_LOW_TFLOPS":
+        print("  * Hardware Status       : FMLA32/FMLA16 ratio looks unlocked; inspect power limit or clocks.")
     else:
         print("  * Hardware Status       : Tensor datapath is restricted by factory rate-limiter.")
     print("-" * 72)
 
-    if is_unlocked:
+    if code == "UNLOCKED":
         print(f"  {C_GREEN_BOLD}STATUS: [OK] FULLY UNLOCKED! ({tflops_fp16:.1f} TFLOPS){C_RESET}")
         print(f"  {C_GREEN}Hardware rate-limiter is INACTIVE.{C_RESET}")
         print(f"  {C_GREEN}GPU is running at 100% full unrestricted tensor compute capacity.{C_RESET}")
+        if util_info.get("under_load"):
+            print(f"  {C_YELLOW}[i] Note: GPU had {util_info['gpu_util']:.0f}% external load; pause apps for peak score.{C_RESET}")
         if props.major >= 8:
             print(f"  {C_CYAN}[i] AI PERFORMANCE PRO-TIP (cuBLASLt Kernel Heuristics):{C_RESET}")
             print(f"      cuBLASLt defaults to stock-calibrated kernels on GeForce cards.")
             print(f"      In PyTorch & ComfyUI, enable autotuning for maximum throughput (+15% to +35%):")
             print(f"      -> torch.backends.cudnn.benchmark = True{C_RESET}")
+    elif code == "UNLOCKED_UNDER_LOAD":
+        print(f"  {C_GREEN_BOLD}STATUS: [OK] UNLOCKED (Under {util_info['gpu_util']:.0f}% External Load | {tflops_fp16:.1f} TFLOPS){C_RESET}")
+        print(f"  {C_YELLOW}[WARNING] GPU is under external load ({util_info['gpu_util']:.0f}%) - pause games/renders/upscalers for an accurate peak TFLOPS check.{C_RESET}")
+        print(f"  {C_GREEN}FMLA32/FMLA16 ratio ({fmla_ratio:.2f}x) confirms unthrottled tensor execution despite competing GPU work.{C_RESET}")
+    elif code == "EXTERNAL_LOAD":
+        print(f"  {C_YELLOW}STATUS: [WARNING] EXTERNAL GPU LOAD DETECTED ({util_info['gpu_util']:.0f}% util | {tflops_fp16:.1f} TFLOPS){C_RESET}")
+        print(f"  {C_YELLOW}GPU is under external load - pause games/renders/upscalers for an accurate status check.{C_RESET}")
+        print(f"  Benchmark skipped stock verdict: concurrent workloads share GPU time, VRAM bandwidth, and power budget.")
+    elif code == "UNLOCKED_LOW_TFLOPS":
+        print(f"  {C_YELLOW}STATUS: [!] LIKELY UNLOCKED AT REDUCED CLOCKS/POWER ({tflops_fp16:.1f} TFLOPS | FMLA {fmla_ratio:.2f}x){C_RESET}")
+        print(f"  Expected idle unrestricted throughput: > {profile['threshold']:.0f} TFLOPS. Check Power Limit / thermals.")
     else:
         print(f"  {C_RED_BOLD}STATUS: [WARNING] STOCK RATE-LIMITER ACTIVE! ({tflops_fp16:.1f} TFLOPS){C_RESET}")
         print(f"  Expected unlocked performance: > {profile['threshold']:.0f} TFLOPS (typical ~{profile['min_unlocked']:.0f} TFLOPS).")
-        print("  Recommendation: Boot via USB [U]/[I] or resume from Hibernation (shutdown /h).")
+        print("  Recommendation: Boot via USB [U]/[P]/[I] (or S4 Hibernation without pre-boot ReBAR overrides).")
         if props.major == 7:
             print("  Note for Turing: Verify EnableGpuFirmware = 1 is configured in Windows Registry.")
 
@@ -226,6 +242,10 @@ def evaluate_gpu(dev_idx, dev_count, fw_str):
         "name": gpu_name,
         "tflops": tflops_fp16,
         "is_unlocked": is_unlocked,
+        "status_code": code,
+        "under_load": verdict["under_load"],
+        "gpu_util": verdict["gpu_util"],
+        "fmla_ratio": fmla_ratio,
         "rebar_active": rebar_active,
         "bar1": bar1,
         "gen_max": gen_max,
@@ -344,19 +364,25 @@ def main():
         print("  MULTI-GPU SYSTEM STATUS SUMMARY:")
         print("-" * 72)
         for res in results:
-            tag = f"{C_GREEN}[UNLOCKED]{C_RESET}" if res["is_unlocked"] else f"{C_RED_BOLD}[STOCK]{C_RESET}"
+            sc = res.get("status_code")
+            if res["is_unlocked"]:
+                tag = f"{C_GREEN}[UNLOCKED]{C_RESET}"
+            elif sc == "EXTERNAL_LOAD":
+                tag = f"{C_YELLOW}[EXTERNAL LOAD]{C_RESET}"
+            else:
+                tag = f"{C_RED_BOLD}[STOCK]{C_RESET}"
             print(f"  * GPU {res['dev_idx']} [{res['name']}]: {res['tflops']:.1f} TFLOPS  {tag}")
         print("-" * 72)
         if all_unlocked:
             print(f"  {C_GREEN_BOLD}OVERALL STATUS: ALL {dev_count} GPUS FULLY UNLOCKED!{C_RESET}")
         else:
             unlocked_num = sum(1 for r in results if r["is_unlocked"])
-            print(f"  {C_YELLOW}OVERALL STATUS: {unlocked_num} of {dev_count} GPUs unlocked.{C_RESET}")
+            print(f"  {C_YELLOW}OVERALL STATUS: {unlocked_num} of {dev_count} GPUs verified unlocked.{C_RESET}")
 
     # Build clipboard summary badge
     if dev_count == 1:
         r0 = results[0]
-        tag = "UNLOCKED" if r0["is_unlocked"] else "STOCK"
+        tag = "UNLOCKED" if r0["is_unlocked"] else ("EXTERNAL_LOAD" if r0.get("status_code") == "EXTERNAL_LOAD" else "STOCK")
         rebar_str = f"{r0['bar1']}MB (Active)" if r0["rebar_active"] else ("Disabled" if r0["rebar_active"] is False else "N/A")
         pcie_str = f"Gen{r0['gen_max']} x{r0['width_max']}" if r0["gen_max"] else "N/A"
         summary_badge = f"[{tag}] {r0['name']}: {r0['tflops']:.1f} TFLOPS | ReBAR: {rebar_str} | PCIe: {pcie_str} | BIOS: {fw_str}"

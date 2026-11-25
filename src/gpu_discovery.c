@@ -147,6 +147,43 @@ static VOID GuSlotRevive(EFI_BOOT_SERVICES *bs, EFI_HANDLE handle,
   GuLog("SLOT-REVIVE: Post-revive check: DevID=0x%08x cmd=0x%04x bar0=0x%08x\n",
         config[0], (unsigned)(config[1] & 0xffff), config[4]);
 }
+
+/* Read-only diagnostic when zero NVIDIA GPUs are accepted: checks whether OEM
+ * firmware zeroed Root Port Secondary/Subordinate bus registers (0x18) leaving
+ * downstream slots reporting 0xFFFF despite active display output. */
+static VOID GuLogZeroedRootPortHint(EFI_BOOT_SERVICES *bs) {
+  EFI_HANDLE *handles = NULL;
+  UINTN count = 0, unresp_0xffff = 0, zeroed_rp = 0;
+  if (!bs || !bs->LocateHandleBuffer || !bs->HandleProtocol || !bs->FreePool) return;
+  if (EFI_ERROR(bs->LocateHandleBuffer(ByProtocol, &PciGuid, NULL, &count, &handles)) || !handles)
+    return;
+  for (UINTN i = 0; i < count; i++) {
+    EFI_PCI_IO_PROTOCOL *io = NULL;
+    UINT32 cfg[8];
+    UINTN seg = 0, bus = 0, dev = 0, fun = 0;
+    if (EFI_ERROR(bs->HandleProtocol(handles[i], &PciGuid, (VOID **)&io)) || !io || !io->Pci.Read)
+      continue;
+    if (EFI_ERROR(io->Pci.Read(io, EfiPciIoWidthUint32, 0, 8, cfg))) continue;
+    if (cfg[0] == 0xffffffffU || (cfg[0] & 0xffffU) == 0xffffU) {
+      if (io->GetLocation && !EFI_ERROR(io->GetLocation(io, &seg, &bus, &dev, &fun)) && bus > 0) {
+        unresp_0xffff++;
+      }
+      continue;
+    }
+    if (((cfg[2] >> 16) & 0xffffU) == 0x0604U) {
+      UINT8 sec = (UINT8)((cfg[0x18 / 4] >> 8) & 0xffU);
+      UINT8 sub = (UINT8)((cfg[0x18 / 4] >> 16) & 0xffU);
+      if (sec == 0 && sub == 0) {
+        zeroed_rp++;
+      }
+    }
+  }
+  (VOID)bs->FreePool(handles);
+  if (unresp_0xffff > 0 || zeroed_rp > 0) {
+    GuLog("Discovery OEM hint: %u PCI handle(s) on bus>0 read 0xFFFF, %u PCIe bridge(s) have 0x18 sec=0/sub=0 (check OEM POST bus zeroing)\n",
+          (unsigned)unresp_0xffff, (unsigned)zeroed_rp);
+  }
+}
 #endif
 
 EFI_STATUS GuDiscoverAllGpus(EFI_HANDLE image, EFI_SYSTEM_TABLE *table,
@@ -307,7 +344,12 @@ candidate_accepted:
   }
 
   *out_count = discovered;
-  if (discovered == 0) return EFI_UNSUPPORTED;
+  if (discovered == 0) {
+#ifndef GU_DISCOVERY_HOST_TEST
+    GuLogZeroedRootPortHint(table->BootServices);
+#endif
+    return EFI_UNSUPPORTED;
+  }
   return EFI_SUCCESS;
 }
 

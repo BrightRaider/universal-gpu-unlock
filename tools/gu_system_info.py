@@ -18,6 +18,7 @@ import time
 os.environ.setdefault("CUDA_DEVICE_ORDER", "PCI_BUS_ID")
 
 WAKE_TASK_NAME = "UniversalGpuUnlock_ReapplyPL"
+EXTERNAL_LOAD_THRESHOLD = 15.0
 
 
 def find_nvidia_smi():
@@ -770,3 +771,191 @@ def get_last_wake_time():
         return res or None
     except Exception:
         return None
+
+
+def get_gpu_utilization(gpu_index=0, threshold=EXTERNAL_LOAD_THRESHOLD):
+    """Query pre-benchmark GPU/memory utilization via nvidia-smi to detect external load."""
+    result = {"gpu_util": None, "mem_util": None, "under_load": False}
+    exe = find_nvidia_smi()
+    if not exe:
+        return result
+
+    try:
+        out = _run_hidden([
+            exe, "-i", str(gpu_index),
+            "--query-gpu=utilization.gpu,utilization.memory",
+            "--format=csv,noheader,nounits",
+        ])
+        parts = [p.strip() for p in out.strip().splitlines()[0].split(",")]
+        if len(parts) >= 1:
+            result["gpu_util"] = _parse_float(parts[0])
+        if len(parts) >= 2:
+            result["mem_util"] = _parse_float(parts[1])
+    except Exception:
+        pass
+
+    if result["gpu_util"] is None:
+        try:
+            q_out = _run_hidden([exe, "-i", str(gpu_index), "-q", "-d", "UTILIZATION"])
+            m_gpu = re.search(r"Gpu\s*:\s*([0-9.]+)\s*%", q_out)
+            m_mem = re.search(r"Memory\s*:\s*([0-9.]+)\s*%", q_out)
+            if m_gpu:
+                result["gpu_util"] = _parse_float(m_gpu.group(1))
+            if m_mem:
+                result["mem_util"] = _parse_float(m_mem.group(1))
+        except Exception:
+            pass
+
+    if result["gpu_util"] is not None:
+        result["under_load"] = result["gpu_util"] > float(threshold)
+    return result
+
+
+def resolve_card_profile(gpu_name, major, minor, sm_count):
+    """Return expected unlocked/stock TFLOPS thresholds for a CUDA GPU."""
+    gpu_lower = str(gpu_name).lower()
+    for key, prof in CARD_PROFILES.items():
+        if key in gpu_lower:
+            return dict(prof)
+
+    if major == 8 and minor == 9:
+        threshold = sm_count * 1.35
+    elif major == 8 and minor in (0, 6):
+        threshold = sm_count * 1.15
+    elif major == 7 and minor == 5:
+        threshold = sm_count * 0.65
+    else:
+        threshold = sm_count * 1.0
+    return {
+        "min_unlocked": threshold * 1.15,
+        "threshold": threshold,
+        "stock_typical": threshold * 0.70,
+    }
+
+
+def benchmark_gemm(torch_mod, device, dtype, size=4096, warmup=5, runs=25):
+    """Run synchronized square CUDA GEMM and return (avg_ms, tflops)."""
+    if hasattr(torch_mod.backends, "cudnn") and hasattr(torch_mod.backends.cudnn, "benchmark"):
+        torch_mod.backends.cudnn.benchmark = True
+    flops = 2.0 * (size ** 3)
+    a = torch_mod.randn((size, size), dtype=dtype, device=device)
+    b = torch_mod.randn((size, size), dtype=dtype, device=device)
+
+    for _ in range(warmup):
+        c = torch_mod.matmul(a, b)
+    torch_mod.cuda.synchronize(device)
+
+    start_ev = torch_mod.cuda.Event(enable_timing=True)
+    end_ev = torch_mod.cuda.Event(enable_timing=True)
+    start_ev.record()
+    for _ in range(runs):
+        c = torch_mod.matmul(a, b)
+    end_ev.record()
+    torch_mod.cuda.synchronize(device)
+
+    avg_ms = start_ev.elapsed_time(end_ev) / runs
+    tflops = (flops / (avg_ms * 1e-3)) / 1e12 if avg_ms > 0 else 0.0
+    del a, b, c
+    return avg_ms, tflops
+
+
+def measure_fmla_ratio(torch_mod, device, size=4096, tflops_fmla16=None):
+    """Compare FP16 FMLA16 (reduced=True) vs FMLA32 (reduced=False) and restore setting."""
+    matmul = getattr(getattr(torch_mod.backends, "cuda", None), "matmul", None)
+    if matmul is None or not hasattr(matmul, "allow_fp16_reduced_precision_reduction"):
+        return {
+            "supported": False,
+            "fmla16_tflops": tflops_fmla16,
+            "fmla32_tflops": None,
+            "fmla32_ms": None,
+            "ratio": None,
+        }
+
+    orig_val = matmul.allow_fp16_reduced_precision_reduction
+    try:
+        if tflops_fmla16 is None:
+            matmul.allow_fp16_reduced_precision_reduction = True
+            _, tflops_fmla16 = benchmark_gemm(torch_mod, device, torch_mod.float16, size=size, warmup=6, runs=20)
+
+        matmul.allow_fp16_reduced_precision_reduction = False
+        ms_fmla32, tflops_fmla32 = benchmark_gemm(torch_mod, device, torch_mod.float16, size=size, warmup=4, runs=15)
+    finally:
+        matmul.allow_fp16_reduced_precision_reduction = orig_val
+
+    ratio = (tflops_fmla32 / tflops_fmla16) if (tflops_fmla16 and tflops_fmla16 > 0) else None
+    return {
+        "supported": True,
+        "fmla16_tflops": tflops_fmla16,
+        "fmla32_tflops": tflops_fmla32,
+        "fmla32_ms": ms_fmla32,
+        "ratio": ratio,
+    }
+
+
+def classify_unlock_status(tflops_fp16, profile, util_info, fmla_info, major, minor):
+    """Determine unlock verdict without misclassifying external GPU load as stock clamping.
+
+    On Ampere (sm_80/sm_86), FMLA32/FMLA16 stays near ~1.00x when unlocked vs ~0.50x
+    when stock rate-limited, independent of absolute TFLOPS drops under load.
+    On Ada (sm_89) and Turing (sm_75), PyTorch FMLA32 natively runs at ~0.50-0.63x of
+    FMLA16 even when unlocked, so those architectures avoid treating ~0.55x as clamped.
+    """
+    tflops_ok = tflops_fp16 >= profile["threshold"]
+    under_load = bool(util_info and util_info.get("under_load"))
+    gpu_util = util_info.get("gpu_util") if util_info else None
+    fmla_ratio = fmla_info.get("ratio") if (fmla_info and fmla_info.get("supported")) else None
+    supports_fmla_verdict = (major == 8 and minor != 9)
+    fmla_unlocked = supports_fmla_verdict and (fmla_ratio is not None) and (fmla_ratio >= 0.80)
+
+    if tflops_ok:
+        return {
+            "code": "UNLOCKED",
+            "is_unlocked": True,
+            "inconclusive": False,
+            "under_load": under_load,
+            "gpu_util": gpu_util,
+            "fmla_ratio": fmla_ratio,
+            "supports_fmla_verdict": supports_fmla_verdict,
+        }
+
+    if under_load:
+        if fmla_unlocked:
+            return {
+                "code": "UNLOCKED_UNDER_LOAD",
+                "is_unlocked": True,
+                "inconclusive": True,
+                "under_load": True,
+                "gpu_util": gpu_util,
+                "fmla_ratio": fmla_ratio,
+                "supports_fmla_verdict": supports_fmla_verdict,
+            }
+        return {
+            "code": "EXTERNAL_LOAD",
+            "is_unlocked": False,
+            "inconclusive": True,
+            "under_load": True,
+            "gpu_util": gpu_util,
+            "fmla_ratio": fmla_ratio,
+            "supports_fmla_verdict": supports_fmla_verdict,
+        }
+
+    if fmla_unlocked and tflops_fp16 >= 5.0:
+        return {
+            "code": "UNLOCKED_LOW_TFLOPS",
+            "is_unlocked": True,
+            "inconclusive": True,
+            "under_load": False,
+            "gpu_util": gpu_util,
+            "fmla_ratio": fmla_ratio,
+            "supports_fmla_verdict": supports_fmla_verdict,
+        }
+
+    return {
+        "code": "STOCK",
+        "is_unlocked": False,
+        "inconclusive": False,
+        "under_load": False,
+        "gpu_util": gpu_util,
+        "fmla_ratio": fmla_ratio,
+        "supports_fmla_verdict": supports_fmla_verdict,
+    }

@@ -10,6 +10,9 @@
 
 extern GU_ASSET GuAssets[5];
 
+/* S3/S4 Resume Invariant: restore only PCI Command MSE/BME, upstream bridges, SEC2 Falcon,
+ * and SS0/SS1 rate-limiter latches. Never modify BAR1 ReBAR apertures (0x610/0xBC0) or
+ * force BootServices ConnectController GOP reconnects across resume (avoids S4 Kernel-Power 41 / TDR). */
 VOID EFIAPI GuS3ResumeDispatch(IN CONST VOID *This, IN VOID *Context) {
   GU_S3_RESUME_CONTEXT *ctx = (GU_S3_RESUME_CONTEXT *)Context;
   if (!ctx || ctx->magic != GU_S3_CONTEXT_MAGIC) {

@@ -12,17 +12,21 @@ from tkinter import messagebox, ttk
 # Shared helpers live next to this script (tools/gu_system_info.py).
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from gu_system_info import (  # noqa: E402
-    CARD_PROFILES,
     apply_saved_power_limits,
+    benchmark_gemm,
+    classify_unlock_status,
     configure_wake_reapply_task,
     find_nvidia_smi,
     get_firmware_mode,
+    get_gpu_utilization,
     get_last_wake_time,
     get_power_limit_info,
     get_rebar_info,
     get_s3_armed_status,
     load_benchmark_baseline,
     load_user_config,
+    measure_fmla_ratio,
+    resolve_card_profile,
     save_benchmark_baseline,
     set_power_limit,
 )
@@ -797,94 +801,111 @@ class GpuUnlockApp(tk.Tk):
             props = torch.cuda.get_device_properties(dev_idx)
             size = 4096
 
-            if hasattr(torch.backends, "cudnn") and hasattr(torch.backends.cudnn, "benchmark"):
-                torch.backends.cudnn.benchmark = True
+            # Query external load before running PyTorch CUDA GEMM kernels.
+            util_info = get_gpu_utilization(dev_idx)
+            profile = resolve_card_profile(gpu_name, props.major, props.minor, props.multi_processor_count)
 
-            profile = None
-            gpu_lower = gpu_name.lower()
-            for key, prof in CARD_PROFILES.items():
-                if key in gpu_lower:
-                    profile = prof
-                    break
-            if profile is None:
-                if props.major == 8 and props.minor == 9:
-                    threshold = props.multi_processor_count * 1.35
-                elif props.major == 7 and props.minor == 5:
-                    threshold = props.multi_processor_count * 0.65
+            matmul = getattr(getattr(torch.backends, "cuda", None), "matmul", None)
+            has_fmla_flag = matmul is not None and hasattr(matmul, "allow_fp16_reduced_precision_reduction")
+            has_tf32 = props.major >= 8 and matmul is not None and hasattr(matmul, "allow_tf32")
+            orig_fmla = getattr(matmul, "allow_fp16_reduced_precision_reduction", True) if matmul else True
+            orig_tf32 = getattr(matmul, "allow_tf32", True) if matmul else True
+
+            try:
+                if has_fmla_flag:
+                    matmul.allow_fp16_reduced_precision_reduction = True
+                self.after(0, lambda: self.lbl_log.config(text=f"Measuring FP16 Tensor Cores on GPU {dev_idx}..."))
+                ms_fp16, tflops_fp16 = benchmark_gemm(torch, device, torch.float16, size=size, warmup=8, runs=25)
+
+                if has_fmla_flag:
+                    self.after(0, lambda: self.lbl_log.config(text=f"Measuring FMLA32/FMLA16 ratio on GPU {dev_idx}..."))
+                fmla_info = measure_fmla_ratio(torch, device, size=size, tflops_fmla16=tflops_fp16)
+
+                has_bf16 = props.major >= 8 and hasattr(torch.cuda, "is_bf16_supported") and torch.cuda.is_bf16_supported()
+                if has_bf16:
+                    self.after(0, lambda: self.lbl_log.config(text=f"Measuring BF16 Tensor Cores on GPU {dev_idx}..."))
+                    ms_bf16, tflops_bf16 = benchmark_gemm(torch, device, torch.bfloat16, size=size, warmup=4, runs=15)
                 else:
-                    threshold = props.multi_processor_count * 1.15
-                profile = {"min_unlocked": threshold * 1.15, "threshold": threshold, "stock_typical": threshold * 0.70}
+                    ms_bf16, tflops_bf16 = 0.0, 0.0
 
-            def bench(dtype, runs=20, warmup=5):
-                a = torch.randn((size, size), dtype=dtype, device=device)
-                b = torch.randn((size, size), dtype=dtype, device=device)
-                for _ in range(warmup):
-                    torch.matmul(a, b)
-                torch.cuda.synchronize(device)
-                start_ev = torch.cuda.Event(enable_timing=True)
-                end_ev = torch.cuda.Event(enable_timing=True)
-                start_ev.record()
-                for _ in range(runs):
-                    torch.matmul(a, b)
-                end_ev.record()
-                torch.cuda.synchronize(device)
-                ms = start_ev.elapsed_time(end_ev) / runs
-                tflops = (2.0 * (size**3) / (ms * 1e-3)) / 1e12
-                del a, b
-                return ms, tflops
+                if has_tf32:
+                    matmul.allow_tf32 = True
+                    self.after(0, lambda: self.lbl_log.config(text=f"Measuring TF32 Tensor Cores on GPU {dev_idx}..."))
+                    ms_tf32, tflops_tf32 = benchmark_gemm(torch, device, torch.float32, size=size, warmup=4, runs=15)
+                else:
+                    ms_tf32, tflops_tf32 = 0.0, 0.0
 
-            self.after(0, lambda: self.lbl_log.config(text=f"Measuring FP16 Tensor Cores on GPU {dev_idx}..."))
-            ms_fp16, tflops_fp16 = bench(torch.float16, runs=25, warmup=8)
+                if has_tf32:
+                    matmul.allow_tf32 = False
+                self.after(0, lambda: self.lbl_log.config(text=f"Measuring FP32 CUDA Control on GPU {dev_idx}..."))
+                ms_fp32, tflops_fp32 = benchmark_gemm(torch, device, torch.float32, size=size, warmup=4, runs=15)
+            finally:
+                if has_fmla_flag:
+                    matmul.allow_fp16_reduced_precision_reduction = orig_fmla
+                if has_tf32:
+                    matmul.allow_tf32 = orig_tf32
+                torch.cuda.empty_cache()
 
-            has_bf16 = hasattr(torch.cuda, "is_bf16_supported") and torch.cuda.is_bf16_supported()
-            if has_bf16:
-                self.after(0, lambda: self.lbl_log.config(text=f"Measuring BF16 Tensor Cores on GPU {dev_idx}..."))
-                ms_bf16, tflops_bf16 = bench(torch.bfloat16, runs=15, warmup=4)
-            else:
-                ms_bf16, tflops_bf16 = 0.0, 0.0
-
-            has_tf32 = props.major >= 8 and hasattr(torch.backends.cuda.matmul, "allow_tf32")
-            if has_tf32:
-                torch.backends.cuda.matmul.allow_tf32 = True
-                self.after(0, lambda: self.lbl_log.config(text=f"Measuring TF32 Tensor Cores on GPU {dev_idx}..."))
-                ms_tf32, tflops_tf32 = bench(torch.float32, runs=15, warmup=4)
-            else:
-                ms_tf32, tflops_tf32 = 0.0, 0.0
-
-            if hasattr(torch.backends.cuda.matmul, "allow_tf32"):
-                torch.backends.cuda.matmul.allow_tf32 = False
-            self.after(0, lambda: self.lbl_log.config(text=f"Measuring FP32 CUDA Control on GPU {dev_idx}..."))
-            ms_fp32, tflops_fp32 = bench(torch.float32, runs=15, warmup=4)
-
-            torch.cuda.empty_cache()
-
-            is_unlocked = tflops_fp16 >= profile["threshold"]
+            verdict = classify_unlock_status(tflops_fp16, profile, util_info, fmla_info, props.major, props.minor)
             ratio = tflops_fp16 / tflops_fp32 if tflops_fp32 > 0 else 1.0
 
             self.after(0, lambda: self.display_benchmark_results(
                 tflops_fp16, ms_fp16, tflops_bf16, ms_bf16, tflops_tf32, ms_tf32, tflops_fp32, ms_fp32,
-                is_unlocked, ratio, profile,
+                verdict, ratio, profile,
             ))
 
         except Exception as e:
             self.after(0, lambda: self.finish_benchmark_error(str(e)))
 
-    def display_benchmark_results(self, fp16, ms16, bf16, msbf, tf32, mstf, fp32, ms32, is_unlocked, ratio, profile):
+    def display_benchmark_results(self, fp16, ms16, bf16, msbf, tf32, mstf, fp32, ms32, verdict, ratio, profile):
         self.last_metrics = {"fp16": fp16, "bf16": bf16, "tf32": tf32, "fp32": fp32}
         self.btn_save_baseline.config(state="normal")
 
+        code = verdict["code"]
+        fmla_ratio = verdict.get("fmla_ratio")
+        gpu_util = verdict.get("gpu_util")
+
         self.lbl_tflops_big.config(text=f"{fp16:.2f} TFLOPS")
+        fmla_sub = f" | FMLA32/16: {fmla_ratio:.2f}x" if fmla_ratio is not None else ""
+        load_sub = f" | Pre-Load: {gpu_util:.0f}%" if gpu_util is not None else ""
+        self.lbl_tflops_subtitle.config(
+            text=f"FP16 Tensor Core Peak Performance (GEMM 4096x4096{fmla_sub}{load_sub})"
+        )
         self.lbl_m_fp16.config(text=f"{fp16:.1f} TFLOPS ({ms16:.2f}ms)")
         self.lbl_m_bf16.config(text=f"{bf16:.1f} TFLOPS" if bf16 > 0 else "N/A")
         self.lbl_m_tf32.config(text=f"{tf32:.1f} TFLOPS" if tf32 > 0 else "N/A")
         self.lbl_m_fp32.config(text=f"{fp32:.1f} TFLOPS ({ms32:.2f}ms)")
         self.lbl_baseline_delta.config(text=self.baseline_summary_text(), fg="#82B1FF")
 
-        if is_unlocked:
+        if code == "UNLOCKED":
             self.lbl_tflops_big.config(fg=self.c_green)
             self.lbl_status_badge.config(text="STATUS: FULLY UNLOCKED!", bg="#00C853", fg="#FFFFFF")
             log_text = f"Rate-limiter BYPASS CONFIRMED! ({ratio:.2f}x CUDA baseline). cuBLAS autotune active."
+            if verdict.get("under_load") and gpu_util is not None:
+                log_text += f" (Note: {gpu_util:.0f}% external load during bench)"
             self.lbl_log.config(text=log_text, fg=self.c_green)
+        elif code == "UNLOCKED_UNDER_LOAD":
+            self.lbl_tflops_big.config(fg=self.c_green)
+            self.lbl_status_badge.config(text="STATUS: UNLOCKED (EXTERNAL LOAD)", bg="#00C853", fg="#FFFFFF")
+            log_text = (
+                f"GPU under external load ({gpu_util:.0f}%) - pause games/renders/upscalers for peak TFLOPS "
+                f"(FMLA32/FMLA16 {fmla_ratio:.2f}x indicates unlock active)."
+            )
+            self.lbl_log.config(text=log_text, fg=self.c_yellow)
+        elif code == "EXTERNAL_LOAD":
+            self.lbl_tflops_big.config(fg=self.c_yellow)
+            self.lbl_status_badge.config(text=f"STATUS: EXTERNAL LOAD ({gpu_util:.0f}%)", bg="#FFAB00", fg="#121212")
+            log_text = (
+                f"GPU is under external load ({gpu_util:.0f}%) - pause games/renders/upscalers for an accurate status check."
+            )
+            self.lbl_log.config(text=log_text, fg=self.c_yellow)
+        elif code == "UNLOCKED_LOW_TFLOPS":
+            self.lbl_tflops_big.config(fg=self.c_yellow)
+            self.lbl_status_badge.config(text="STATUS: CHECK POWER / CLOCKS", bg="#FFAB00", fg="#121212")
+            log_text = (
+                f"FMLA32/FMLA16 ({fmla_ratio:.2f}x) looks unlocked, but TFLOPS ({fp16:.1f}) is below {profile['threshold']:.0f}. Check PL/thermals."
+            )
+            self.lbl_log.config(text=log_text, fg=self.c_yellow)
         else:
             self.lbl_tflops_big.config(fg=self.c_red)
             self.lbl_status_badge.config(text="STATUS: STOCK RATE-LIMITED", bg="#D50000", fg="#FFFFFF")

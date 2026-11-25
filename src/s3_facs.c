@@ -2690,7 +2690,11 @@ EFI_STATUS GuAcpiInstallShadowFacs(
   GuLog("S3 Hardware Recon Config: ParentLinkReg=%#08x (Cap 0x10+0x10), GPU PMCSR=%#08x (Cap 0x01+0x04)\n",
         (unsigned)root_port_link_reg, (unsigned)gpu_pmcsr_reg);
 
-  /* Preflight warnings for Modern Standby (S0ix) and 64-bit XFirmwareWakingVector (v1.9.0) */
+  /* Preflight warnings for Modern Standby (S0ix) and 64-bit XFirmwareWakingVector (v1.9.0).
+   * Design invariant for S4 Hibernate safety: Universal GPU Unlock uses a pure
+   * SS0/SS1 unlock and never mutates pre-boot ReBAR BAR1 overrides (0x610/0xBC0)
+   * or forces UEFI ConnectController GOP reconnects during sleep/hibernate resume
+   * (pre-boot ReBAR overrides trigger Kernel-Power 41 under S4; GOP reconnect triggers TDR). */
   if (Info->s0ix_warning) {
     GuLog("S3 Preflight WARNING: Board FADT Flags (%#08x) advertises LOW_POWER_S0_IDLE_CAPABLE (S0ix/Modern Standby) instead of classic S3!\n",
           (unsigned)Info->fadt_flags);
