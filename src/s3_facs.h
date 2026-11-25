@@ -201,10 +201,23 @@ VOID GuAcpiResetShadowStateForTest(VOID);
  * GuHookedExitBootServices reverts gST->ConfigurationTable to RealRSDP before calling
  * firmware ExitBootServices, and restores ShadowRSDP if ExitBootServices returns.
  */
+typedef struct {
+  UINT8 real_xsdt_checksum;
+  UINT8 real_fadt_checksum;
+  UINT8 shadow_xsdt_checksum;
+  UINT8 shadow_fadt_checksum;
+  UINT32 real_xsdt_length;
+  UINT32 real_fadt_length;
+  BOOLEAN real_facs_rearmed;
+} GU_ACPI_SHADOW_REFRESH_INFO;
+
 EFI_STATUS GuAcpiInstallEbsHook(IN EFI_SYSTEM_TABLE *SystemTable);
 EFI_STATUS GuAcpiUninstallEbsHook(IN EFI_SYSTEM_TABLE *SystemTable);
 UINT32 GuAcpiApplyShadowConfigTable(VOID);
 UINT32 GuAcpiRestoreConfigTable(VOID);
+EFI_STATUS GuAcpiRefreshShadowChain(
+    OUT GU_ACPI_SHADOW_REFRESH_INFO *RefreshInfo OPTIONAL
+);
 
 /*
  * Assembles the S3 Resume Trampoline machine code into the designated buffer.

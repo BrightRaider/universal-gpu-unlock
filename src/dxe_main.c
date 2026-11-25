@@ -116,12 +116,20 @@ static EFI_STATUS AdaUnlockInstallStartImageHook(EFI_SYSTEM_TABLE *t) {
   return EFI_SUCCESS;
 }
 
-/* Unconditionally re-assert Plan C EBS hook + ShadowRSDP in ConfigurationTable. */
-static VOID AdaUnlockApplyPlanCNow(EFI_STATUS *out_ebs, UINT32 *out_patched) {
+/* Refresh Shadow ACPI tables from live RSDP/XSDT/FADT and enforce Plan C hooks. */
+static VOID AdaUnlockApplyPlanCNow(EFI_STATUS *out_refresh,
+                                   GU_ACPI_SHADOW_REFRESH_INFO *out_info,
+                                   EFI_STATUS *out_ebs,
+                                   UINT32 *out_patched) {
+  GU_ACPI_SHADOW_REFRESH_INFO local_info;
+  memset(&local_info, 0, sizeof(local_info));
+  EFI_STATUS ref_s = GuAcpiRefreshShadowChain(&local_info);
   EFI_STATUS ebs_s = GuAcpiInstallEbsHook(mDxeTable);
   UINT32 patched = GuAcpiApplyShadowConfigTable();
   (VOID)AdaUnlockInstallStartImageHook(mDxeTable);
   mPlanCActivated = TRUE;
+  if (out_refresh) *out_refresh = ref_s;
+  if (out_info) *out_info = local_info;
   if (out_ebs) *out_ebs = ebs_s;
   if (out_patched) *out_patched = patched;
 }
@@ -131,7 +139,7 @@ static VOID AdaUnlockApplyPlanCNow(EFI_STATUS *out_ebs, UINT32 *out_patched) {
 static VOID AdaUnlockActivatePlanC(BOOLEAN can_log) {
   if (!mDxeTable || !Gu.s3_registered || mPlanCActivated) return;
   UINT32 patched = 0;
-  AdaUnlockApplyPlanCNow(NULL, &patched);
+  AdaUnlockApplyPlanCNow(NULL, NULL, NULL, &patched);
   if (can_log && patched > 0) {
     GuLog("DXE-DRIVER: Plan C Shadow ACPI (%u table(s)) + ExitBootServices hook activated.\n",
           (unsigned)patched);
@@ -149,17 +157,24 @@ static EFI_STATUS EFIAPI AdaUnlockHookedStartImage(EFI_HANDLE ImageHandle,
   if (Gu.s3_registered && (is_os_loader || mReadyToBootFired || mPlanCActivated)) {
     VOID *pre_acpi = AdaUnlockGetAcpiTablePtr(mDxeTable);
     mStartImageDepth++;
+    EFI_STATUS ref_s = EFI_SUCCESS;
+    GU_ACPI_SHADOW_REFRESH_INFO ref_info;
     EFI_STATUS ebs_s = EFI_SUCCESS;
     UINT32 patched = 0;
-    AdaUnlockApplyPlanCNow(&ebs_s, &patched);
+    AdaUnlockApplyPlanCNow(&ref_s, &ref_info, &ebs_s, &patched);
     VOID *post_acpi = AdaUnlockGetAcpiTablePtr(mDxeTable);
 
     if (mStartImageLogCount < 2) {
       mStartImageLogCount++;
       GuBootAppendLog(
-          "DXE-DRIVER: Plan C StartImage(depth=%u type=%u rtb=%u): acpi=%p->%p patched=%u ebs=%#llx\n",
+          "DXE-DRIVER: Plan C StartImage(depth=%u type=%u rtb=%u): ref=%#llx RealXSDT=0x%02x(%u) RealFADT=0x%02x(%u) -> ShadowXSDT=0x%02x ShadowFADT=0x%02x rearm=%u acpi=%p->%p patched=%u ebs=%#llx\n",
           (unsigned)mStartImageDepth, (unsigned)code_type,
-          (unsigned)mReadyToBootFired, pre_acpi, post_acpi,
+          (unsigned)mReadyToBootFired, (unsigned long long)ref_s,
+          (unsigned)ref_info.real_xsdt_checksum, (unsigned)ref_info.real_xsdt_length,
+          (unsigned)ref_info.real_fadt_checksum, (unsigned)ref_info.real_fadt_length,
+          (unsigned)ref_info.shadow_xsdt_checksum, (unsigned)ref_info.shadow_fadt_checksum,
+          (unsigned)ref_info.real_facs_rearmed,
+          pre_acpi, post_acpi,
           (unsigned)patched, (unsigned long long)ebs_s);
     }
 

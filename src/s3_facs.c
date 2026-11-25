@@ -26,6 +26,11 @@ typedef struct {
   VOID *shadow_rsdp;
   VOID *high_acpi_page;
   EFI_PHYSICAL_ADDRESS high_acpi_phys;
+  EFI_PHYSICAL_ADDRESS shadow_facs_phys;
+  EFI_PHYSICAL_ADDRESS shadow_xsdt_phys;
+  VOID *shadow_xsdt;
+  UINTN shadow_xsdt_alloc_pages;
+  EFI_PHYSICAL_ADDRESS trampoline_phys;
   EFI_PHYSICAL_ADDRESS telemetry_page_phys;
   VOID *low_trampoline;
   EFI_SYSTEM_TABLE *system_table;
@@ -39,9 +44,16 @@ typedef struct {
   UINT64 orig_xfirmware_waking_vector;
 } GU_ACPI_SHADOW_CHAIN_STATE;
 
-static GU_ACPI_SHADOW_CHAIN_STATE mShadowState = {
-  FALSE, FALSE, NULL, NULL, NULL, 0, 0, NULL, NULL, NULL, FALSE, NULL, NULL, FALSE, 0, 0, 0
-};
+static GU_ACPI_SHADOW_CHAIN_STATE mShadowState = { 0 };
+
+static UINT8 GuAcpiCalcChecksum8(const VOID *Data, UINTN Length) {
+  const UINT8 *bytes = (const UINT8 *)Data;
+  UINT8 sum = 0;
+  for (UINTN i = 0; i < Length; i++) {
+    sum = (UINT8)(sum + bytes[i]);
+  }
+  return (UINT8)(0 - sum);
+}
 
 UINT32 GuAcpiApplyShadowConfigTable(VOID) {
   if (!mShadowState.installed || !mShadowState.system_table || !mShadowState.shadow_rsdp) return 0;
@@ -279,14 +291,13 @@ EFI_STATUS GuAcpiLocateFadtAndFacs(
     }
   }
 
-  /* Warm-Reset / Re-Entry Detection: If ConfigurationTable was already pointing to ShadowRSDP */
-  if (rsdp != NULL && ((mShadowState.installed && (VOID *)rsdp == mShadowState.shadow_rsdp) ||
-                       (mShadowState.installed && mShadowState.orig_rsdp != NULL && (VOID *)rsdp != mShadowState.orig_rsdp))) {
-    if (mShadowState.installed && mShadowState.orig_rsdp != NULL) {
-      GuLog("GuAcpiLocateFadtAndFacs: Existing Shadow RSDP detected at %#llx; recovered Real RSDP at %#llx\n",
-            (unsigned long long)(UINTN)rsdp, (unsigned long long)(UINTN)mShadowState.orig_rsdp);
-      rsdp = (EFI_ACPI_2_0_ROOT_SYSTEM_DESCRIPTION_POINTER *)mShadowState.orig_rsdp;
-    }
+  /* Warm-Reset / Re-Entry Detection: ONLY recover orig_rsdp when ConfigurationTable points to our Shadow RSDP */
+  if (rsdp != NULL && mShadowState.installed && mShadowState.orig_rsdp != NULL &&
+      ((VOID *)rsdp == mShadowState.shadow_rsdp ||
+       (mShadowState.shadow_xsdt_phys != 0 && rsdp->XsdtAddress == (UINT64)mShadowState.shadow_xsdt_phys))) {
+    GuLog("GuAcpiLocateFadtAndFacs: Existing Shadow RSDP detected at %#llx; recovered Real RSDP at %#llx\n",
+          (unsigned long long)(UINTN)rsdp, (unsigned long long)(UINTN)mShadowState.orig_rsdp);
+    rsdp = (EFI_ACPI_2_0_ROOT_SYSTEM_DESCRIPTION_POINTER *)mShadowState.orig_rsdp;
   }
 
   if (!rsdp) {
@@ -2217,6 +2228,161 @@ static EFI_PHYSICAL_ADDRESS GuAcpiAllocateTelemetryPage(
   return 0;
 }
 
+static BOOLEAN GuAcpiEnsureRealFacsVector(
+    IN OUT EFI_ACPI_2_0_FIRMWARE_ACPI_CONTROL_STRUCTURE *RealFacs,
+    IN EFI_PHYSICAL_ADDRESS TrampolinePhys
+) {
+  if (!RealFacs || !TrampolinePhys) return FALSE;
+  BOOLEAN rearmed = (RealFacs->FirmwareWakingVector != (UINT32)TrampolinePhys) ||
+                    (RealFacs->XFirmwareWakingVector != 0) ||
+                    (RealFacs->Flags != 0);
+  RealFacs->FirmwareWakingVector = (UINT32)TrampolinePhys;
+  RealFacs->XFirmwareWakingVector = 0;
+  RealFacs->Flags = 0;
+  if (RealFacs->Length >= 64) {
+    UINT8 *rf_raw = (UINT8 *)RealFacs;
+    *(UINT32 *)(rf_raw + 0x20) = 0; /* Version at +0x20 */
+    *(UINT32 *)(rf_raw + 0x24) = 0; /* OspmFlags at +0x24 */
+  }
+  return rearmed;
+}
+
+static EFI_STATUS GuAcpiPopulateShadowChainTables(
+    IN EFI_BOOT_SERVICES *bs,
+    IN OUT GU_ACPI_FACS_INFO *Info,
+    IN UINT8 *high_acpi_base,
+    IN EFI_PHYSICAL_ADDRESS high_acpi_phys,
+    IN EFI_PHYSICAL_ADDRESS shadow_facs_phys
+) {
+  if (!Info || !Info->fadt || !Info->rsdp || !high_acpi_base || !high_acpi_phys || !shadow_facs_phys) {
+    return EFI_INVALID_PARAMETER;
+  }
+
+  /* Shadow FADT at HighAcpiPage + 0x200 */
+  EFI_PHYSICAL_ADDRESS shadow_fadt_phys = high_acpi_phys + GU_HIGH_SHADOW_FADT_OFF;
+  EFI_ACPI_2_0_FIXED_ACPI_DESCRIPTION_TABLE *shadow_fadt =
+      (EFI_ACPI_2_0_FIXED_ACPI_DESCRIPTION_TABLE *)(high_acpi_base + GU_HIGH_SHADOW_FADT_OFF);
+  UINT32 fadt_len = Info->fadt->Header.Length;
+  if (fadt_len > (4096 - GU_HIGH_SHADOW_FADT_OFF)) {
+    fadt_len = 4096 - GU_HIGH_SHADOW_FADT_OFF;
+  }
+  memcpy(shadow_fadt, Info->fadt, fadt_len);
+  shadow_fadt->FirmwareCtrl = (UINT32)shadow_facs_phys;
+  if (shadow_fadt->Header.Length >= 140) {
+    shadow_fadt->XFirmwareCtrl = 0;
+  }
+  shadow_fadt->Header.Checksum = 0;
+  shadow_fadt->Header.Checksum = GuAcpiCalcChecksum8(shadow_fadt, shadow_fadt->Header.Length);
+
+  /* Shadow XSDT at HighAcpiPage + 0x080 (or cached NVS page if > 384 bytes) */
+  EFI_ACPI_DESCRIPTION_HEADER *shadow_xsdt = NULL;
+  EFI_PHYSICAL_ADDRESS shadow_xsdt_phys = 0;
+  if (Info->xsdt != NULL) {
+    UINT32 max_inline_xsdt = GU_HIGH_SHADOW_FADT_OFF - GU_HIGH_SHADOW_XSDT_OFF;
+    if (Info->xsdt->Length <= max_inline_xsdt) {
+      shadow_xsdt = (EFI_ACPI_DESCRIPTION_HEADER *)(high_acpi_base + GU_HIGH_SHADOW_XSDT_OFF);
+      shadow_xsdt_phys = high_acpi_phys + GU_HIGH_SHADOW_XSDT_OFF;
+    } else {
+      UINTN needed_pages = ((UINTN)Info->xsdt->Length + 4095U) / 4096U;
+      if (mShadowState.shadow_xsdt != NULL && mShadowState.shadow_xsdt_alloc_pages >= needed_pages) {
+        shadow_xsdt = (EFI_ACPI_DESCRIPTION_HEADER *)mShadowState.shadow_xsdt;
+        shadow_xsdt_phys = mShadowState.shadow_xsdt_phys;
+      } else if (bs && bs->AllocatePages) {
+        EFI_PHYSICAL_ADDRESS alloc_phys = 0xFFFFFFFFULL;
+        EFI_STATUS as = bs->AllocatePages(AllocateMaxAddress, EfiACPIMemoryNVS, needed_pages, &alloc_phys);
+        if (!EFI_ERROR(as)) {
+          shadow_xsdt = (EFI_ACPI_DESCRIPTION_HEADER *)(UINTN)alloc_phys;
+          shadow_xsdt_phys = alloc_phys;
+          mShadowState.shadow_xsdt = (VOID *)shadow_xsdt;
+          mShadowState.shadow_xsdt_phys = shadow_xsdt_phys;
+          mShadowState.shadow_xsdt_alloc_pages = needed_pages;
+        }
+      }
+    }
+  }
+
+  if (shadow_xsdt != NULL && Info->xsdt != NULL) {
+    memcpy(shadow_xsdt, Info->xsdt, Info->xsdt->Length);
+    if (Info->xsdt_fadt_index >= 0) {
+      UINT8 *entry_ptr = ((UINT8 *)shadow_xsdt) + sizeof(EFI_ACPI_DESCRIPTION_HEADER);
+      UINT64 sf_phys64 = (UINT64)shadow_fadt_phys;
+      memcpy(entry_ptr + Info->xsdt_fadt_index * sizeof(UINT64), &sf_phys64, sizeof(UINT64));
+    }
+    shadow_xsdt->Checksum = 0;
+    shadow_xsdt->Checksum = GuAcpiCalcChecksum8(shadow_xsdt, shadow_xsdt->Length);
+  }
+
+  /* Shadow RSDP at HighAcpiPage + 0x000 */
+  EFI_ACPI_2_0_ROOT_SYSTEM_DESCRIPTION_POINTER *shadow_rsdp =
+      (EFI_ACPI_2_0_ROOT_SYSTEM_DESCRIPTION_POINTER *)(high_acpi_base + GU_HIGH_SHADOW_RSDP_OFF);
+  EFI_PHYSICAL_ADDRESS shadow_rsdp_phys = high_acpi_phys + GU_HIGH_SHADOW_RSDP_OFF;
+  UINT32 rsdp_len = (Info->rsdp->Revision >= 2 && Info->rsdp->Length >= 36) ? Info->rsdp->Length : 36;
+  memcpy(shadow_rsdp, Info->rsdp, rsdp_len);
+  shadow_rsdp->XsdtAddress = (UINT64)shadow_xsdt_phys;
+  shadow_rsdp->RsdtAddress = Info->rsdp->RsdtAddress;
+
+  shadow_rsdp->Checksum = 0;
+  shadow_rsdp->Checksum = GuAcpiCalcChecksum8(shadow_rsdp, 20);
+  shadow_rsdp->ExtendedChecksum = 0;
+  shadow_rsdp->ExtendedChecksum = GuAcpiCalcChecksum8(shadow_rsdp, shadow_rsdp->Length);
+
+  Info->shadow_fadt = shadow_fadt;
+  Info->shadow_fadt_phys = shadow_fadt_phys;
+  Info->shadow_xsdt = shadow_xsdt;
+  Info->shadow_xsdt_phys = shadow_xsdt_phys;
+  Info->shadow_rsdp = shadow_rsdp;
+  Info->shadow_rsdp_phys = shadow_rsdp_phys;
+  Info->shadow_rsdp_checksum = shadow_rsdp->Checksum;
+  Info->shadow_rsdp_extended_checksum = shadow_rsdp->ExtendedChecksum;
+  Info->shadow_xsdt_checksum = shadow_xsdt ? shadow_xsdt->Checksum : 0;
+
+  if (shadow_xsdt_phys != 0 && mShadowState.shadow_xsdt_phys == 0) {
+    mShadowState.shadow_xsdt_phys = shadow_xsdt_phys;
+  }
+  return EFI_SUCCESS;
+}
+
+EFI_STATUS GuAcpiRefreshShadowChain(
+    OUT GU_ACPI_SHADOW_REFRESH_INFO *RefreshInfo OPTIONAL
+) {
+  if (RefreshInfo) memset(RefreshInfo, 0, sizeof(*RefreshInfo));
+  if (!mShadowState.installed || !mShadowState.system_table ||
+      !mShadowState.high_acpi_page || !mShadowState.high_acpi_phys ||
+      !mShadowState.shadow_facs_phys) {
+    return EFI_NOT_READY;
+  }
+
+  GU_ACPI_FACS_INFO info;
+  EFI_STATUS s = GuAcpiLocateFadtAndFacs(mShadowState.system_table, &info);
+  if (EFI_ERROR(s) || !info.found || !info.rsdp || !info.fadt || !info.real_facs) {
+    return EFI_ERROR(s) ? s : EFI_NOT_FOUND;
+  }
+
+  s = GuAcpiPopulateShadowChainTables(
+      mShadowState.system_table->BootServices,
+      &info,
+      (UINT8 *)mShadowState.high_acpi_page,
+      mShadowState.high_acpi_phys,
+      mShadowState.shadow_facs_phys
+  );
+  if (EFI_ERROR(s)) return s;
+
+  BOOLEAN rearmed = GuAcpiEnsureRealFacsVector(info.real_facs, mShadowState.trampoline_phys);
+  mShadowState.orig_rsdp = (VOID *)(UINTN)info.rsdp;
+  mShadowState.shadow_rsdp = (VOID *)(UINTN)info.shadow_rsdp_phys;
+
+  if (RefreshInfo) {
+    RefreshInfo->real_xsdt_checksum = info.xsdt ? info.xsdt->Checksum : 0;
+    RefreshInfo->real_fadt_checksum = info.fadt->Header.Checksum;
+    RefreshInfo->shadow_xsdt_checksum = info.shadow_xsdt_checksum;
+    RefreshInfo->shadow_fadt_checksum = info.shadow_fadt ? info.shadow_fadt->Header.Checksum : 0;
+    RefreshInfo->real_xsdt_length = info.xsdt ? info.xsdt->Length : 0;
+    RefreshInfo->real_fadt_length = info.fadt->Header.Length;
+    RefreshInfo->real_facs_rearmed = rearmed;
+  }
+  return EFI_SUCCESS;
+}
+
 EFI_STATUS GuAcpiInstallShadowFacs(
     IN EFI_SYSTEM_TABLE *SystemTable,
     IN GU_S3_RESUME_CONTEXT *Context,
@@ -2591,103 +2757,18 @@ EFI_STATUS GuAcpiInstallShadowFacs(
         (unsigned)Info->fadt_original_checksum);
 
   /*
-   * 5. Populate ShadowFADT at HighAcpiPage + 0x200:
-   *    Copy full Header.Length bytes from original RealFADT.
-   *    Set FirmwareCtrl = ShadowFACS (high_acpi_phys + 0x400), XFirmwareCtrl = 0.
-   *    Recalculate ShadowFADT->Header.Checksum.
+   * 5-7. Populate ShadowFADT, ShadowXSDT, ShadowRSDP in HighAcpiPage
    */
-  UINT32 fadt_len = Info->fadt->Header.Length;
-  if (fadt_len > (4096 - GU_HIGH_SHADOW_FADT_OFF)) {
-    fadt_len = 4096 - GU_HIGH_SHADOW_FADT_OFF;
+  s = GuAcpiPopulateShadowChainTables(
+      SystemTable->BootServices,
+      Info,
+      high_acpi_base,
+      high_acpi_phys,
+      shadow_facs_phys
+  );
+  if (EFI_ERROR(s)) {
+    return s;
   }
-  memcpy(shadow_fadt, Info->fadt, fadt_len);
-  shadow_fadt->FirmwareCtrl = (UINT32)shadow_facs_phys;
-  if (shadow_fadt->Header.Length >= 140) {
-    shadow_fadt->XFirmwareCtrl = 0;
-  }
-  shadow_fadt->Header.Checksum = 0;
-  UINT8 sf_sum = 0;
-  UINT8 *sf_bytes = (UINT8 *)shadow_fadt;
-  for (UINT32 i = 0; i < shadow_fadt->Header.Length; i++) {
-    sf_sum = (UINT8)(sf_sum + sf_bytes[i]);
-  }
-  shadow_fadt->Header.Checksum = (UINT8)(0 - sf_sum);
-
-  /*
-   * 6. Populate ShadowXSDT at HighAcpiPage + 0x080:
-   *    Copy RealXSDT, update FACP/FADT entry to point to ShadowFADT, recalculate Checksum.
-   */
-  EFI_ACPI_DESCRIPTION_HEADER *shadow_xsdt = NULL;
-  EFI_PHYSICAL_ADDRESS shadow_xsdt_phys = 0;
-
-  if (Info->xsdt != NULL) {
-    UINT32 max_inline_xsdt = GU_HIGH_SHADOW_FADT_OFF - GU_HIGH_SHADOW_XSDT_OFF; /* 0x180 = 384 bytes */
-    if (Info->xsdt->Length <= max_inline_xsdt) {
-      shadow_xsdt = (EFI_ACPI_DESCRIPTION_HEADER *)(high_acpi_base + GU_HIGH_SHADOW_XSDT_OFF);
-      shadow_xsdt_phys = high_acpi_phys + GU_HIGH_SHADOW_XSDT_OFF;
-    } else if (SystemTable->BootServices && SystemTable->BootServices->AllocatePages) {
-      EFI_PHYSICAL_ADDRESS alloc_phys = 0xFFFFFFFFULL;
-      EFI_STATUS as = SystemTable->BootServices->AllocatePages(
-          AllocateMaxAddress,
-          EfiACPIMemoryNVS,
-          1,
-          &alloc_phys
-      );
-      if (!EFI_ERROR(as)) {
-        shadow_xsdt = (EFI_ACPI_DESCRIPTION_HEADER *)(UINTN)alloc_phys;
-        shadow_xsdt_phys = alloc_phys;
-      }
-    }
-  }
-
-  if (shadow_xsdt != NULL && Info->xsdt != NULL) {
-    memcpy(shadow_xsdt, Info->xsdt, Info->xsdt->Length);
-    if (Info->xsdt_fadt_index >= 0) {
-      UINT8 *entry_ptr = ((UINT8 *)shadow_xsdt) + sizeof(EFI_ACPI_DESCRIPTION_HEADER);
-      UINT64 sf_phys64 = (UINT64)shadow_fadt_phys;
-      memcpy(entry_ptr + Info->xsdt_fadt_index * sizeof(UINT64), &sf_phys64, sizeof(UINT64));
-    }
-    shadow_xsdt->Checksum = 0;
-    UINT8 sxsdt_sum = 0;
-    UINT8 *sxsdt_bytes = (UINT8 *)shadow_xsdt;
-    for (UINT32 i = 0; i < shadow_xsdt->Length; i++) {
-      sxsdt_sum = (UINT8)(sxsdt_sum + sxsdt_bytes[i]);
-    }
-    shadow_xsdt->Checksum = (UINT8)(0 - sxsdt_sum);
-  }
-
-  /*
-   * 7. Populate ShadowRSDP at HighAcpiPage + 0x000:
-   *    Copy RealRSDP (36 bytes for Revision >= 2).
-   *    Set XsdtAddress = ShadowXSDT.
-   *    Leave RsdtAddress = RealRSDP->RsdtAddress untouched.
-   *    Recalculate 20-byte legacy Checksum (Offset 8), THEN 36-byte ExtendedChecksum (Offset 32).
-   */
-  EFI_ACPI_2_0_ROOT_SYSTEM_DESCRIPTION_POINTER *shadow_rsdp =
-      (EFI_ACPI_2_0_ROOT_SYSTEM_DESCRIPTION_POINTER *)(high_acpi_base + GU_HIGH_SHADOW_RSDP_OFF);
-  EFI_PHYSICAL_ADDRESS shadow_rsdp_phys = high_acpi_phys + GU_HIGH_SHADOW_RSDP_OFF;
-
-  UINT32 rsdp_len = (Info->rsdp->Revision >= 2 && Info->rsdp->Length >= 36) ? Info->rsdp->Length : 36;
-  memcpy(shadow_rsdp, Info->rsdp, rsdp_len);
-  shadow_rsdp->XsdtAddress = (UINT64)shadow_xsdt_phys;
-  shadow_rsdp->RsdtAddress = Info->rsdp->RsdtAddress; /* Untouched */
-
-  /* Checksum 1: 20-byte legacy Checksum (Offset 8) */
-  shadow_rsdp->Checksum = 0;
-  UINT8 rsdp_sum20 = 0;
-  UINT8 *rsdp_bytes = (UINT8 *)shadow_rsdp;
-  for (UINT32 i = 0; i < 20; i++) {
-    rsdp_sum20 = (UINT8)(rsdp_sum20 + rsdp_bytes[i]);
-  }
-  shadow_rsdp->Checksum = (UINT8)(0 - rsdp_sum20);
-
-  /* Checksum 2: 36-byte ExtendedChecksum (Offset 32) */
-  shadow_rsdp->ExtendedChecksum = 0;
-  UINT8 rsdp_sum36 = 0;
-  for (UINT32 i = 0; i < shadow_rsdp->Length; i++) {
-    rsdp_sum36 = (UINT8)(rsdp_sum36 + rsdp_bytes[i]);
-  }
-  shadow_rsdp->ExtendedChecksum = (UINT8)(0 - rsdp_sum36);
 
   /*
    * 8. State registration:
@@ -2695,9 +2776,11 @@ EFI_STATUS GuAcpiInstallShadowFacs(
   mShadowState.installed = TRUE;
   mShadowState.applied = FALSE;
   mShadowState.orig_rsdp = (VOID *)(UINTN)Info->rsdp;
-  mShadowState.shadow_rsdp = (VOID *)(UINTN)shadow_rsdp_phys;
+  mShadowState.shadow_rsdp = (VOID *)(UINTN)Info->shadow_rsdp_phys;
   mShadowState.high_acpi_page = (VOID *)high_acpi_base;
   mShadowState.high_acpi_phys = high_acpi_phys;
+  mShadowState.shadow_facs_phys = shadow_facs_phys;
+  mShadowState.trampoline_phys = trampoline_phys;
   mShadowState.low_trampoline = (VOID *)low_base;
   mShadowState.system_table = SystemTable;
   mShadowState.orig_exit_boot_services = NULL;
@@ -2712,8 +2795,8 @@ EFI_STATUS GuAcpiInstallShadowFacs(
 
   /*
    * NOTE: GuAcpiApplyShadowConfigTable() is deliberately DEFERRED until
-   * GuBootWindows() immediately before StartImage(Windows)!
-   * ConfigurationTable stays 100% on RealRSDP throughout driver execution.
+   * GuBootWindows() / StartImage() immediately before OS loader execution.
+   * ConfigurationTable stays 100% on RealRSDP throughout early driver dispatch.
    */
 
   /*
@@ -2721,14 +2804,7 @@ EFI_STATUS GuAcpiInstallShadowFacs(
    *    RealFACS is what AMI Aptio V PEI wakes to!
    *    RealFADT and RealXSDT are 100% UNTOUCHED!
    */
-  Info->real_facs->FirmwareWakingVector = (UINT32)trampoline_phys;
-  Info->real_facs->XFirmwareWakingVector = 0;
-  Info->real_facs->Flags = 0;
-  if (Info->real_facs->Length >= 64) {
-    UINT8 *rf_raw = (UINT8 *)Info->real_facs;
-    *(UINT32 *)(rf_raw + 0x20) = 0; /* Version at +0x20 */
-    *(UINT32 *)(rf_raw + 0x24) = 0; /* OspmFlags at +0x24 */
-  }
+  (VOID)GuAcpiEnsureRealFacsVector(Info->real_facs, trampoline_phys);
 
   /*
    * 10. LEAK 3: Detect and sandwich EFI_ACPI_S3_SAVE_PROTOCOL (EDK2 AcpiS3SaveDxe)
@@ -2811,16 +2887,7 @@ EFI_STATUS GuAcpiInstallShadowFacs(
     }
   }
 
-  /* Record pointers and checksums into Info for telemetry & tests */
-  Info->shadow_fadt = shadow_fadt;
-  Info->shadow_fadt_phys = shadow_fadt_phys;
-  Info->shadow_xsdt = shadow_xsdt;
-  Info->shadow_xsdt_phys = shadow_xsdt_phys;
-  Info->shadow_rsdp = shadow_rsdp;
-  Info->shadow_rsdp_phys = shadow_rsdp_phys;
-  Info->shadow_rsdp_checksum = shadow_rsdp->Checksum;
-  Info->shadow_rsdp_extended_checksum = shadow_rsdp->ExtendedChecksum;
-  Info->shadow_xsdt_checksum = shadow_xsdt ? shadow_xsdt->Checksum : 0;
+  /* Record trampoline physical address for telemetry & tests */
   Info->trampoline_phys = trampoline_phys;
   Info->ebs_hook_installed = FALSE;
 
@@ -2834,10 +2901,11 @@ EFI_STATUS GuAcpiInstallShadowFacs(
         (unsigned long long)(UINTN)Info->rsdp, (unsigned long long)Info->xsdt_phys,
         (unsigned long long)Info->fadt_phys, (unsigned long long)Info->real_facs_phys,
         (unsigned)Info->real_facs->FirmwareWakingVector,
-        (unsigned long long)shadow_rsdp_phys, (unsigned)shadow_rsdp->Checksum, (unsigned)shadow_rsdp->ExtendedChecksum,
-        (unsigned long long)shadow_xsdt_phys, shadow_xsdt ? (unsigned)shadow_xsdt->Checksum : 0,
-        (int)Info->xsdt_fadt_index, (unsigned long long)shadow_fadt_phys,
-        (unsigned)shadow_fadt->FirmwareCtrl, (unsigned)shadow_fadt->Header.Checksum,
+        (unsigned long long)Info->shadow_rsdp_phys, (unsigned)Info->shadow_rsdp_checksum, (unsigned)Info->shadow_rsdp_extended_checksum,
+        (unsigned long long)Info->shadow_xsdt_phys, (unsigned)Info->shadow_xsdt_checksum,
+        (int)Info->xsdt_fadt_index, (unsigned long long)Info->shadow_fadt_phys,
+        Info->shadow_fadt ? (unsigned)Info->shadow_fadt->FirmwareCtrl : 0U,
+        Info->shadow_fadt ? (unsigned)Info->shadow_fadt->Header.Checksum : 0U,
         (unsigned long long)shadow_facs_phys, (unsigned long long)trampoline_phys,
         (unsigned long long)high_acpi_phys,
         (unsigned long long)telem_page_phys);

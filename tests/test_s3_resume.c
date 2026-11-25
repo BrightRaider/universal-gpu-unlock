@@ -554,16 +554,16 @@ static void TestGuAcpiFacsDiscoveryAndPatching(void) {
   for (UINT32 i = 0; i < mock_rsdt.Header.Length; i++) r_sum = (UINT8)(r_sum + r_p[i]);
   mock_rsdt.Header.Checksum = (UINT8)(0 - r_sum);
 
-  /* Mock XSDT containing 64-bit pointer to FADT */
+  /* Mock XSDT containing 64-bit pointer to FADT (reserve 2 slots for late BDS append test) */
 #pragma pack(push, 1)
   struct {
     EFI_ACPI_DESCRIPTION_HEADER Header;
-    UINT64 Entry[1];
+    UINT64 Entry[2];
   } mock_xsdt;
 #pragma pack(pop)
   memset(&mock_xsdt, 0, sizeof(mock_xsdt));
   mock_xsdt.Header.Signature = 0x54445358U; /* 'XSDT' */
-  mock_xsdt.Header.Length = sizeof(mock_xsdt);
+  mock_xsdt.Header.Length = (UINT32)(sizeof(EFI_ACPI_DESCRIPTION_HEADER) + sizeof(UINT64));
   mock_xsdt.Entry[0] = (UINT64)(uintptr_t)&mock_fadt;
   mock_xsdt.Header.Checksum = 0;
   UINT8 x_sum = 0;
@@ -857,6 +857,45 @@ static void TestGuAcpiFacsDiscoveryAndPatching(void) {
   CHECK(info_warm.fadt == &mock_fadt, "Warm reset must recover original Real FADT from RSDT");
   CHECK(info_warm.real_facs == &mock_facs, "Warm reset must recover original Real FACS table");
   CHECK(info_warm.real_facs_phys == (EFI_PHYSICAL_ADDRESS)(uintptr_t)&mock_facs, "Warm reset must recover original Real FACS address");
+
+  /* 9. Verify GuAcpiRefreshShadowChain re-clones Shadow chain after late BDS XSDT/FADT mutations */
+  mock_fadt.Flags = 0x0003C5A5U;
+  mock_fadt.Header.Checksum = 0;
+  {
+    UINT8 fsum = 0; UINT8 *fb = (UINT8 *)&mock_fadt;
+    for (UINT32 i = 0; i < mock_fadt.Header.Length; i++) fsum = (UINT8)(fsum + fb[i]);
+    mock_fadt.Header.Checksum = (UINT8)(0 - fsum);
+  }
+  mock_xsdt.Entry[1] = 0x0000000012345678ULL;
+  mock_xsdt.Header.Length = (UINT32)(sizeof(EFI_ACPI_DESCRIPTION_HEADER) + 2U * sizeof(UINT64));
+  mock_xsdt.Header.Checksum = 0;
+  {
+    UINT8 xsum = 0; UINT8 *xb = (UINT8 *)&mock_xsdt;
+    for (UINT32 i = 0; i < mock_xsdt.Header.Length; i++) xsum = (UINT8)(xsum + xb[i]);
+    mock_xsdt.Header.Checksum = (UINT8)(0 - xsum);
+  }
+  mock_facs.FirmwareWakingVector = 0U; /* Simulate late BDS reset of RealFACS waking vector */
+
+  GU_ACPI_SHADOW_REFRESH_INFO ref_info;
+  s = GuAcpiRefreshShadowChain(&ref_info);
+  CHECK(s == EFI_SUCCESS, "GuAcpiRefreshShadowChain must succeed after late BDS update");
+  CHECK(ref_info.real_fadt_checksum == mock_fadt.Header.Checksum, "RefreshInfo must report updated RealFADT checksum");
+  CHECK(ref_info.real_xsdt_checksum == mock_xsdt.Header.Checksum, "RefreshInfo must report updated RealXSDT checksum");
+  CHECK(ref_info.real_facs_rearmed == TRUE, "RefreshInfo must report RealFACS vector re-armed");
+  CHECK(shadow_fadt->Flags == 0x0003C5A5U, "Refreshed ShadowFADT must mirror mutated RealFADT fields");
+  CHECK(shadow_fadt->FirmwareCtrl == (UINT32)(expected_high_acpi_phys + GU_HIGH_SHADOW_FACS_OFF),
+        "Refreshed ShadowFADT must preserve FirmwareCtrl -> ShadowFACS");
+  CHECK(sxsdt_entries[1] == 0x0000000012345678ULL, "Refreshed ShadowXSDT must include added late ACPI table entry");
+  CHECK(shadow_xsdt->Length == mock_xsdt.Header.Length, "Refreshed ShadowXSDT length must match RealXSDT");
+  CHECK(mock_facs.FirmwareWakingVector == (UINT32)mock_low_tramp_phys, "Refresh must re-arm RealFACS -> LowTrampoline");
+  {
+    UINT8 fchk = 0; UINT8 *fp = (UINT8 *)shadow_fadt;
+    for (UINT32 i = 0; i < shadow_fadt->Header.Length; i++) fchk = (UINT8)(fchk + fp[i]);
+    CHECK(fchk == 0, "Refreshed ShadowFADT checksum must be 0 mod 256");
+    UINT8 xchk = 0; UINT8 *xp = (UINT8 *)shadow_xsdt;
+    for (UINT32 i = 0; i < shadow_xsdt->Length; i++) xchk = (UINT8)(xchk + xp[i]);
+    CHECK(xchk == 0, "Refreshed ShadowXSDT checksum must be 0 mod 256");
+  }
   printf("[6] Discovery, Shadow Chain & EBS Sandwich (Plan C): OK!\n");
   fflush(stdout);
 }

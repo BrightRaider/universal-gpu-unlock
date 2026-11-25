@@ -6,6 +6,15 @@ For packaged binaries and downloads, visit [GitHub Releases](https://github.com/
 
 ---
 
+## [v1.9.4] - 2026-11-25
+### Fixed & Hardened (Local Dev — Live Plan-C ACPI Chain Refresh)
+- **Ursache des Early-Boot-BSOD in `v1.9.3` (`RUN0100.TXT` vs `RUN0087.TXT`):** Zwischen `Driver####` (`AdaUnlockDriverEntryPoint`) und `StartImage(bootmgfw.efi)` aktualisiert AMI BDS sowohl `RealXSDT` (`Chk 0xee -> 0x13`) als auch `RealFADT` (`Chk 0x77 -> 0x7a`, identisch zum Live-Windows-Stand) und setzt `ConfigurationTable` nach `ReadyToBoot` erneut auf `RealRSDP` (`0xdc8c1014`). Das bloße Zurückschalten auf den alten `Driver####`-Klon in `v1.9.3` übergab Windows veraltete `XSDT`/`FADT`-Daten vor `vgk.sys`/Event-12/Minidump (Rückbau per `[R]` in `RUN0103.TXT`).
+- **Frisches Plan-C-ACPI-Re-Klonen vor OS-Start (`src/s3_facs.c`, `src/s3_facs.h`, `src/dxe_main.c`, `src/version.h`):**
+  - Extraktion der gemeinsamen Helfer `GuAcpiCalcChecksum8()`, `GuAcpiEnsureRealFacsVector()` und `GuAcpiPopulateShadowChainTables()` sowie neue Funktion `GuAcpiRefreshShadowChain()`, die über `GuAcpiLocateFadtAndFacs()` die finalen Live-Tabellen (`RealRSDP`, `RealXSDT`, `RealFADT`, `RealFACS`) liest, `ShadowFADT`, `ShadowXSDT` (inkl. dynamischer Page-Größe > 384 Bytes) und `ShadowRSDP` neu klont und `RealFACS->FirmwareWakingVector` bei Bedarf auf `LowTrampoline` re-armiert.
+  - `GuAcpiLocateFadtAndFacs()` akzeptiert geänderte, echte `RealRSDP`-Zeiger aus dem BDS direkt und löst `orig_rsdp` nur noch auf, wenn `ConfigurationTable` tatsächlich auf `ShadowRSDP` oder `shadow_xsdt_phys` zeigt.
+  - `AdaUnlockApplyPlanCNow()` und `AdaUnlockHookedStartImage()` rufen `GuAcpiRefreshShadowChain(&ref_info)` vor `GuAcpiInstallEbsHook()` + `GuAcpiApplyShadowConfigTable()` auf und protokollieren `RealXSDT`/`RealFADT`/`ShadowXSDT`/`ShadowFADT` Checksums sowie `facs_rearm` in `RUNxxxx.TXT`.
+- **Tests (`tests/test_s3_resume.c`, `tests/test_dxe_main.c`):** Neue Testfälle für späte BDS-Mutationen an `mock_fadt.Flags`, erweitertem `mock_xsdt.Entry[2]` und gelöschtem `mock_facs.FirmwareWakingVector` (`9.809` Checks in `test_s3_resume`, `test_dxe_main: all checks passed`, `MSVC_HOST_TESTS=PASS`).
+
 ## [v1.9.3] - 2026-11-25
 ### Added & Hardened (Local Dev — Plan-C StartImage Guard + Etappe-A Diagnostik)
 - **Befund aus `RUN0099.TXT` (`v1.9.2`):** Mit `AdaUnlockDxe.efi` (`v1.9.2`) über `Boot0000` (Windows Boot Manager) + `Confirm-SecureBootUEFI: True` blieben `vgk`, `vgc` (`1116`) und `LeagueClient` (`3212`) stabil ohne Vanguard-Fehler aktiv, `HKLM\HARDWARE\ACPI\FADT` meldete jedoch noch `FirmwareCtrl=0xDC8BB000` (`RealFACS`) statt `ShadowFACS` (`0xDC637400`), da `ConfigurationTable` nach `ReadyToBoot` bzw. vor `bootmgfw.efi` wieder auf `RealRSDP` stand oder `ReadyToBoot` übergangen wurde.

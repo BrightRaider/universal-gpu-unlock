@@ -16,6 +16,7 @@ static UINTN mock_discover_count = 1;
 static EFI_STATUS mock_unlock_status = EFI_SUCCESS;
 static BOOLEAN mock_s3_armed = TRUE;
 static UINTN ebs_hook_calls = 0;
+static UINTN refresh_calls = 0;
 static UINTN shadow_apply_calls = 0;
 static UINTN restore_calls = 0;
 static UINT32 mock_shadow_apply_ret = 2;
@@ -97,6 +98,20 @@ EFI_STATUS GuUnlockAllGpus(EFI_SYSTEM_TABLE *t, EFI_HANDLE image,
 EFI_STATUS GuReconnectDisplayAfterUnlock(EFI_SYSTEM_TABLE *t, EFI_HANDLE image,
                                          EFI_HANDLE pci_handle, BOOLEAN allow_fallback_gop) {
   (void)t; (void)image; (void)pci_handle; (void)allow_fallback_gop;
+  return EFI_SUCCESS;
+}
+
+EFI_STATUS GuAcpiRefreshShadowChain(OUT GU_ACPI_SHADOW_REFRESH_INFO *RefreshInfo OPTIONAL) {
+  refresh_calls++;
+  if (RefreshInfo) {
+    memset(RefreshInfo, 0, sizeof(*RefreshInfo));
+    RefreshInfo->real_xsdt_checksum = 0x13;
+    RefreshInfo->real_fadt_checksum = 0x7A;
+    RefreshInfo->shadow_xsdt_checksum = 0xCA;
+    RefreshInfo->shadow_fadt_checksum = 0xE0;
+    RefreshInfo->real_xsdt_length = 128;
+    RefreshInfo->real_fadt_length = 276;
+  }
   return EFI_SUCCESS;
 }
 
@@ -242,6 +257,7 @@ static VOID ResetTestState(BOOLEAN use_create_ex) {
   mock_s3_armed = TRUE;
   mock_create_ex_status = EFI_SUCCESS;
   ebs_hook_calls = 0;
+  refresh_calls = 0;
   shadow_apply_calls = 0;
   restore_calls = 0;
   mock_shadow_apply_ret = 2;
@@ -349,6 +365,7 @@ int main(void) {
   on_orig_start_image = NestWinloadCallback;
   CHECK(MockSt.BootServices->StartImage(LOADER_IMG, NULL, NULL) == EFI_SUCCESS);
   CHECK(orig_start_image_calls == 2); /* LOADER_IMG + WINLOAD_IMG */
+  CHECK(refresh_calls == 2);
   CHECK(shadow_apply_calls == 2);
   CHECK(ebs_hook_calls == 2);
   CHECK(restore_calls == 1);

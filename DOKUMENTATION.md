@@ -1,7 +1,7 @@
 # Technische Dokumentation: Universal GPU Unlock (Multi-Gen)
 
 > **Tool:** Universal GPU Unlock  
-> **Version:** v1.9.3  
+> **Version:** v1.9.4  
 > **Architekturen:** NVIDIA Ada Lovelace (RTX 40), Ampere (RTX 30), Turing (RTX 20 / CMP)  
 > **Unterstützte Betriebssysteme:** Windows 10, Windows 11, WSL2 / Ubuntu CUDA Container  
 
@@ -27,7 +27,7 @@ Beim Booten vom USB-Stick erscheint ein 30-Sekunden-Countdown:
 | :---: | :--- | :--- |
 | **`[U]`** | **Standard Unlock** | Bewährter, robuster Unlock im RAM. Kehrt beim Kaltstart sauber in den Originalzustand zurück. |
 | **`[P]`** | **S3 Persistence Unlock** | Experimenteller Boot-Script-Modus, der den Unlock-Status auch über Sleep/Standby (S3) aufrechterhält. |
-| **`[I]`** | **Install to NVRAM** | Kopiert den `AdaUnlockDxe.efi`-Treiber in die EFI-Partition (`\EFI\Drivers\`) und trägt ihn in die UEFI-NVRAM-Bootreihenfolge ein (automatischer Unlock bei jedem Start; ab `v1.9.3` inkl. `ReadyToBoot`- und `StartImage`-Plan-C-S3-Aktivierung). |
+| **`[I]`** | **Install to NVRAM** | Kopiert den `AdaUnlockDxe.efi`-Treiber in die EFI-Partition (`\EFI\Drivers\`) und trägt ihn in die UEFI-NVRAM-Bootreihenfolge ein (automatischer Unlock bei jedem Start; ab `v1.9.4` inkl. `ReadyToBoot`-, `StartImage`- und Live-ACPI-Refresh-Plan-C-Aktivierung). |
 | **`[R]`** | **Remove DXE Driver** | Bereinigt den DXE-Treiber vollständig aus dem UEFI-NVRAM und der internen ESP-Partition. |
 | **`[S]`** | **Stock Windows** | Führt Hardwarescans und Logging auf den USB-Stick durch, überspringt den Unlock und bootet normales Windows. |
 | **`[Leertaste]`** | **Pause Countdown** | Hält den 30-Sekunden-Timer an, um das Menü in Ruhe lesen und bedienen zu können. |
@@ -71,7 +71,7 @@ Die Binärdateien (`BOOTX64.EFI` und `AdaUnlockDxe.efi`) sind mit einem dedizier
 1. **Secure Boot aktiv lassen** (`Standard`-Modus mit Factory-Keys; falls dein BIOS den USB-Stick oder `AdaUnlockDxe.efi` blockiert, **`AdaUnlock_SecureBoot.cer` per Append** zu `db` hinzufügen — Factory-Keys niemals löschen oder ersetzen).
 2. **Einmalig `[I]` installieren:** Einmal vom USB-Stick booten (`F8` / `F11` / `F12`), **`[I]`** drücken (`AdaUnlockDxe.efi` wird im UEFI-NVRAM eingetragen) und neu starten lassen.
 3. **Windows normal starten (nicht vom USB-Stick booten):** Danach immer regulär direkt über den **Windows Boot Manager (`bootmgfw.efi`)** starten *(reicht eine 100-MB-ESP nicht für Ada/Ampere-Assets aus, bleibt der USB-Stick als Speicher eingesteckt oder du legst per `Create-Unlock-Partition.bat` eine 512-MB-FAT32-Partition an — gestartet wird aber immer über den internen Windows Boot Manager)*.
-4. **Lokaler Entwicklungsstand S3-Sleep mit `[I]` (`v1.9.3`):** `AdaUnlockDxe.efi` (`v1.9.3`) kombiniert `ReadyToBoot` mit einem `BootServices->StartImage`-Guard (`EfiLoaderCode`), sodass Plan-C Shadow-ACPI und der `ExitBootServices`-Sandwich-Hook direkt vor `bootmgfw.efi` / `winload.efi` aktiv bleiben (`v1.9.2` bestätigte bereits fehlerfreien Riot-Vanguard-Betrieb unter Secure Boot, während `v1.9.3` nun zusätzlich `FirmwareCtrl = ShadowFACS` im Windows-FADT absichert; S3-Sleep/Wake-Test folgt nach `FADT`-Bestätigung).
+4. **Lokaler Entwicklungsstand S3-Sleep mit `[I]` (`v1.9.4`):** `AdaUnlockDxe.efi` (`v1.9.4`) ruft im `BootServices->StartImage`-Guard (`EfiLoaderCode`) unmittelbar vor `bootmgfw.efi` / `winload.efi` `GuAcpiRefreshShadowChain()` auf, sodass `ShadowFADT`, `ShadowXSDT` und `ShadowRSDP` frisch aus dem finalen Post-BDS-Stand (`RealXSDT`/`RealFADT`) geklont werden (behebt den veralteten `Driver####`-ACPI-Snapshot aus `v1.9.3`; Live-Test von `v1.9.4` + S3-Wake steht noch aus).
 
 ---
 
@@ -192,6 +192,10 @@ Für Grafikkarten der Ada Lovelace-Reihe (RTX 4090 / AD102) mit GSP-Firmware und
     - **Etappe-A-Befund aus `RUN0099.TXT` (`v1.9.2`):** Mit `AdaUnlockDxe.efi` (`v1.9.2`) starteten `vgk`/`vgc`/`LeagueClient` unter `Confirm-SecureBootUEFI: True` stabil ohne Vanguard-Restriction, im Windows-ACPI (`HKLM\HARDWARE\ACPI\FADT`) lag `FirmwareCtrl` jedoch weiterhin auf `0xDC8BB000` (`RealFACS`) statt `ShadowFACS` (`0xDC637400`).
     - **`StartImage`-Protection (`src/dxe_main.c`):** `AdaUnlockInstallStartImageHook()` umschließt `BootServices->StartImage` (inkl. `Hdr.CRC32`-Update via `AdaUnlockUpdateBootServicesCrc32()`). `AdaUnlockHookedStartImage()` belässt `RealRSDP` bei regulären DXE-/Treiber-Starts vor `ReadyToBoot`, erzwingt aber über `AdaUnlockApplyPlanCNow()` idempotent `GuAcpiInstallEbsHook()` + `GuAcpiApplyShadowConfigTable()`, sobald ein OS-Loader (`EFI_LOADED_IMAGE_PROTOCOL->ImageCodeType == EfiLoaderCode`, `AdaUnlockIsOsLoaderImage()`) oder ein Post-`ReadyToBoot`-Image gestartet wird (tiefengeschachtelt über `mStartImageDepth` für `bootmgfw.efi -> winload.efi`; Wiederherstellung von `RealRSDP` über `GuAcpiRestoreConfigTable()` bei Rückkehr auf Tiefe `0`).
     - **Log-Append (`src/boot_io.c`, `src/boot_io.h`):** `GuBootAppendLog()` (über gemeinsamen Helfer `GuBootAppendBuffer()`) protokolliert `ReadyToBoot`-/StartImage-Registrierung und `pre_acpi -> post_acpi` vor OS-Handover in `RUNxxxx.TXT`, ohne BootServices-Aufrufe in `GuHookedExitBootServices()` zuzulassen (`MSVC_HOST_TESTS=PASS`).
+13. **Live-ACPI-Shadow-Refresh `GuAcpiRefreshShadowChain()` vor `StartImage(bootmgfw.efi)` (`v1.9.4`, lokal):**
+    - **Fehleranalyse (`RUN0100.TXT` vs. `RUN0087.TXT`):** Im `v1.9.3`-Lauf schaltete `ReadyToBoot` zunächst auf `ShadowRSDP`, anschließend veränderte AMI BDS aber `RealXSDT` (`Chk 0xee -> 0x13`) und `RealFADT` (`Chk 0x77 -> 0x7a`, identisch zu Live-Windows) und setzte `ConfigurationTable` wieder auf `RealRSDP`. Das Wiedereinhängen der alten `Driver####`-Kopie führte in `v1.9.3` zu einem frühen Windows-Boot-BSOD noch vor `vgk.sys`, Event `12` und Minidump (Clean-Remove via `[R]` in `RUN0103.TXT`).
+    - **Implementierung (`src/s3_facs.c`, `src/s3_facs.h`, `src/dxe_main.c`):** `GuAcpiRefreshShadowChain()` nutzt die gemeinsamen Helfer `GuAcpiCalcChecksum8()`, `GuAcpiPopulateShadowChainTables()` und `GuAcpiEnsureRealFacsVector()`, klont `ShadowFADT`, `ShadowXSDT` (inkl. dynamischer Page-Allokation bei > 384 Bytes) und `ShadowRSDP` unmittelbar vor OS-Start neu aus dem finalen Live-Bestand und re-armiert bei Bedarf `RealFACS->FirmwareWakingVector` auf `LowTrampoline` (`GuAcpiLocateFadtAndFacs()` akzeptiert dabei aktualisierte echte `RealRSDP`-Zeiger direkt).
+    - **Verifikation:** Neue Refresh-Tests in `tests/test_s3_resume.c` (`9.809` Checks) und `tests/test_dxe_main.c` bestanden (`MSVC_HOST_TESTS=PASS`); Test mit `[I]` auf Hardware offen.
 
 ---
 
@@ -1480,6 +1484,9 @@ In Version `v1.9.2` aktiviert `AdaUnlockDxe.efi` (`src/dxe_main.c`) den bereits 
 
 ### 13.44 Die v1.9.3 Architektur (Lokal): `gBS->StartImage`-Guard (`EfiLoaderCode`) & Log-Append
 In Version `v1.9.3` schließt `AdaUnlockInstallStartImageHook()` (`src/dxe_main.c`) eine Lücke auf Boards/BDS-Pfaden (beobachtet in `RUN0099.TXT`: Riot Vanguard mit `v1.9.2` aktiv stabil, `HKLM\HARDWARE\ACPI\FADT` aber noch auf `RealFACS` `0xDC8BB000`), bei denen `ConfigurationTable` zwischen `Driver####`/`ReadyToBoot` und `bootmgfw.efi` zurückgesetzt oder `ReadyToBoot` umgangen wird. `AdaUnlockHookedStartImage()` re-aktiviert `GuAcpiInstallEbsHook()` und `GuAcpiApplyShadowConfigTable()` über `AdaUnlockApplyPlanCNow()` exakt vor OS-Loadern (`EfiLoaderCode` via `AdaUnlockIsOsLoaderImage()` bzw. nach `mReadyToBootFired`), belässt frühe Treiber (`EfiBootServicesCode`) auf `RealRSDP`, erhält `ShadowRSDP` über geschachtelte `bootmgfw -> winload`-Starts (`mStartImageDepth`) hinweg und stellt bei Rückkehr ins Bootmenü (`mStartImageDepth == 0`) wieder `RealRSDP` her. Gleichzeitig protokolliert `GuBootAppendLog()` (`src/boot_io.c`) `ReadyToBoot`- und `StartImage`-Status inkl. `pre_acpi -> post_acpi` direkt in `RUNxxxx.TXT` (Host-Tests in `tests/test_dxe_main.c` mit `MSVC_HOST_TESTS=PASS`).
+
+### 13.45 Die v1.9.4 Architektur (Lokal): Live-ACPI-Refresh `GuAcpiRefreshShadowChain()` vor OS-Start
+In Version `v1.9.4` behebt `GuAcpiRefreshShadowChain()` (`src/s3_facs.c`, `src/s3_facs.h`) den im `v1.9.3`-Boot (`RUN0100.TXT`) beobachteten Early-Kernel-BSOD: Zwischen `Driver####` (`RealXSDT Chk=0xee`, `RealFADT Chk=0x77`) und `Boot####` (`RUN0087.TXT`: `RealXSDT Chk=0x13`, `RealFADT Chk=0x7a`) aktualisiert AMI BDS die finalen ACPI-Tabellen. Über die gemeinsamen Helfer `GuAcpiPopulateShadowChainTables()` und `GuAcpiEnsureRealFacsVector()` klont `AdaUnlockApplyPlanCNow()` im `StartImage(EfiLoaderCode)`-Guard `ShadowFADT`, `ShadowXSDT` und `ShadowRSDP` unmittelbar vor Übergabe an `bootmgfw.efi` frisch vom finalen Live-Stand (inkl. Re-Arming von `RealFACS->FirmwareWakingVector`) und protokolliert beide Checksums (`RealXSDT`, `RealFADT`, `ShadowXSDT`, `ShadowFADT`, `rearm`) ins Boot-Log. Durch `GuAcpiLocateFadtAndFacs()` werden aktualisierte echte `RealRSDP`-Tabellen direkt übernommen; abgesichert durch `tests/test_s3_resume.c` (`9.809` Checks) und `tests/test_dxe_main.c` (`MSVC_HOST_TESTS=PASS`), Live-Hardware-Test mit `[I]` steht aus.
 
 
 
