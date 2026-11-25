@@ -132,17 +132,17 @@ To solve this universally across motherboard vendors, I implemented a two-tier p
 For Ada Lovelace GPUs (RTX 4090 / AD102) using GSP firmware and WPR2 partitioning, the S3 trampoline implements a multi-stage hardware control flow:
 1. **4-Stage Hardware Teardown & PCIe FLR (v1.8.59):**
    - Isolates and resets GPU engines cleanly before SEC2 execution:
-     - Root Port upstream bridge routing (`Offset 0x18`) is maintained active for Windows handoff.
+     - Root Port `0:3:1` upstream bridge routing (`Offset 0x18`) is kept active (`0x002D2D00`: `Sec=0x2D`, `Sub=0x2D`) for Windows handoff.
      - PCIe Function-Level Reset (FLR, PCIe Device Control Bit 15) resets all Falcon and DMA engines synchronously.
-     - Bounded polling on BAR0 Boot0 ensures full link readiness after FLR.
+     - Bounded polling on BAR0 Boot0 (`0x192000A1`) verifies full link readiness after FLR.
 2. **Single-Descriptor Reserved Memory Arena & DMA Unmapping (v1.8.61):**
    - **Retention:** The ~84 MB GSP firmware image and 3-level radix page table are reserved at cold boot inside a single contiguous 82 MB arena in `EfiReservedMemoryType` below 4 GB (`is_arena = TRUE`), adding exactly 1 descriptor to the UEFI Memory Map.
    - **DMA Unmapping (`DMA_live = 0`):** Prior to `StartImage(bootmgfw.efi)`, all UEFI DMA mappings are unmapped via `PciIo->Unmap()`, while physical DRAM retention persists across S3.
 3. **EfiRuntimeServicesData Live Telemetry (v1.8.62):**
-   - A 4 KB telemetry page (`TelemetryPage`) is allocated in `EfiRuntimeServicesData` so Windows (`kldbgdrv.sys` / `kd.exe -kl`) maps and inspects wake telemetry immediately after S3 wake.
+   - A 4 KB telemetry page (`TelemetryPage`) is allocated in `EfiRuntimeServicesData` so Windows (`kldbgdrv.sys` / `kd.exe -kl`) maps and inspects wake telemetry immediately after S3 wake (`!dd <telemetry_phys> L20` or `dd poi(nt!HalpAcpiFacsMapping)+100 L20`).
    - A dynamic 512 KB downward scan in `GuAcpiInstallShadowFacs()` detects prior-wake telemetry across warm reboots.
 4. **Pre-Booter Hardware Snapshot (v1.8.63):**
-   - Immediately prior to SEC2 Booter kickoff, the trampoline saves 6 key MMIO registers into the telemetry page:
+   - Immediately prior to SEC2 Booter kickoff, the trampoline saves 6 key MMIO registers into the telemetry page (inspectable via WinDbg `!dd <Addr> L50`):
      * `+0xF0`: Pre-Booter `WPR2_LO` (`BAR0 + 0x001fa824`)
      * `+0xF4`: Pre-Booter `WPR2_HI` (`BAR0 + 0x001fa828`)
      * `+0xF8`: `NV_PFB_PRI_MMU_LOCAL_MEMORY_RANGE` (`BAR0 + 0x00100ce0`)
@@ -157,25 +157,25 @@ For Ada Lovelace GPUs (RTX 4090 / AD102) using GSP firmware and WPR2 partitionin
      * GSP Falcon2 config (`sig_dmem = 0x0B24`, `engine_mask = 0x0400`, `ucode_id = 9`, `config = 1`, `code_va = 0`, Mailboxes = 0)
      * GSP Start CPU (`0x00110100 = 2`) and bounded poll on halt bit (`0x00110100 & 0x10 == 0x10`)
      * Post-FWSEC telemetry snapshot (`+0x108..+0x118`: `WPR2_LO`, `WPR2_HI`, `GSP_CPUCTL`, `GSP_MAILBOX0`, Scratch `0x00001438`)
-   - Properly partitions WPR2 before SEC2 runs, eliminating Booter error `0x91`.
+   - Properly partitions WPR2 (`low = 0x5ff2000`, `high = 0x5ff2e00`) before SEC2 runs, eliminating Booter error `0x91`.
 6. **Consolidation of All 6 GPU DMA Buffers in Reserved Arena & `DMA_live = 0` (v1.8.65):**
    - Consolidates Radix table, GSP firmware image, FWSEC image, Booter, V67 payload, Boot image, and untouched WPR metadata into one contiguous 82 MB `EfiReservedMemoryType` arena (20,662 of 21,000 pages used).
    - `free_coherent()` ensures `GuDmaFree()` unmaps every DMA handle before `StartImage` (`DMA_live = 0`).
-   - Preserves an untouched copy of WPR metadata (`Gu.s3_meta_cpu` / `Gu.s3_meta_dma`) before cold-boot `unlock_transaction_signature()` mutates `meta + 72`.
+   - `publish_v67()` preserves an untouched copy of WPR metadata (`Gu.s3_meta_cpu` / `Gu.s3_meta_dma`) before cold-boot `unlock_transaction_signature()` mutates `meta + 72`.
    - Captures SEC2 Mailbox 1 (`BAR0 + 0x00840044`) at `+0x11C`.
 7. **GSP HALT Gate, `0x0A00` Code Envelope & Diagnostic Snapshots `+0x120..+0x148` (v1.8.66):**
-   - Port-`0x80`-paced GSP halt gate (up to 1,000,000 iterations) waits reliably for `(BAR0 + 0x00110100) & 0x10 != 0`.
+   - Port-`0x80`-paced GSP halt gate (~100 warm-up `in al, 0x80` reads, then up to 1,000,000 iterations) waits reliably for `(BAR0 + 0x00110100) & 0x10 != 0`.
    - Expanded code envelope to `0x0A00` (2,560 bytes; low data `0x0A00..0x0AEF`, `RM_IDTR`/`PM_GDTR`/`GDT` `0x0B00..0x0B37`).
-   - Extended telemetry (`+0x120..+0x148`) plus cold-boot reference snapshot logging in `RUN*.TXT`.
+   - Extended telemetry (`+0x120..+0x148` — inspectable in WinDbg via `!dd <Addr> L58` up to `+0x15C`) logs post-booter SEC2 diagnostics (`SEC2_DEBUGINFO`, `SEC2_IRQSTAT`, `SEC2_TRACEPC`, `SEC2_PRIV_ERR`, `SEC2_HUB_ERR`, `SEC2_PRIV_INFO`, `SEC2_PRIV_ADDR`) plus `PMC_DEVICE_ENABLE`, `GSP_RISCV_CPUCTL`, `GSP_BCR`, and `GSP_DEBUGINFO`, matched against cold-boot reference snapshots (`0x200` / `0x600` / `0x1100F4` / `0x110100` / `0x111388` / `0x111668`) in `RUN*.TXT`.
 8. **Port-`0x80` SEC2 Booter Poll & `[meta_dma]` Probe `+0x14C` (v1.8.67):**
    - Up to `6,000,000` port-`0x80`-paced iterations (~5–6 s budget) on `MAILBOX0 == 0x67b00001` or `(CPUCTL & 0x10) != 0 && MAILBOX0 != meta_dma`, plus post-marker `100,000`-iteration halt poll before writing `SS0`/`SS1`.
-   - Probes `[meta_dma]` first DWORD (expected `0x371a60b3`) into `+0x14C`.
+   - Probes `[meta_dma]` first DWORD (expected `0x371a60b3`, low DWORD of `GU_WPR_META_MAGIC`) into `+0x14C`.
    - Verified across consecutive S3 sleep/wake cycles on RTX 4090 (Windows 10, driver `621.14`, `290.51` TFLOPS FP16 / `291.99` TFLOPS BF16).
 9. **Universal-S3 Phase 1 — Dynamic Bridges, Chipsets, VBIOS Geometry & Ada Universality (`v1.9.0`):**
-   - `GuDiscoverUpstreamBridgeChain()` dynamically walks up to `4` upstream PCI-to-PCI bridges (`Root -> Leaf`), computing dynamic 16 MB inclusive bridge memory windows from `bar0_target` and passing parsed FWSEC/SEC2 VBIOS geometries via `GU_S3_RESUME_CONTEXT` (`version = 2`, `216` bytes; `2,281 / 2,560` bytes code envelope).
-   - Port-`0x80`-paced pre-FWSEC GFW boot/VRAM gate, strict `< 0x000A0000` low-RAM allocation, and `[P]` preflight warnings for Modern Standby (`FADT` Bit 21 `S0ix`) and non-zero `XFirmwareWakingVector` (`9,782` host checks passed).
+   - `GuDiscoverUpstreamBridgeChain()` dynamically walks up to `4` upstream PCI-to-PCI bridges (`Root -> Leaf`), computing the 16 MB inclusive bridge memory window from `bar0_target` (`Base = (bar0 >> 16) & 0xFFF0`, `Limit = ((bar0 + 0x00FFFFFF) >> 16) & 0xFFF0`) and passing `ctx->pci_id`, `PMC_BOOT_0` (`ctx->chip_id`), and parsed FWSEC/SEC2 VBIOS geometries (`app_code_off`, `os_data_off`, `sig_dmem`, `engine_mask`, `ucode_id`) via `GU_S3_RESUME_CONTEXT` (`version = 2`, `216` bytes; `2,281 / 2,560` bytes code envelope).
+   - Port-`0x80`-paced pre-FWSEC GFW boot/VRAM gate (`(0x118234 & 0xFF) == 0xFF && 0x100CE0 != 0`), strict `< 0x000A0000` low-RAM allocation, and `[P]` preflight warnings for Modern Standby (`FADT` Bit 21 `LOW_POWER_S0_IDLE_CAPABLE`) and non-zero `XFirmwareWakingVector` (`9,782` host checks passed).
 10. **Universal-S3 `EFI_PCI_ROOT_BRIDGE_IO_PROTOCOL` Primary Discovery (`v1.9.1`):**
-    - Uses `EFI_PCI_ROOT_BRIDGE_IO_PROTOCOL` as primary bus walk (catching root ports without `EFI_PCI_IO_PROTOCOL` handles, e.g., AMI Aptio V `0:3:1`), with `EFI_PCI_IO_PROTOCOL` as fallback, and aborts cleanly with `EFI_NOT_FOUND` on `0` bridges for `target_gpu_bus > 0` (`9,798` checks).
+    - Uses `EFI_PCI_ROOT_BRIDGE_IO_PROTOCOL` (`SegmentNumber == target_seg`, `dev = 0..31`, multifunction `0x80` -> `func = 0..7`, filter `(HeaderType & 0x7F) == 0x01`, `sec > current_bus && sec <= target_gpu_bus <= sub`, up to 4 levels; logged as `S3 PCIe Bridge[i]: BDF=... (pri=.. sec=.. sub=..)`) to catch root ports without `EFI_PCI_IO_PROTOCOL` handles (e.g., AMI Aptio V `0:3:1`), falling back cleanly to corrected EDK2 `EFI_PCI_IO_PROTOCOL_GUID` and resolving `GuFindRootPortLinkReg()` via PCIe capability `0x10` (`LinkReg = CapOffset + 0x10` on `bridges[count - 1]`). Removes hardcoded `0:3:1` fallbacks and aborts cleanly with `EFI_NOT_FOUND` on `0` bridges for `target_gpu_bus > 0` (`9,798` checks).
 11. **Plan-C S3 Hook Activation in `AdaUnlockDxe.efi` (`v1.9.2`):**
     - Defers `GuAcpiInstallEbsHook()` + `GuAcpiApplyShadowConfigTable()` from early BDS to `ReadyToBoot` via `AdaUnlockOnPlanCReadyToBoot()`.
 12. **`gBS->StartImage` Guard (`EfiLoaderCode`) & Forensic Log Append (`v1.9.3`):**
@@ -478,8 +478,33 @@ Writes `0x324B4F21` (`'!OK2'`) immediately at `+0x0500` upon entering 32-bit PM,
 ### 13.19 The v1.8.47 32-Bit Flat-Mode Temporary BAR0 MMIO Hardware Unlock on S3 Wake
 
 1. **Telemetry Proof from `v1.8.46c` (`0xd8261000`):** Proved clean execution through the bridge (`324B4F21`, `0xAA01`, `0xAA02`, 1603 ms wake) and showed GPU (`0x2D:0:0`) in D0 with `BAR0 = 0x00000000` and `MSE` cleared.
-2. **4 KB Page Reorganization:** Expanded executable envelope to 1024 bytes (`+0x0000..+0x03FF`, `791` bytes used), placing `RM_IDTR`/`PM_GDTR`/`GDT` at `+0x0400..+0x0437` and telemetry at `+0x0500..+0x05BF`.
-3. **32-Bit Unlock Flow & Telemetry (`+0x80..+0xBC`):** Temporarily configures Root Port `0:3:1` memory window (`0xFC00FB00`), assigns GPU `BAR0 = 0xFB000000` + `MSE`, verifies Chip ID (`0x192000a1`, checks `0xFFFFFFFF` / `0xBADFxxxx`), logs `Before`/`After` `SS0`/`SS1`/`Readout1`/`PLM`, writes `0x88888888`/`0x00000008`, logs `'UNLK'` (`0x554E4C4B`), restores all PCI config registers cleanly before returning to Real Mode (`8,811` host checks passing).
+2. **4 KB Low-Trampoline Memory Layout (`0x0009E000`):**
+   - `+0x0000..+0x03FF` (1024 bytes): Executable machine code (`791` bytes used, `233` bytes guard).
+   - `+0x0400..+0x0437` (56 bytes): `RM_IDTR` (`+0x0400`), `PM_GDTR` (`+0x0408`), 5 GDT descriptors (`+0x0410`).
+   - `+0x0438..+0x04FF` (200 bytes): Zero-initialized guard region.
+   - `+0x0500..+0x057F` (128 bytes): Telemetry & EBS-sandwich diagnostics (`0x0500` far jump target, `0x0504` `RealRSDP` low32, `0x0508` EBS counters, `0x0510` `0xAA01`, `0x0512` `0xAA02`, `0x0514` vector, `0x051C` `'S3_T'`, `0x0520` probes, `0x0540` raw, `0x0560` post-arm, `0x0570`/`0x0572` saved `SP`/`SS`).
+   - `+0x0580..+0x058F` (16 bytes): Real FACS original vector mirror (`+0x0580` 32-bit, `+0x0588` 64-bit); `+0x0590..+0x0FFF` guard.
+3. **32-Bit Unlock Flow & Non-NVS Telemetry Reference (`telemetry_phys + 0x80..0xBC`):**
+   Temporarily routes Root Port `0:3:1` memory window (`0xFC00FB00`), assigns GPU `BAR0 = 0xFB000000` + `MSE`, reads Chip ID (`0x192000a1`, aborts to teardown on `0xFFFFFFFF` / `0xBADFxxxx`), writes `SS0 = 0x88888888` / `SS1 = 0x00000008`, and restores all PCI config registers cleanly before returning to Real Mode (`8,811` host checks):
+
+   | Offset | Field | Description / Expected Value |
+   | :---: | :--- | :--- |
+   | `+0x80` | `Magic` | `0x554E4C4B` (`'UNLK'`) |
+   | `+0x84` | `Status` | `1` = Success, `2` = Mismatch, `3` = Fault / Bad Chip |
+   | `+0x88` | `ChipID` | GPU Chip ID (`0x192000a1` on `AD102`) |
+   | `+0x8C` | `AssignedBAR0` | Temporary BAR0 aperture (`0xFB000000`) |
+   | `+0x90` | `SS0_Before` | `SS0` (`+0x82381C`) prior to unlock |
+   | `+0x94` | `SS1_Before` | `SS1` (`+0x823820`) prior to unlock |
+   | `+0x98` | `Readout1_Before` | SM speed status (`+0x823818`) prior to unlock |
+   | `+0x9C` | `PLM_Before` | Privilege Level Mask (`+0x823804`) prior to unlock |
+   | `+0xA0` | `SS0_After` | `SS0` after unlock (`0x88888888`) |
+   | `+0xA4` | `SS1_After` | `SS1` after unlock (`0x00000008`, bits 3:0 == `0x8`) |
+   | `+0xA8` | `Readout1_After` | SM speed status after unlock (`0x00000000` = Full Rate) |
+   | `+0xAC` | `PLM_After` | Privilege Level Mask after unlock (`0xFFFFFFFF`) |
+   | `+0xB0` | `OrigRootPortCmd` | Pre-trampoline Root Port Command register |
+   | `+0xB4` | `OrigRootPortMem` | Pre-trampoline Root Port Memory Base/Limit |
+   | `+0xB8` | `OrigGpuCmd` | Pre-trampoline GPU Command register (`0x00000000`) |
+   | `+0xBC` | `OrigGpuBar0` | Pre-trampoline GPU BAR0 register (`0x00000000`) |
 
 ---
 
@@ -561,24 +586,35 @@ Completed chunked 256-byte RISC-V SEC2 DMA inside the 32-bit trampoline:
 
 ### 13.31 The v1.8.58 1:1 SEC2 Engine Reset Cycle, 5-Stage PCIe Teardown & Wake Crash-Dump Forensics
 
-1. **1:1 `hold_sec2_reset()` Harmonization (`src/s3_facs.c` vs `unlock_610.c`):** Implemented stack-free `.sec2_reset_cycle` ensuring SEC2 ends with `RESET_FALSE` (bit 0 = 0) and completed scrub (`0x008400F4` bit 12 = 0), preventing `FECS_PRI_RESET` (`0xbadf12`) infinite driver waits (and never touching `FALCON2_BCR` post-unlock).
-2. **Crash Dump Forensics (`MEMORY.DMP` BugCheck `0x7E` in `nvlddmkm.sys`):** Showed desktop GPU sits in D3cold on S3 wake (onboard VRAM unpowered until devinit), triggering a driver fail-fast `int 3` whenever Root Port bridge routing was still disabled or SEC2 scrub incomplete (`1,277` bytes code, `8,720` checks).
+1. **1:1 `hold_sec2_reset()` Harmonization (`src/s3_facs.c` vs. `src/vendor/unlock_610.c:1614-1674`):**
+   - SEC2 must exit reset with `RESET_FALSE` (`SEC2_BASE + 0x3c0` bit 0 = 0); leaving `RESET_TRUE` causes subsequent host reads to return `FECS_PRI_RESET` (`0xbadf12` in bits 31:8), stalling driver scrub waits indefinitely. `0x00841668` (`FALCON2_BCR`) is strictly pre-bootrom only (`falcon_reset()`) and is never re-written in post-unlock cleanup.
+   - Stack-free `.sec2_reset_cycle` (`jmp ebp`): (1) `0x008403C0 |= 1`, (2) 10 dummy reads, (3) bounded poll `& 1 == 1` (`1000 us`), (4) `0x008403C0 &= ~1`, (5) 10 dummy reads, (6) bounded poll `& 1 == 0` (`1000 us`), (7) bounded poll `0x008400F4` bit 12 (`0x1000`) == 0 (`1000000 us`). Invoked both pre-booter and post-selector write.
+2. **Crash-Dump Forensics (`C:\Windows\MEMORY.DMP`):**
+   - `BugCheck 0x0000007E` (`SYSTEM_THREAD_EXCEPTION_NOT_HANDLED`), `P1 = 0xFFFFFFFF80000003` (`STATUS_BREAKPOINT`), `P2 = nvlddmkm.sys + 0x25BF4DE` (driver `621.14 / 32.0.16.2114`) firing fail-fast `int 3`.
+   - Root cause: discrete desktop GPUs reside in `D3cold` across S3 wake (onboard VRAM unpowered until `nvlddmkm.sys` devinit); if Root Port bridge routing stays disabled or SEC2 scrub is incomplete, the driver triggers fail-fast `int 3` (`black screen`).
+3. **5-Stage PCIe Teardown & Telemetry Bounds (`src/s3_facs.c`):**
+   - Reverse restore sequence: Stage 1 GPU Command (`0x802D0004`), Stage 2 GPU BAR0 (`0x802D0010`), Stage 3 Root Port Memory Base/Limit (`0x80001920`), Stage 4 Root Port Command (`0x80001904`), Stage 5 Root Port Sec/Sub Bus (`0x80001918`).
+   - Telemetry copy (`rep movsd` of 24 DWORDs = 96 bytes to `+0x0580..+0x05E0`) stays asserted strictly below `RM_IDTR` (`+0x0600`) (`1,277` bytes code `< 1,280`; `8,720` host checks).
 
 ---
 
 ### 13.32 The v1.8.59 True PCIe FLR, Preserved Bridge Bus Routing & 2 KB Code Envelope
 
-1. **Root Causes Eliminated from `v1.8.58`:**
-   - Removed Stage 5 bridge zeroing on Root Port offset `0x18` (leaving `0x002D2D00` active for Windows `nvlddmkm.sys`).
-   - Added real PCIe Function-Level Reset (FLR, `pcie_cap + 0x08` bit 15 + ~120 ms port-`0x80` wait + config/BAR0 restoration + `.sec2_sub_start`) matching `unlock_610.c`, clearing `WPR2_HI` (`HI.VAL == 0` required by stock NVIDIA driver) while preserving unlocked `SS0`/`SS1`.
-2. **2048-Byte Code Envelope (`< 0x0800`):** Expanded executable area to `0x0000..0x07FF` (`1,424` bytes used; data at `0x0800..0x08EF`, `RM_IDTR`/`PM_GDTR`/`GDT` at `0x0900..0x093F`; `8,729` host checks).
+1. **Remaining S3-Wake Black Screen Root Causes Fixed:**
+   - **Windows Confirmed Alive:** Kernel ran cleanly without `BugCheck 0x7E`, proving `v1.8.58` `hold_sec2_reset()` cured the driver crash.
+   - **Removed Stage 5 Bus Zeroing:** `v1.8.58` Stage 5 wrote `0x00000000` back to Root Port `0:3:1` offset `0x18` (`0x80001918`), cutting bus `0x2D` off from Windows. Removing Stage 5 preserves `0x002D2D00` (`Pri=0, Sec=0x2D, Sub=0x2D`) active through the 4-stage teardown (`0x802D0004`, `0x802D0010`, `0x80001920`, `0x80001904`).
+   - **Pre-Existing `WPR2` Lockout (`src/vendor/unlock_610.c:1835-1840`):** `kgspIsWpr2Up_TU102` rejects cold-D3cold resume if `(hi >> 4)` is non-zero (`"post-FLR WPR2 remains enabled ... stock driver requires HI.VAL=0"`, returning `-EBUSY`).
+2. **8-Step True PCIe Function-Level Reset (`src/vendor/unlock_610.c:1750-1860`):**
+   Immediately after `SS0`/`SS1` writes: (a) clear Bus Master `0x802D0004 &= ~0x04`, (b) assert FLR bit 15 (`0x8000`) at `Gu.pcie_cap + 0x08` (`0x802D0080`), (c) ~120 ms stall via `120,000` port-`0x80` reads, (d) poll `0x802D0000 == 0x268410DE` (`50,000` iters), (e) restore `BAR0 = 0xFB000000` & `Cmd = 0x06` (`MSE | BME`), (f) poll `[ebx] == 0x192000A1` (`50,000` iters), (g) run stack-free `.sec2_sub_start`, (h) log post-FLR `WPR2_HI` (`+0xE0` == `0x00000000`), `SS0` (`+0xE4`), `SS1` (`+0xE8`), and `PLM` (`+0xEC`).
+3. **2048-Byte Code Envelope Map (`< 0x0800`):**
+   - `0x0000..0x07FF`: Executable code (`1,424` bytes used = `0x0590`); `0x0800..0x087F`: Data/checkpoints; `0x0880..0x08EF`: Low FACS mirror (28 DWORDs = 112 bytes, compile/runtime asserted via `GU_TRAMP_REAL_FACS_MIRROR_OFF + 112 <= GU_TRAMP_RM_IDTR_OFF`); `0x0900..0x0905` `RM_IDTR`; `0x0908..0x090D` `PM_GDTR`; `0x0910..0x093F` GDT (`8,729` host checks).
 
 ---
 
 ### 13.33 The v1.8.60 Radix Table & GSP Firmware Retention in `EfiReservedMemoryType` Across S3 Sleep
 
-1. **Booter `0x91` Root Cause (`!dd d81a3000 L10`):** `EfiBootServicesData` radix tables were reclaimed and zeroed by Windows after `ExitBootServices()`, causing SEC2 Booter `RADIX_TABLE_INVALID` (`0x91`) on S3 wake.
-2. **Strict `EfiReservedMemoryType` Allocation (NEVER `EfiACPIMemoryNVS`):** Allocates ~84 MB GSP firmware + 41 radix pages (`20,604` pages) in `EfiReservedMemoryType` (`< 4 GB`). Using `EfiACPIMemoryNVS` for 85 MB would overflow `nt!HalpSaveNvsArea` during sleep/hibernate; `EfiReservedMemoryType` stays untouched in DRAM without HAL copying (`8,743` host checks).
+1. **Booter `0x91` Root Cause (`!dd d81a3000 L10`):** `EfiBootServicesData` radix tables were reclaimed and zeroed by Windows after `ExitBootServices()`, causing SEC2 Booter `RADIX_TABLE_INVALID` / `PTE_LOOKUP_FAILED` (`0x00000091`) on S3 wake.
+2. **Strict `EfiReservedMemoryType` Allocation (NEVER `EfiACPIMemoryNVS`):** Allocates the ~84 MB GSP firmware image (`0x05053000` bytes) + 41 radix pages (`20,604` pages = `84,393,984` bytes total) in `EfiReservedMemoryType` (`< 4 GB`), with `GuDmaAllocate()` falling back to `gBS->AllocatePages(AllocateMaxAddress, EfiReservedMemoryType, 0xFFFFFFFFULL)` when `PciIo->AllocateBuffer` restricts memory types. Using `EfiACPIMemoryNVS` for 85 MB would overflow `nt!HalpSaveNvsArea` during sleep/hibernate; `free_coherent()` / `GuDmaFree()` preserve allocations when `Gu.s3_persist_armed` is set (`wpr_meta` `0xdc642000` pointers: `radix_dma +0x10`, `boot_dma +0x20`, `signature_dma +0x48`; `8,743` host checks).
 
 ---
 

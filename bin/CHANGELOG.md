@@ -9,7 +9,7 @@ For packaged binaries and downloads, visit [GitHub Releases](https://github.com/
 
 ## [Unreleased]
 ### Documentation
-- **English Documentation Consolidation:** Translated the full technical manual (`DOKUMENTATION.md` ➔ `DOCUMENTATION.md`) and component dependency checklist (`docs/SYNCHRONISATIONS_MATRIX.md` ➔ `docs/SYNCHRONIZATION_MATRIX.md`) to English, updated `README.md` / `src/Build-Release-Zip.ps1` / `bin/` co-located docs, and removed the legacy German files so the entire GitHub documentation suite uses one unified English source.
+- **English Documentation Consolidation & Reference Restoration:** Translated the full technical manual (`DOKUMENTATION.md` ➔ `DOCUMENTATION.md`) and component dependency checklist (`docs/SYNCHRONISATIONS_MATRIX.md` ➔ `docs/SYNCHRONIZATION_MATRIX.md`) to English, restored key low-level S3 telemetry/FLR/SEC2 reset tables and WinDbg diagnostic references in `DOCUMENTATION.md` (Sections `6.4`, `13.19`, `13.31`–`13.33`), updated `README.md` / `src/Build-Release-Zip.ps1` / `bin/` co-located docs, and removed the legacy German files so the entire GitHub documentation suite uses one unified English source.
 
 ## [v2.0.0] - 2026-11-25
 ### Added & Improved (Cockpit UX, Power-Limit Control, S3 Telemetry, Stickless `[I]` & Repository Consolidation)
