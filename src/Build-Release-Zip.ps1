@@ -40,7 +40,7 @@ try {
     }
     foreach ($pair in @(
         @('README.md', 'bin\README.md'),
-        @('DOKUMENTATION.md', 'bin\DOKUMENTATION.md'),
+        @('DOCUMENTATION.md', 'bin\DOCUMENTATION.md'),
         @('CHANGELOG.md', 'bin\CHANGELOG.md'),
         @('src\version.h', 'bin\version.h')
     )) {

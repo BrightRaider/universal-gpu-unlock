@@ -7,6 +7,10 @@ For packaged binaries and downloads, visit [GitHub Releases](https://github.com/
 
 ---
 
+## [Unreleased]
+### Documentation
+- **English Documentation Consolidation:** Translated the full technical manual (`DOKUMENTATION.md` ➔ `DOCUMENTATION.md`) and component dependency checklist (`docs/SYNCHRONISATIONS_MATRIX.md` ➔ `docs/SYNCHRONIZATION_MATRIX.md`) to English, updated `README.md` / `src/Build-Release-Zip.ps1` / `bin/` co-located docs, and removed the legacy German files so the entire GitHub documentation suite uses one unified English source.
+
 ## [v2.0.0] - 2026-11-25
 ### Added & Improved (Cockpit UX, Power-Limit Control, S3 Telemetry, Stickless `[I]` & Repository Consolidation)
 - **Live S3 ARMED Traffic-Light Telemetry (`tools/gu_system_info.py`, `tools/gpu_dashboard.py`, `tools/quick_check.py`):**

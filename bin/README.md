@@ -64,7 +64,7 @@
 
 - **S3 Sleep + Vanguard (`v1.9.4+` / `v2.0.0`):** `AdaUnlockDxe.efi` refreshes post-BDS ACPI shadow tables right before OS handoff (`GuAcpiRefreshShadowChain()` in `StartImage`), keeping `ShadowFACS` armed alongside `Confirm-SecureBootUEFI: True` across both stickless reboots (**224.52 TFLOPS FP16**) and ACPI S3 sleep/wake (**221.19 TFLOPS FP16** with `vgk` Running, `vgtray`, and `Riot Client` active; requires classic **ACPI S3** in BIOS, not Modern Standby `S0ix`).
 - **Fast Startup note:** If an unexpected power loss/reset triggers Windows Fast Startup `0xC00000D4` and temporarily stops `vgk.sys`, run one normal Windows **Restart** (bypasses `hiberfil.sys`).
-- **Full Technical & Persistence Whitepaper:** [OPERATIONS_AND_PERSISTENCE.md](docs/OPERATIONS_AND_PERSISTENCE.md) · [DOKUMENTATION.md](DOKUMENTATION.md)
+- **Full Technical & Persistence Whitepaper:** [OPERATIONS_AND_PERSISTENCE.md](docs/OPERATIONS_AND_PERSISTENCE.md) · [DOCUMENTATION.md](DOCUMENTATION.md)
 
 </details>
 
@@ -228,7 +228,7 @@ All version releases, bug fixes, and device expansions are maintained in the sep
 │   ├── Universal-Control-Center.* <- Advanced WPF Diagnostics, Telemetry Dumps & Capture Checker
 │   └── optional-turing-rebar/   <- Experimental ReBarUEFI guide (STRICTLY NO SUPPORT, use at own risk)
 ├── AdaUnlock_SecureBoot.cer     <- Authenticode certificate for Secure Boot db enrollment
-├── DOKUMENTATION.md             <- Full German technical documentation
+├── DOCUMENTATION.md             <- Full English technical documentation
 └── CHANGELOG.md                 <- Recent release history (v1.8+ / v2.0.0; older entries in docs/)
 ```
 
