@@ -35,6 +35,7 @@ For packaged binaries and downloads, visit [GitHub Releases](https://github.com/
   - Hardened UEFI/S3/S4 documentation & diagnostics: read-only OEM zeroed Root-Port `0x18` diagnostic (`GuLogZeroedRootPortHint()` in `src/gpu_discovery.c`), documented OVMF/`virtio-fs` `ConnectController` isolation (`src/unlock_release.c`), and added explicit S4 Hibernate + pre-boot ReBAR (`0x610`/`0xBC0`) / GOP-reconnect warnings across `src/s3_facs.c`, `src/s3_resume.c`, `README.md`, `DOKUMENTATION.md`, and `tools/optional-turing-rebar/README.md`.
   - Reduced root entrypoints to `Setup.bat`, `Launch-Dashboard.bat`, and `Check-GPU-Unlock.bat`; moved helper scripts cleanly into `tools/` and updated all callers in `tools/Deploy-UsbCommon.ps1`, `tools/Universal-Control-Center.ps1`, and `tools/gpu_dashboard.py` (including bundling `Universal-Control-Center.xaml` and `gpu_dashboard.py` onto USB drives); added `docs/images/dashboard-v2.0.0.png`, `.gitattributes`, and `src/Build-Release-Zip.ps1`.
   - Removed bit-identical duplicate `bin/AD102-UNIVERSAL.EFI` (identical SHA-256 to `bin/BOOTX64.EFI`) and archived `v1.5`–`v1.7.9` notes into `docs/CHANGELOG_ARCHIVE.md`.
+- **Desktop RTX 4060 Ti Device IDs (`src/gpu_device_ids.h`, `refs #21`):** Added desktop `AD106` PCI Device IDs `0x2803` (8GB), `0x2805` (16GB), and `0x2807` (variant) alongside `0x2860` (Mobile) plus a temporary `test/v1.8.32-4060ti` patch; `#21` closed as completed after 3 days without user reply (external hardware benchmark log still pending).
 
 ---
 ## [v1.9.6] - 2026-11-25

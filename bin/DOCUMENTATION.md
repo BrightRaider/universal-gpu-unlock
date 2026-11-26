@@ -694,6 +694,8 @@ Fixed the early-kernel BSOD in `v1.9.3` (`RUN0100.TXT`) caused by late AMI BDS u
    - **S4 Hibernate & Pre-Boot ReBAR Safety:** `src/s3_facs.c` and `src/s3_resume.c` enforce a pure SS0/SS1 unlock without mutating pre-boot ReBAR BAR1 registers (`0x610`/`0xBC0`) or forcing `ConnectController` during S3/S4 resume (preventing `Kernel-Power 41` hangs and TDR reboots).
 3. **Final `v2.0.0` Hardware Acceptance (2026-11-25, Stickless `GPU_UNLOCK` + S3 + Riot Vanguard):**
    - Verified on stickless reboot (`USB_DRIVES_MOUNTED = 0`, `Confirm-SecureBootUEFI: True`, `FirmwareCtrl = 0xDC637400`, `vgk` Running + `vgtray`, **`224.52 TFLOPS`** `FP16`, `FMLA32/FMLA16 = 0.59x`, `S3 ARMED (ShadowFACS in FADT)`) and subsequent S3 sleep/wake (`vgk`, `vgtray`, `Riot Client`, `Confirm-SecureBootUEFI: True`, `ShadowFACS = 0xDC637400`, **`221.19 TFLOPS`** with live `16%` external-load notice, `4.12x` CUDA ratio, `FMLA32/FMLA16 = 0.64x`, `[OK] FULLY UNLOCKED!`).
+4. **Desktop RTX 4060 Ti (`AD106`) Device IDs (`src/gpu_device_ids.h`, `refs #21`):**
+   - Added desktop PCI IDs `0x2803` (8GB), `0x2805` (16GB), and `0x2807` alongside `0x2860` (Mobile) in `v2.0.0` (and temporary `test/v1.8.32-4060ti` patch). `#21` was closed as completed after 3 days without user response (external hardware `RUN*.TXT` / benchmark confirmation remains pending).
 
 ### 13.49 VeraCrypt DCS & Small EFI Chainloader PE32+ Validation (`[Unreleased / main]`, `refs #23`)
 
