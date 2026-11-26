@@ -80,6 +80,7 @@
 
 - **Any Vendor & Platform:** Works across Founders Edition / AIB partners, Intel (`Z390`–`Z890`) & AMD (`AM4`/`AM5`), multi-drive Windows setups, and **Multi-GPU / Headless Compute** (e.g. monitors on iGPU, discrete GPU compute-only — [#14](https://github.com/BrightRaider/universal-gpu-unlock/issues/14), [#16](https://github.com/BrightRaider/universal-gpu-unlock/issues/16), [#17](https://github.com/BrightRaider/universal-gpu-unlock/issues/17)).
 - **ESP Space for Stickless `[I]`:** **Turing** needs ~28 MB (fits standard `100 MB` Windows ESPs automatically). **Ada & Ampere** need ~85 MB — use `Setup.bat [3]` to create a hidden `512 MB` `GPU_UNLOCK` partition, keep the USB drive plugged in as storage (`bootmgfw.efi` still boots Windows), or use `[P]` S3 Sleep ([#19](https://github.com/BrightRaider/universal-gpu-unlock/issues/19)).
+- **VeraCrypt UEFI System Encryption (`main` / upcoming `v2.0.1`):** Fixed staging of compact `~24 KiB` PE32+ EFI chainloaders (`DcsBoot.efi`) at `\EFI\Microsoft\Boot\bootmgfw.efi` ([#23](https://github.com/BrightRaider/universal-gpu-unlock/issues/23), pre-release EFI test patch linked in `#23`).
 
 <details>
 <summary><b>⚙️ Platform & UEFI Engine Highlights (Turing GSP, Multi-GPU, Safeguards)</b></summary>

@@ -446,19 +446,69 @@ EFI_STATUS GuBootLoadAssets(VOID) {
   return GuAssetsValid() ? EFI_SUCCESS : EFI_CRC_ERROR;
 }
 
+static UINT16 GuReadLe16(const UINT8 *b, UINTN off) {
+  return (UINT16)((UINT32)b[off] | ((UINT32)b[off + 1U] << 8));
+}
+
+static UINT32 GuReadLe32(const UINT8 *b, UINTN off) {
+  return (UINT32)b[off] | ((UINT32)b[off + 1U] << 8) |
+         ((UINT32)b[off + 2U] << 16) | ((UINT32)b[off + 3U] << 24);
+}
+
+/* Accept small legitimate EFI chainloaders such as VeraCrypt DcsBoot.efi (~24 KiB)
+   while enforcing PE32+ x64 EFI Application header integrity. */
+static BOOLEAN ValidateWindowsPeImage(const VOID *data, UINTN size) {
+  const UINT8 *b = (const UINT8 *)data;
+  UINT32 lfanew;
+  UINT16 machine;
+  UINT16 opt_sz;
+  UINT16 magic;
+  UINT16 subsys;
+
+  if (!b || size < 4096U || size > 33554432U)
+    return FALSE;
+  if (b[0] != 'M' || b[1] != 'Z')
+    return FALSE;
+  lfanew = GuReadLe32(b, 0x3CU);
+  if (lfanew < 0x40U || (UINTN)lfanew > size ||
+      size - (UINTN)lfanew < 24U + 72U)
+    return FALSE;
+  if (b[lfanew] != 'P' || b[lfanew + 1U] != 'E' || b[lfanew + 2U] != 0 ||
+      b[lfanew + 3U] != 0)
+    return FALSE;
+  machine = GuReadLe16(b, (UINTN)lfanew + 4U);
+  if (machine != 0x8664U)
+    return FALSE;
+  opt_sz = GuReadLe16(b, (UINTN)lfanew + 20U);
+  if (opt_sz < 72U || size - (UINTN)lfanew - 24U < (UINTN)opt_sz)
+    return FALSE;
+  magic = GuReadLe16(b, (UINTN)lfanew + 24U);
+  if (magic != 0x020BU)
+    return FALSE;
+  subsys = GuReadLe16(b, (UINTN)lfanew + 24U + 68U);
+  return subsys == 10U ? TRUE : FALSE;
+}
+
 static EFI_STATUS ReadWindowsBinary(EFI_FILE_PROTOCOL *root, const CHAR16 *name,
                                     UINTN *file_size, VOID **data) {
   VOID *p = NULL;
-  EFI_STATUS s = ReadFileData(root, name, 65536, 33554432, file_size, &p);
-  if (s != EFI_SUCCESS)
+  UINTN sz = 0;
+  EFI_STATUS s = ReadFileData(root, name, 4096U, 33554432U, &sz, &p);
+  if (s != EFI_SUCCESS) {
+    if (file_size)
+      *file_size = 0;
+    *data = NULL;
     return s;
-  if (((UINT8 *)p)[0] != 'M' || ((UINT8 *)p)[1] != 'Z') {
+  }
+  if (!ValidateWindowsPeImage(p, sz)) {
     GuFree(p);
     *data = NULL;
     if (file_size)
       *file_size = 0;
     return EFI_COMPROMISED_DATA;
   }
+  if (file_size)
+    *file_size = sz;
   *data = p;
   return EFI_SUCCESS;
 }

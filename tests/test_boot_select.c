@@ -95,6 +95,40 @@ int main(void) {
   { UINT8 bad[8] = {4, 1, 2, 0, 0, 0, 0, 0}; CHECK(FindHardDrive(bad, 8) == NULL); } /* node length < 4 */
   { UINT8 cut[8] = {4, 1, 42, 0, 0, 0, 0, 0}; CHECK(FindHardDrive(cut, 8) == NULL); } /* node past limit */
 
+  /* PE32+ EFI application validation (including ~24 KiB VeraCrypt DcsBoot.efi, refs #23) */
+  {
+    static UINT8 vc[24088];
+    UINTN i;
+    for (i = 0; i < sizeof(vc); i++) vc[i] = 0;
+    vc[0] = 'M'; vc[1] = 'Z';
+    vc[0x3C] = 0x80;
+    vc[0x80] = 'P'; vc[0x81] = 'E';
+    vc[0x84] = 0x64; vc[0x85] = 0x86; /* IMAGE_FILE_MACHINE_AMD64 (0x8664) */
+    vc[0x94] = 0xF0; vc[0x95] = 0x00; /* SizeOfOptionalHeader = 240 */
+    vc[0x98] = 0x0B; vc[0x99] = 0x02; /* PE32+ Magic (0x020B) */
+    vc[0xDC] = 10;                    /* IMAGE_SUBSYSTEM_EFI_APPLICATION (10) */
+
+    CHECK(ValidateWindowsPeImage(vc, sizeof(vc)) == TRUE);
+    CHECK(ValidateWindowsPeImage(vc, 4096U) == TRUE);
+    CHECK(ValidateWindowsPeImage(vc, 4095U) == FALSE);
+    CHECK(ValidateWindowsPeImage(NULL, sizeof(vc)) == FALSE);
+    CHECK(ValidateWindowsPeImage(vc, 33554433U) == FALSE);
+
+    vc[0] = 'X'; CHECK(ValidateWindowsPeImage(vc, sizeof(vc)) == FALSE); vc[0] = 'M';
+    vc[0x80] = 'X'; CHECK(ValidateWindowsPeImage(vc, sizeof(vc)) == FALSE); vc[0x80] = 'P';
+    vc[0x84] = 0x4C; vc[0x85] = 0x01; CHECK(ValidateWindowsPeImage(vc, sizeof(vc)) == FALSE);
+    vc[0x84] = 0x64; vc[0x85] = 0x86;
+    vc[0x98] = 0x0B; vc[0x99] = 0x01; CHECK(ValidateWindowsPeImage(vc, sizeof(vc)) == FALSE);
+    vc[0x98] = 0x0B; vc[0x99] = 0x02;
+    vc[0xDC] = 2; CHECK(ValidateWindowsPeImage(vc, sizeof(vc)) == FALSE);
+    vc[0xDC] = 10;
+    vc[0x94] = 64; CHECK(ValidateWindowsPeImage(vc, sizeof(vc)) == FALSE);
+    vc[0x94] = 0xF0;
+    vc[0x3C] = 0x20; CHECK(ValidateWindowsPeImage(vc, sizeof(vc)) == FALSE);
+    vc[0x3C] = 0xFF; vc[0x3D] = 0xFF; vc[0x3E] = 0xFF; vc[0x3F] = 0x7F;
+    CHECK(ValidateWindowsPeImage(vc, sizeof(vc)) == FALSE);
+  }
+
   if (failures) printf("test_boot_select: %d FAILED\n", failures);
   else printf("test_boot_select: all checks passed\n");
   return failures != 0;

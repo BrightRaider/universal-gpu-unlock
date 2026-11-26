@@ -8,6 +8,9 @@ For packaged binaries and downloads, visit [GitHub Releases](https://github.com/
 ---
 
 ## [Unreleased]
+### Fixed
+- **VeraCrypt UEFI / Small EFI Chainloader Support (`src/boot_io.c`, `tests/test_boot_select.c`, `refs #23`):** Lowered `ReadWindowsBinary()` minimum size threshold from `65536` bytes (`64 KiB`) to `4096` bytes (`4 KiB`) and added strict `ValidateWindowsPeImage()` verification (`MZ`, bounded `e_lfanew`, `PE\0\0`, `Machine == 0x8664`, `SizeOfOptionalHeader >= 72`, PE32+ `Magic == 0x020B`, `Subsystem == 10` `EFI_APPLICATION`) so VeraCrypt's `~24 KiB` `\EFI\Microsoft\Boot\bootmgfw.efi` (`DcsBoot.efi`) stages cleanly instead of failing `stage-windows-image` with `EFI_COMPROMISED_DATA` (`0x8000000000000021`).
+
 ### Documentation
 - **English Documentation Consolidation & Reference Restoration:** Translated the full technical manual (`DOKUMENTATION.md` ➔ `DOCUMENTATION.md`) and component dependency checklist (`docs/SYNCHRONISATIONS_MATRIX.md` ➔ `docs/SYNCHRONIZATION_MATRIX.md`) to English, restored key low-level S3 telemetry/FLR/SEC2 reset tables and WinDbg diagnostic references in `DOCUMENTATION.md` (Sections `6.4`, `13.19`, `13.31`–`13.33`), updated `README.md` / `src/Build-Release-Zip.ps1` / `bin/` co-located docs, and removed the legacy German files so the entire GitHub documentation suite uses one unified English source.
 
