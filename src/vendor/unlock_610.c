@@ -148,6 +148,7 @@ struct unlock_transaction_work {
 	u64 stock_size;
 	void *meta_cpu;
 	dma_addr_t meta_dma;
+	dma_addr_t s3_meta_dma;
 	u64 *streaming_ptr;
 	u64 streaming_before;
 	u64 coherent_before;
@@ -833,7 +834,8 @@ static void free_coherent(struct unlock_transaction_work *work)
 	if (Gu.retained) return;
 	if (Gu.s3_meta_cpu) {
 		dma_free_coherent(&work->pdev->dev, GU_WPR_META_SIZE,
-				  Gu.s3_meta_cpu, Gu.s3_meta_dma);
+				  Gu.s3_meta_cpu,
+				  work->s3_meta_dma ? work->s3_meta_dma : (dma_addr_t)Gu.s3_meta_dma);
 		Gu.s3_meta_cpu = NULL;
 	}
 	work->booter_cpu = NULL;
@@ -1107,11 +1109,55 @@ static int unlock_transaction_layout(struct unlock_transaction_work *work)
 	return 0;
 }
 
-static int unlock_transaction_radix(struct unlock_transaction_work *work)
+static int pack_radix_tables(struct unlock_transaction_work *work, bool use_cpu_phys)
 {
 	const struct gpu_unlock_radix_plan *r = &work->radix;
 	u64 *addresses;
 	u32 i, level, first = 0;
+	int ret = 0;
+
+	if (!work->pages || work->pages_allocated < work->page_count ||
+	    r->table_pages > work->page_count)
+		return -EINVAL;
+	addresses = kvcalloc(work->page_count, sizeof(*addresses), GFP_KERNEL);
+	if (!addresses)
+		return -ENOMEM;
+	for (i = 0; i < work->page_count; i++) {
+		if (!work->pages[i].cpu) {
+			ret = -EINVAL;
+			goto out;
+		}
+		addresses[i] = use_cpu_phys
+			? (u64)(UINTN)work->pages[i].cpu
+			: (u64)work->pages[i].dma;
+		if (use_cpu_phys && (!addresses[i] || addresses[i] > 0xffffffffULL)) {
+			ret = -ERANGE;
+			goto out;
+		}
+	}
+	for (level = 0; level < 3; level++) {
+		u32 child = first + (u32)r->pages[level];
+
+		for (i = 0; i < r->pages[level]; i++) {
+			u32 at = i * (GU_RADIX_PAGE / 8);
+			u32 n = (u32)min_t(u64, GU_RADIX_PAGE / 8, r->pages[level + 1] - at);
+
+			ret = gpu_unlock_radix_page(work->pages[first + i].cpu,
+						    addresses + child + at, n);
+			if (ret)
+				goto out;
+		}
+		first = child;
+	}
+out:
+	kvfree(addresses);
+	return ret;
+}
+
+static int unlock_transaction_radix(struct unlock_transaction_work *work)
+{
+	const struct gpu_unlock_radix_plan *r = &work->radix;
+	u32 i;
 	int ret = 0;
 
 	if (Gu.s3_persist_armed) {
@@ -1119,12 +1165,10 @@ static int unlock_transaction_radix(struct unlock_transaction_work *work)
 		Gu.s3_arena_active = TRUE;
 	}
 
-	work->page_count = r->table_pages + r->pages[3];
+	work->page_count = (u32)(r->table_pages + r->pages[3]);
 	work->pages = kvcalloc(work->page_count, sizeof(*work->pages), GFP_KERNEL);
-	addresses = kvcalloc(work->page_count, sizeof(*addresses), GFP_KERNEL);
-	if (!work->pages || !addresses) {
+	if (!work->pages) {
 		Gu.s3_arena_active = FALSE;
-		kvfree(addresses);
 		return GU_RESULT(-ENOMEM);
 	}
 	for (i = 0; i < work->page_count; i++) {
@@ -1137,7 +1181,6 @@ static int unlock_transaction_radix(struct unlock_transaction_work *work)
 			goto out;
 		}
 		work->pages_allocated++;
-		addresses[i] = page->dma;
 		memset(page->cpu, 0, GU_RADIX_PAGE);
 		if (i >= r->table_pages) {
 			u64 offset = (i - r->table_pages) * GU_RADIX_PAGE;
@@ -1146,27 +1189,15 @@ static int unlock_transaction_radix(struct unlock_transaction_work *work)
 			memcpy(page->cpu, work->gsp_fw->data + work->image_span.offset + offset, n);
 		}
 	}
-	for (level = 0; level < 3; level++) {
-		u32 child = first + r->pages[level];
-
-		for (i = 0; i < r->pages[level]; i++) {
-			u32 at = i * (GU_RADIX_PAGE / 8);
-			u32 n = min_t(u64, GU_RADIX_PAGE / 8, r->pages[level + 1] - at);
-
-			ret = gpu_unlock_radix_page(work->pages[first + i].cpu,
-						    addresses + child + at, n);
-			if (ret)
-				goto out;
-		}
-		first = child;
-	}
+	ret = pack_radix_tables(work, false);
+	if (ret)
+		goto out;
 	if (Gu.s3_persist_armed && Gu.s3_arena_armed && work->pages) {
 		Gu.s3_radix_dma = work->pages[0].dma;
 		Gu.s3_image_size = work->image_span.size;
 	}
 out:
 	Gu.s3_arena_active = FALSE;
-	kvfree(addresses);
 	return GU_RESULT(ret);
 }
 
@@ -1617,19 +1648,34 @@ static void put_le64(u8 *dest, u64 value)
 		dest[i] = (u8)(value >> (8 * i));
 }
 
-/* Publish the V67 as the signature the booter will load. */
-static int publish_v67(struct unlock_transaction_work *work)
+static int pack_wpr_meta(struct unlock_transaction_work *work, u8 *dest, bool use_cpu_phys)
 {
 	struct gpu_unlock_wpr_args args = {
 		.fb_size = work->layout_in.usable_fb,
 		.vga_offset = work->layout_in.vga_base,
 		.frts_size = work->layout_in.frts_size,
-		.signature_dma = work->v67_dma, .signature_size = GU_V67_SIZE,
-		.radix_dma = work->pages[0].dma,
+		.signature_dma = use_cpu_phys ? (u64)(UINTN)work->v67_cpu : work->v67_dma,
+		.signature_size = GU_V67_SIZE,
+		.radix_dma = use_cpu_phys ? (u64)(UINTN)work->pages[0].cpu : work->pages[0].dma,
 		.image_size = work->image_span.size,
-		.boot_dma = work->boot_dma, .boot = work->boot_desc,
+		.boot_dma = use_cpu_phys ? (u64)(UINTN)work->boot_cpu : work->boot_dma,
+		.boot = work->boot_desc,
 	};
-	int ret = gpu_unlock_wpr_meta_pack(work->meta_cpu, &work->layout, &args);
+
+	if (!dest || !work->v67_cpu || !work->pages || !work->pages[0].cpu || !work->boot_cpu)
+		return -EINVAL;
+	if (use_cpu_phys &&
+	    (!args.signature_dma || args.signature_dma > 0xffffffffULL ||
+	     !args.radix_dma || args.radix_dma > 0xffffffffULL ||
+	     !args.boot_dma || args.boot_dma > 0xffffffffULL))
+		return -ERANGE;
+	return gpu_unlock_wpr_meta_pack(dest, &work->layout, &args);
+}
+
+/* Publish the V67 as the signature the booter will load. */
+static int publish_v67(struct unlock_transaction_work *work)
+{
+	int ret = pack_wpr_meta(work, work->meta_cpu, false);
 
 	if (ret)
 		return GU_RESULT(ret);
@@ -1642,6 +1688,7 @@ static int publish_v67(struct unlock_transaction_work *work)
 		Gu.s3_meta_cpu = diag_dma_alloc(work, "s3-meta", GU_WPR_META_SIZE, &Gu.s3_meta_dma, GFP_KERNEL);
 		Gu.s3_arena_active = FALSE;
 		if (Gu.s3_meta_cpu) {
+			work->s3_meta_dma = Gu.s3_meta_dma;
 			memcpy(Gu.s3_meta_cpu, work->meta_cpu, GU_WPR_META_SIZE);
 			dev_info(&work->pdev->dev, "S3 Pristine WPR Metadata saved in Arena: dma=%#llx\n",
 				 (unsigned long long)Gu.s3_meta_dma);
@@ -1979,6 +2026,71 @@ void gpu_unlock_610_release_shared(struct gpu_unlock_610_shared *shared)
 	shared->gsp = NULL;
 }
 
+static int s3_arena_cpu_phys32(const void *cpu, u64 *phys_out)
+{
+	u64 addr = (u64)(UINTN)cpu;
+
+	if (!cpu || !addr || addr > 0xffffffffULL)
+		return -ERANGE;
+	*phys_out = addr;
+	return 0;
+}
+
+/*
+ * Convert all S3-persisted arena buffers from DXE IOVAs (PciIo->Map) back to
+ * genuine <4 GB CPU-physical DRAM addresses after FLR quiescence and before
+ * free_coherent() unmaps DMA mappings.
+ */
+static int s3_repack_arena_physical(struct unlock_transaction_work *work)
+{
+	u64 fwsec_phys = 0, booter_phys = 0, v67_phys = 0;
+	u64 boot_phys = 0, radix_phys = 0, meta_phys = 0;
+	int ret;
+
+	if (!work || !work->quiesced || !work->pages || !work->pages_allocated)
+		return -EINVAL;
+	if (work->fwsec_cpu) {
+		ret = s3_arena_cpu_phys32(work->fwsec_cpu, &fwsec_phys);
+		if (ret)
+			return ret;
+	}
+	ret = s3_arena_cpu_phys32(work->booter_cpu, &booter_phys);
+	if (!ret)
+		ret = s3_arena_cpu_phys32(work->v67_cpu, &v67_phys);
+	if (!ret)
+		ret = s3_arena_cpu_phys32(work->boot_cpu, &boot_phys);
+	if (!ret)
+		ret = s3_arena_cpu_phys32(work->pages[0].cpu, &radix_phys);
+	if (!ret)
+		ret = s3_arena_cpu_phys32(Gu.s3_meta_cpu, &meta_phys);
+	if (!ret)
+		ret = pack_radix_tables(work, true);
+	if (!ret)
+		ret = pack_wpr_meta(work, Gu.s3_meta_cpu, true);
+	if (ret)
+		return GU_RESULT(ret);
+	dma_wmb();
+	memcpy(Gu.wpr_meta, Gu.s3_meta_cpu, GU_WPR_META_SIZE);
+	Gu.wpr_meta_valid = true;
+	if (work->fwsec_cpu)
+		Gu.s3_fwsec_dma = fwsec_phys;
+	Gu.s3_booter_dma = booter_phys;
+	Gu.s3_v67_dma = v67_phys;
+	Gu.s3_boot_dma = boot_phys;
+	Gu.s3_meta_dma = meta_phys;
+	Gu.s3_radix_dma = radix_phys;
+	GuLog("S3 Persistent Arena: converted %u non-identity IOVA buffer(s) to CPU-physical RAM addresses (base=%#llx fwsec=%#llx booter=%#llx v67=%#llx boot=%#llx meta=%#llx radix=%#llx)\n",
+	      (unsigned)Gu.s3_arena_non_identity_count,
+	      (unsigned long long)Gu.s3_arena_phys,
+	      (unsigned long long)Gu.s3_fwsec_dma,
+	      (unsigned long long)Gu.s3_booter_dma,
+	      (unsigned long long)Gu.s3_v67_dma,
+	      (unsigned long long)Gu.s3_boot_dma,
+	      (unsigned long long)Gu.s3_meta_dma,
+	      (unsigned long long)Gu.s3_radix_dma);
+	return 0;
+}
+
 int gpu_unlock_610_unlock(struct pci_dev *pdev, const struct gpu_unlock_610_shared *shared)
 {
 	struct unlock_transaction_work *work;
@@ -2019,6 +2131,9 @@ int gpu_unlock_610_unlock(struct pci_dev *pdev, const struct gpu_unlock_610_shar
 		ret = unlock_transaction_selector(work);
 	if (!ret)
 		ret = unlock_transaction_reset(work);
+	if (!ret && work->quiesced && Gu.s3_persist_armed && Gu.s3_arena_armed &&
+	    Gu.s3_arena_non_identity)
+		ret = s3_repack_arena_physical(work);
 	/* Restore the stock signature when SEC2 no longer consumes the metadata.
 	 * An unverified live engine retains the V67 page and all DMA buffers. */
 	if (ret && work->signature_calls == 1)

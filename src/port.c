@@ -125,6 +125,8 @@ EFI_STATUS GuS3AllocateArena(VOID) {
   Gu.s3_arena_phys = Phys;
   Gu.s3_arena_pages = (UINTN)GU_S3_ARENA_PAGES;
   Gu.s3_arena_used_pages = 0;
+  Gu.s3_arena_non_identity = FALSE;
+  Gu.s3_arena_non_identity_count = 0;
   Gu.s3_arena_armed = TRUE;
   GuLog("S3 Persistent Memory Arena allocated: %u pages (%zu MB) at %#llx in EfiReservedMemoryType (single descriptor)\n",
         (unsigned)GU_S3_ARENA_PAGES,
@@ -174,8 +176,13 @@ EFI_STATUS GuDmaAllocate(UINTN N, VOID **C, UINT64 *D) {
   if (!EFI_ERROR(Status)) {
     Entry->mapped = TRUE;
     if (Entry->is_arena && Entry->dma != (UINT64)(UINTN)Entry->cpu) {
-      GuLog("WARNING: PciIo->Map non-identity mapping in S3 arena! cpu=%p dma=%#llx\n",
-            Entry->cpu, (unsigned long long)Entry->dma);
+      if (!Gu.s3_arena_non_identity) {
+        GuLog("WARNING: PciIo->Map non-identity mapping in S3 arena! cpu=%p dma=%#llx (will convert S3 arena to CPU-phys before handover)\n",
+              Entry->cpu, (unsigned long long)Entry->dma);
+      }
+      Gu.s3_arena_non_identity = TRUE;
+      if (Gu.s3_arena_non_identity_count != ~0U)
+        Gu.s3_arena_non_identity_count++;
     }
   } else if (Entry->is_arena) {
     /* Common buffer within <4GB arena: identity mapping fallback */

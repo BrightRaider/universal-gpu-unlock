@@ -125,6 +125,8 @@ typedef struct {
   BOOLEAN s3_persist_armed;
   BOOLEAN s3_arena_armed;
   BOOLEAN s3_arena_active;
+  BOOLEAN s3_arena_non_identity;
+  UINT32 s3_arena_non_identity_count;
   EFI_PHYSICAL_ADDRESS s3_arena_phys;
   UINTN s3_arena_pages;
   UINTN s3_arena_used_pages;

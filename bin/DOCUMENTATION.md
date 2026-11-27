@@ -177,6 +177,7 @@ For Ada Lovelace GPUs (RTX 4090 / AD102) using GSP firmware and WPR2 partitionin
 6. **Consolidation of All 6 GPU DMA Buffers in Reserved Arena & `DMA_live = 0` (v1.8.65):**
    - Consolidates Radix table, GSP firmware image, FWSEC image, Booter, V67 payload, Boot image, and untouched WPR metadata into one contiguous 82 MB `EfiReservedMemoryType` arena (20,662 of 21,000 pages used).
    - `free_coherent()` ensures `GuDmaFree()` unmaps every DMA handle before `StartImage` (`DMA_live = 0`).
+   - **IOMMU / Non-Identity DXE Mapping Guard (`refs #25`):** When `Gu.pci->Map()` returns non-identity DXE IOVAs (e.g., `IoMmuDxe` on MSI X670E), `s3_repack_arena_physical()` converts all persisted `Gu.s3_*_dma` globals, `Gu.s3_meta_cpu`, and 3-level GSP radix table pages back to `<4 GB` CPU-physical DRAM addresses after FLR quiescence and before `free_coherent()` unmaps DMA handles.
    - `publish_v67()` preserves an untouched copy of WPR metadata (`Gu.s3_meta_cpu` / `Gu.s3_meta_dma`) before cold-boot `unlock_transaction_signature()` mutates `meta + 72`.
    - Captures SEC2 Mailbox 1 (`BAR0 + 0x00840044`) at `+0x11C`.
 7. **GSP HALT Gate, `0x0A00` Code Envelope & Diagnostic Snapshots `+0x120..+0x148` (v1.8.66):**
@@ -235,6 +236,7 @@ All core components are validated against mocked firmware services (`tests/Run-M
 8. `test_s3_resume`: Universal S3 Resume engine, ACPI FACS shadow intercept, and trampoline checks (9,809+ checks).
 9. `test_dxe_main`: Early-BDS deferral, `ReadyToBoot` / `StartImage` guards, and live ACPI refresh.
 10. `test_multi_gpu_second_preflight` & `test_already_unlocked`: Multi-GPU plan reset and post-POST `already_unlocked` detection.
+11. `test_s3_non_identity`: Non-identity `PciIo->Map()` S3 arena tracking, warning deduplication, `<4 GB` CPU-physical radix/WPR metadata repack, and clean DMA unmap.
 
 ---
 
@@ -732,3 +734,15 @@ Fixed the early-kernel BSOD in `v1.9.3` (`RUN0100.TXT`) caused by late AMI BDS u
 
 - **UEFI Log Rotation (`src/boot_io.c`, `tests/test_boot_select.c`):** Replaced the `1..9999` linear `Open` loop inside `GuBootOpen()` with `OpenRotatedRunLog()` (`GU_MAX_RUN_LOGS = 50`). It scans `\GPU-UNLOCK` (`\AD102-UNLOCK`) via `dir->Read()`, prunes older `RUN*.TXT` files whenever 50 or more exist (multi-round batch pruning up to 64 files/round, preserving `ATTEMPT.FLG` and unrelated files), handles `9999 -> 1` wraparound cleanly via `RunLogOrderKey()`, and falls back to bounded linear probing only if `dir->Read()` is unavailable. This caps ESP usage at `< 1 MB` even on `100 MB` Turing ESPs and prevents boot slowdown after hundreds of boots. Verified via 4 mock filesystem rotation tests in `tests/test_boot_select.c`.
 - **Hidden-Volume Log Discovery & 1-Click Export (`tools/gu_system_info.py`, `tools/gpu_dashboard.py`, `tools/Export-Boot-Log.ps1`, `Setup.bat [5]`):** Added Win32 `FindFirstVolumeW` / `GetVolumeInformationW` enumeration (`_enumerate_hidden_fat32_roots()`, 64-bit `wintypes.HANDLE` safe + `SEM_FAILCRITICALERRORS`) so both `gpu_dashboard.py` and `quick_check.py` read live `RUN*.TXT` files from unmounted `GPU_UNLOCK` / `UNLOCK_ESP` partitions without drive letters or UAC. Added **`Export Boot Log`** in the Dashboard and **`Setup.bat [5]`** (`tools/Export-Boot-Log.ps1`), copying the newest logs to `Boot-Logs\` (with UAC + `mountvol` cleanup fallback for ACL-protected Windows ESPs) and selecting the newest log in Windows Explorer.
+
+### 13.52 Non-Identity `PciIo->Map()` S3 Arena Pointer Conversion (`[Unreleased / main]`, `refs #25`)
+
+- **Root Cause (`MSI MPG X670E Carbon WIFI` + RTX 4090 S3 Sleep Re-Lock despite `ShadowFACS` Armed):**
+  - On UEFI platforms with `IoMmuDxe` / Pre-Boot DMA Protection enabled, `Gu.pci->Map(..., EfiPciIoOperationBusMasterCommonBuffer, ...)` remaps the `21,000`-page `<4 GB` `EfiReservedMemoryType` S3 arena (`Gu.s3_arena_phys`, e.g., `0x8c0f8000`) to temporary DXE IOVAs (e.g., `0x00204000..0x052bc000`).
+  - While cold-boot unlock succeeds using those active IOVAs, `free_coherent()` unmaps every DMA mapping via `Gu.pci->Unmap()` before Windows handoff (`DMA_live = 0`). After `Unmap()` and S3 sleep/wake, the unmapped IOVAs stored in `Gu.s3_*_dma`, `Gu.s3_meta_cpu`, and every entry of the 3-level GSP radix page table no longer match physical DRAM addresses.
+  - Additionally, `GuDmaAllocate()` (`src/port.c`) logged `WARNING: PciIo->Map non-identity mapping` on every arena allocation (`20,612` repetitive log lines).
+- **Fix & Verification (`src/port.h`, `src/port.c`, `src/vendor/unlock_610.c`, `tests/test_s3_non_identity.c`):**
+  1. Added `s3_arena_non_identity` and `s3_arena_non_identity_count` in `GU_PLATFORM`, logging the non-identity warning once per unlock transaction instead of `20,612` times.
+  2. Extracted shared helpers `pack_radix_tables(work, use_cpu_phys)` and `pack_wpr_meta(work, dest, use_cpu_phys)` in `src/vendor/unlock_610.c` and preserved the allocation-time IOVA in `work->s3_meta_dma` so `free_coherent()` continues unmapping all `GU_DMA` handles cleanly.
+  3. Added `s3_repack_arena_physical(work)` right after FLR quiescence (`work->quiesced`) and before `unlock_transaction_unwind(work)`: when `Gu.s3_arena_non_identity` is set, it validates every `<4 GB` `.cpu` buffer pointer (`<= 0xFFFFFFFF`), repacks all radix table pages (`work->pages[0..table_pages-1]`), updates `Gu.s3_meta_cpu` / `Gu.wpr_meta`, and converts `Gu.s3_fwsec_dma`, `Gu.s3_booter_dma`, `Gu.s3_v67_dma`, `Gu.s3_boot_dma`, `Gu.s3_meta_dma`, and `Gu.s3_radix_dma` to CPU-physical DRAM addresses.
+  4. Verified cleanly in host unit suite `tests/test_s3_non_identity.c` (covering identity `dma == cpu`, synthetic IOMMU non-identity `0x204000..`, `>4 GB` bounds rejection `-ERANGE`, 3-level radix repacking, WPR metadata repack, single-warning deduplication, and `free_coherent()` unmap parity). Hardware confirmation on `#25` is pending (`IOMMU` / `Pre-Boot DMA Protection` may also need to be disabled in BIOS if PEI-phase IOMMU blocks physical DMA on S3 wake).

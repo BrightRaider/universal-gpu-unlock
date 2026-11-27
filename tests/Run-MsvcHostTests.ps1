@@ -30,6 +30,7 @@ $tests = [ordered]@{
     'test_s3_resume'     = @('s3_resume.c', 's3_facs.c', 'vendor\prep_610.c')
     'test_multi_gpu_second_preflight' = @()
     'test_already_unlocked' = @()
+    'test_s3_non_identity' = @('port.c', 'compat.c', 'vendor\prep_610.c', 'vendor\layout_610.c', 'vendor\vbios_610.c', 'vendor\gfw_eval.c')
 }
 $lines = @('@echo off', "call `"$VcVars`" >nul", 'if errorlevel 1 exit /b 1', "set `"GU_REPO_ROOT=$repo`"", "cd /d `"$OutDir`"")
 foreach ($test in $tests.Keys) {
