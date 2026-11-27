@@ -35,6 +35,7 @@
    - `[1]` **New USB setup** *(with automatic BitLocker / Secure Boot / S0ix pre-flight checks)*
    - `[2]` **Update existing USB**
    - `[3]` **Create hidden `512 MB` `GPU_UNLOCK` partition** *(optional — enables stickless boot on `100 MB` Windows ESPs)*
+   - `[4]` **Open Dashboard Cockpit** / `[5]` **Export Latest Boot Log** *(copies `RUN*.TXT` even from hidden `GPU_UNLOCK` / protected ESPs into `Boot-Logs\`)*
 2. **Boot & Unlock:** Restart from the USB drive (`F8` / `F11` / `F12`) and press one key *(press `[Space]` anytime to pause the 30s menu timer)*:
    - `[U]` **Standard Unlock:** Volatile RAM-only unlock (reverts cleanly to stock on power-off).
    - `[P]` **S3 Persistence:** Keeps the unlock active across Windows Sleep / Standby (ACPI S3).
@@ -216,14 +217,15 @@ All version releases, bug fixes, and device expansions are maintained in the sep
 ├── src/                         <- Full C source code, MSVC EFI build scripts & Build-Release-Zip.ps1
 ├── tests/                       <- Host tests with mocked UEFI services (no GPU required)
 ├── docs/                        <- Operational whitepapers, CHANGELOG_ARCHIVE.md & images/
-├── Setup.bat                    <- Unified Launcher (1: USB Setup, 2: Update USB, 3: Hidden 512MB Partition)
-├── Launch-Dashboard.bat         <- Primary GUI Cockpit (Benchmarks, S3 Armed Status, Power Limit Slider)
+├── Setup.bat                    <- Unified Launcher (1: USB Setup, 2: Update USB, 3: Hidden Partition, 4: Dashboard, 5: Export Log)
+├── Launch-Dashboard.bat         <- Primary GUI Cockpit (Benchmarks, S3 Armed Status, Power Limit Slider, Export Boot Log)
 ├── Check-GPU-Unlock.bat         <- Standalone CLI benchmark & hardware check (TFLOPS, S3, PL, ReBAR, PCIe)
 ├── tools/
 │   ├── quick_check.py           <- Core GEMM benchmark, S3 Armed check, Power-Limit CLI & PCIe diagnostics
-│   ├── gpu_dashboard.py         <- Primary Tkinter GUI Cockpit (S3 status, stepless PL slider, Baseline diff)
-│   ├── gu_system_info.py        <- Shared firmware, ACPI FADT, Power Limit & GPU profile helpers
+│   ├── gpu_dashboard.py         <- Primary Tkinter GUI Cockpit (S3 status, stepless PL slider, Baseline diff, Log export)
+│   ├── gu_system_info.py        <- Shared firmware, ACPI FADT, hidden-volume log reader, Power Limit & GPU profile helpers
 │   ├── Setup-AdaUnlock.ps1      <- Automated 1-Click USB Provisioner with BitLocker/SecureBoot/S0ix audits
+│   ├── Export-Boot-Log.ps1      <- 1-Click Boot Log Exporter across USB, hidden GPU_UNLOCK & Windows ESP
 │   ├── Update-USB.bat           <- Fast USB stick updater
 │   ├── Create-Unlock-Partition.*<- Dedicated hidden 512 MB FAT32 GPU_UNLOCK partition creator
 │   ├── Setup-FastResume.bat     <- Windows Hibernation & Idle Relock Guard helper

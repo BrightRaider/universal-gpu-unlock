@@ -16,6 +16,7 @@ from gu_system_info import (  # noqa: E402
     benchmark_gemm,
     classify_unlock_status,
     configure_wake_reapply_task,
+    export_latest_boot_logs,
     find_nvidia_smi,
     get_firmware_mode,
     get_gpu_utilization,
@@ -483,6 +484,13 @@ class GpuUnlockApp(tk.Tk):
             command=lambda: self.launch_script("tools/Universal-Control-Center.cmd"),
         ).pack(side="left", padx=3)
 
+        self.btn_export_log = tk.Button(
+            tools_box, text="Export Boot Log", font=("Segoe UI", 9),
+            bg="#2E7D32", fg="#FFFFFF", activebackground="#388E3C", relief="flat", padx=10, pady=5,
+            command=self.export_boot_log_clicked,
+        )
+        self.btn_export_log.pack(side="left", padx=3)
+
         tk.Button(
             tools_box, text="Setup / Update USB", font=("Segoe UI", 9, "bold"),
             bg="#1565C0", fg="#FFFFFF", activebackground="#1E88E5", relief="flat", padx=12, pady=5,
@@ -690,6 +698,40 @@ class GpuUnlockApp(tk.Tk):
             self.lbl_log.config(text=f"Not found: {rel_path}", fg=self.c_red)
             return
         subprocess.Popen(f'start "" cmd /c "{script}"', shell=True)
+
+    def export_boot_log_clicked(self):
+        if getattr(self, "_export_busy", False):
+            return
+        self._export_busy = True
+        self.btn_export_log.config(state="disabled", text="Exporting...")
+        self.lbl_log.config(text="Searching USB, hidden GPU_UNLOCK, and ESP for RUN*.TXT boot logs...", fg=self.c_yellow)
+        repo_dir = self.get_repo_dir()
+
+        def worker():
+            ok, latest_path, msg = False, None, ""
+            try:
+                ok, latest_path, msg = export_latest_boot_logs(repo_dir=repo_dir, max_files=10, allow_uac=True)
+            except Exception as e:
+                msg = str(e)
+            self.after(0, lambda: self._finish_export_boot_log(ok, latest_path, msg))
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _finish_export_boot_log(self, ok, latest_path, msg):
+        self._export_busy = False
+        self.btn_export_log.config(state="normal", text="Export Boot Log")
+        if ok and latest_path:
+            self.s3_status = get_s3_armed_status()
+            self.lbl_card_val_s3.config(text=self._s3_card_headline(), fg=self._s3_card_colors())
+            self.lbl_fw_detail.config(text=self.firmware_detail_text())
+            self.lbl_log.config(text=msg, fg=self.c_green)
+            try:
+                if os.name == "nt":
+                    subprocess.Popen(["explorer.exe", f"/select,{os.path.normpath(latest_path)}"])
+            except Exception:
+                pass
+        else:
+            self.lbl_log.config(text=msg, fg=self.c_yellow)
 
     def create_card(self, parent, col, title, val_text, val_color=None):
         if val_color is None:

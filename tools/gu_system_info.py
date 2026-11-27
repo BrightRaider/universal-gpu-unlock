@@ -544,29 +544,207 @@ def _list_drive_roots():
     return roots
 
 
-def find_latest_run_log():
-    """Find the most recent RUN*.TXT log across mounted drives and parse S3 markers."""
-    boot_ts = _get_windows_boot_timestamp()
+def _enumerate_hidden_fat32_roots():
+    """Return unmounted/hidden FAT32 \\\\?\\Volume{...}\\ roots (e.g. GPU_UNLOCK) without requiring admin."""
+    if os.name != "nt":
+        return []
+    roots = []
+    k32 = ctypes.windll.kernel32
+    k32.SetErrorMode.argtypes = [wintypes.UINT]
+    k32.SetErrorMode.restype = wintypes.UINT
+    k32.FindFirstVolumeW.argtypes = [wintypes.LPWSTR, wintypes.DWORD]
+    k32.FindFirstVolumeW.restype = wintypes.HANDLE
+    k32.FindNextVolumeW.argtypes = [wintypes.HANDLE, wintypes.LPWSTR, wintypes.DWORD]
+    k32.FindNextVolumeW.restype = wintypes.BOOL
+    k32.FindVolumeClose.argtypes = [wintypes.HANDLE]
+    k32.FindVolumeClose.restype = wintypes.BOOL
+    k32.GetDriveTypeW.argtypes = [wintypes.LPCWSTR]
+    k32.GetDriveTypeW.restype = wintypes.UINT
+    k32.GetVolumeNameForVolumeMountPointW.argtypes = [wintypes.LPCWSTR, wintypes.LPWSTR, wintypes.DWORD]
+    k32.GetVolumeNameForVolumeMountPointW.restype = wintypes.BOOL
+    k32.GetVolumeInformationW.argtypes = [
+        wintypes.LPCWSTR, wintypes.LPWSTR, wintypes.DWORD,
+        ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p,
+        wintypes.LPWSTR, wintypes.DWORD,
+    ]
+    k32.GetVolumeInformationW.restype = wintypes.BOOL
+
+    mounted_guids = set()
+    for drv in _list_drive_roots():
+        try:
+            vbuf = ctypes.create_unicode_buffer(256)
+            if k32.GetVolumeNameForVolumeMountPointW(drv, vbuf, 256):
+                mounted_guids.add(vbuf.value.upper())
+        except Exception:
+            pass
+
+    invalid = wintypes.HANDLE(-1).value
+    handle = invalid
+    old_mode = k32.SetErrorMode(0x0001)  # SEM_FAILCRITICALERRORS
+    try:
+        buf = ctypes.create_unicode_buffer(1024)
+        handle = k32.FindFirstVolumeW(buf, 1024)
+        if handle == invalid:
+            return roots
+        while True:
+            vol = buf.value
+            if vol and vol.upper() not in mounted_guids:
+                if k32.GetDriveTypeW(vol) in (2, 3):  # DRIVE_REMOVABLE / DRIVE_FIXED
+                    lbl = ctypes.create_unicode_buffer(256)
+                    fs = ctypes.create_unicode_buffer(64)
+                    if k32.GetVolumeInformationW(vol, lbl, 256, None, None, None, fs, 64):
+                        if fs.value.upper() in ("FAT32", "FAT", "EXFAT"):
+                            roots.append((vol, lbl.value or ""))
+            if not k32.FindNextVolumeW(handle, buf, 1024):
+                break
+    except Exception:
+        pass
+    finally:
+        if handle != invalid:
+            try:
+                k32.FindVolumeClose(handle)
+            except Exception:
+                pass
+        try:
+            k32.SetErrorMode(old_mode)
+        except Exception:
+            pass
+    return roots
+
+
+def _list_log_search_roots():
+    """Return (root_path, volume_label, is_hidden) tuples across drive letters and hidden FAT32 volumes."""
+    entries = [(root, "", False) for root in _list_drive_roots()]
+    for vol, lbl in _enumerate_hidden_fat32_roots():
+        entries.append((vol, lbl, True))
+    return entries
+
+
+def _collect_run_log_candidates():
     candidates = []
-    for root in _list_drive_roots():
+    for root, label, is_hidden in _list_log_search_roots():
         for sub in ("GPU-UNLOCK", "AD102-UNLOCK", "GA102-UNLOCK", "RTX3090-UNLOCK"):
             folder = os.path.join(root, sub)
-            if not os.path.isdir(folder):
-                continue
             try:
+                if not os.path.isdir(folder):
+                    continue
                 for fn in os.listdir(folder):
                     up = fn.upper()
                     if up.startswith("RUN") and up.endswith(".TXT"):
                         full = os.path.join(folder, fn)
                         st = os.stat(full)
-                        candidates.append((st.st_mtime, full, fn))
+                        candidates.append({
+                            "mtime": st.st_mtime,
+                            "path": full,
+                            "name": fn,
+                            "folder": folder,
+                            "volume_label": label,
+                            "is_hidden": is_hidden,
+                        })
             except Exception:
                 continue
+    candidates.sort(key=lambda item: (item["mtime"], item["name"]), reverse=True)
+    return candidates
+
+
+def get_boot_log_export_dir(repo_dir=None):
+    """Return writable Boot-Logs export directory (prefer repo_dir/Boot-Logs, fallback LOCALAPPDATA)."""
+    if repo_dir:
+        cand = os.path.join(repo_dir, "Boot-Logs")
+        try:
+            os.makedirs(cand, exist_ok=True)
+            probe = os.path.join(cand, ".write_test")
+            with open(probe, "w", encoding="utf-8") as f:
+                f.write("ok")
+            os.remove(probe)
+            return cand
+        except Exception:
+            pass
+    local_app = os.environ.get("LOCALAPPDATA") or os.path.expanduser("~")
+    cand = os.path.join(local_app, "UniversalGpuUnlock", "Boot-Logs")
+    os.makedirs(cand, exist_ok=True)
+    return cand
+
+
+def export_latest_boot_logs(repo_dir=None, max_files=10, allow_uac=True):
+    """Copy newest RUN*.TXT logs from USB / hidden GPU_UNLOCK (or elevated ESP) into Boot-Logs.
+
+    Returns (ok, latest_exported_path, status_message).
+    """
+    dest_dir = get_boot_log_export_dir(repo_dir)
+    candidates = _collect_run_log_candidates()
+    if candidates:
+        exported = []
+        attempt_found = False
+        for item in candidates[:max_files]:
+            dst = os.path.join(dest_dir, item["name"])
+            if os.path.exists(dst):
+                try:
+                    st_dst = os.stat(dst)
+                    st_src = os.stat(item["path"])
+                    if st_dst.st_size != st_src.st_size or int(st_dst.st_mtime) != int(st_src.st_mtime):
+                        stamp = time.strftime("%Y%m%d_%H%M%S", time.localtime(item["mtime"]))
+                        base, ext = os.path.splitext(item["name"])
+                        dst = os.path.join(dest_dir, f"{base}_{stamp}{ext}")
+                except Exception:
+                    pass
+            shutil.copy2(item["path"], dst)
+            exported.append(dst)
+            if os.path.exists(os.path.join(item["folder"], "ATTEMPT.FLG")):
+                attempt_found = True
+
+        src_tag = (
+            f"hidden partition ({candidates[0]['volume_label'] or 'FAT32'})"
+            if candidates[0]["is_hidden"]
+            else candidates[0]["folder"]
+        )
+        msg = f"Exported {len(exported)} log(s) from {src_tag} to Boot-Logs ({os.path.basename(exported[0])})."
+        if attempt_found:
+            msg += " [ATTEMPT.FLG present]"
+        return True, exported[0], msg
+
+    if not allow_uac or os.name != "nt":
+        return False, None, "No RUN*.TXT logs found on mounted drives or hidden FAT32 volumes."
+
+    script_candidates = []
+    if repo_dir:
+        script_candidates.append(os.path.join(repo_dir, "tools", "Export-Boot-Log.ps1"))
+    script_candidates.append(os.path.join(os.path.dirname(os.path.abspath(__file__)), "Export-Boot-Log.ps1"))
+    ps_script = next((p for p in script_candidates if os.path.exists(p)), None)
+    if not ps_script:
+        return False, None, "Export-Boot-Log.ps1 not found for protected ESP fallback."
+
+    params = f'-NoProfile -ExecutionPolicy Bypass -File "{ps_script}" -Destination "{dest_dir}" -MaxFiles {int(max_files)} -Quiet -Elevated'
+    launched, exit_code, cancelled, uac_err = _run_elevated_exe("powershell.exe", params, timeout_ms=30000)
+    if not launched:
+        return False, None, uac_err or ("Administrator elevation cancelled." if cancelled else "Failed to launch elevated log exporter.")
+    if exit_code != 0:
+        return False, None, "No RUN*.TXT logs were found on USB, hidden GPU_UNLOCK, or Windows ESP."
+
+    exported_files = []
+    try:
+        for fn in os.listdir(dest_dir):
+            if fn.upper().startswith("RUN") and fn.upper().endswith(".TXT"):
+                full = os.path.join(dest_dir, fn)
+                exported_files.append((os.stat(full).st_mtime, full))
+    except Exception:
+        pass
+    if not exported_files:
+        return False, None, "Elevated ESP export finished, but no RUN*.TXT file appeared in Boot-Logs."
+    exported_files.sort(key=lambda x: x[0], reverse=True)
+    latest_path = exported_files[0][1]
+    return True, latest_path, f"Exported {len(exported_files)} log(s) from EFI System Partition to Boot-Logs ({os.path.basename(latest_path)})."
+
+
+def find_latest_run_log():
+    """Find the most recent RUN*.TXT log across mounted drives & hidden FAT32 volumes and parse S3 markers."""
+    boot_ts = _get_windows_boot_timestamp()
+    candidates = _collect_run_log_candidates()
     if not candidates:
         return None
 
-    candidates.sort(key=lambda item: item[0], reverse=True)
-    mtime, full_path, name = candidates[0]
+    top = candidates[0]
+    mtime, full_path, name = top["mtime"], top["path"], top["name"]
     from_current_boot = (boot_ts is None) or (mtime >= boot_ts - 600.0)
 
     info = {
@@ -574,6 +752,8 @@ def find_latest_run_log():
         "name": name,
         "mtime": mtime,
         "from_current_boot": from_current_boot,
+        "is_hidden": top["is_hidden"],
+        "volume_label": top["volume_label"],
         "s3_tier1": False,
         "s3_tier2": False,
         "unlock_ok": False,

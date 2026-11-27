@@ -144,6 +144,211 @@ BOOLEAN GuBootLogOpen(VOID) { return Log != NULL; }
 EFI_HANDLE GuBootGetTargetEspVolume(VOID) { return TargetEspVolume; }
 const CHAR16 *GuBootGetLogPath(VOID) { return ActiveLogName; }
 
+#define GU_MAX_RUN_LOGS 50U
+#define GU_PRUNE_BATCH 64U
+
+static CHAR16 GuUpperAscii(CHAR16 c) {
+  return (c >= L'a' && c <= L'z') ? (CHAR16)(c - (L'a' - L'A')) : c;
+}
+
+static UINTN ParseRunLogNumber(const CHAR16 *name) {
+  UINTN num = 0;
+  if (!name)
+    return 0;
+  if (GuUpperAscii(name[0]) != L'R' || GuUpperAscii(name[1]) != L'U' ||
+      GuUpperAscii(name[2]) != L'N')
+    return 0;
+  for (UINTN i = 3; i < 7; i++) {
+    if (name[i] < L'0' || name[i] > L'9')
+      return 0;
+    num = num * 10U + (UINTN)(name[i] - L'0');
+  }
+  if (name[7] != L'.' || GuUpperAscii(name[8]) != L'T' ||
+      GuUpperAscii(name[9]) != L'X' || GuUpperAscii(name[10]) != L'T' ||
+      name[11] != L'\0')
+    return 0;
+  return num;
+}
+
+static VOID FormatRunLogName(UINTN slot, CHAR16 name[12]) {
+  static const CHAR16 tmpl[] = L"RUN0000.TXT";
+  for (UINTN i = 0; i < 12; i++)
+    name[i] = tmpl[i];
+  for (UINTN at = 7; at > 3;) {
+    at--;
+    name[at] = (CHAR16)(L'0' + (slot % 10U));
+    slot /= 10U;
+  }
+}
+
+static UINTN RunLogOrderKey(UINTN num, BOOLEAN wrap) {
+  return (wrap && num <= 100U) ? (num + 10000U) : num;
+}
+
+static VOID InsertNewestRunLog(UINT16 newest[GU_MAX_RUN_LOGS - 1U],
+                               UINTN *keep_cnt, UINTN num, BOOLEAN wrap,
+                               UINT16 del_list[GU_PRUNE_BATCH],
+                               UINTN *del_cnt) {
+  UINTN key = RunLogOrderKey(num, wrap);
+  for (UINTN i = 0; i < *keep_cnt; i++) {
+    if (newest[i] == (UINT16)num)
+      return;
+  }
+  if (*keep_cnt < GU_MAX_RUN_LOGS - 1U) {
+    UINTN pos = *keep_cnt;
+    while (pos > 0 && RunLogOrderKey(newest[pos - 1U], wrap) > key) {
+      newest[pos] = newest[pos - 1U];
+      pos--;
+    }
+    newest[pos] = (UINT16)num;
+    (*keep_cnt)++;
+    return;
+  }
+  UINT16 oldest = newest[0];
+  if (key <= RunLogOrderKey(oldest, wrap)) {
+    if (*del_cnt < GU_PRUNE_BATCH)
+      del_list[(*del_cnt)++] = (UINT16)num;
+    return;
+  }
+  if (*del_cnt < GU_PRUNE_BATCH)
+    del_list[(*del_cnt)++] = oldest;
+  UINTN pos = 0;
+  while (pos + 1U < *keep_cnt &&
+         RunLogOrderKey(newest[pos + 1U], wrap) < key) {
+    newest[pos] = newest[pos + 1U];
+    pos++;
+  }
+  newest[pos] = (UINT16)num;
+}
+
+static EFI_STATUS OpenRotatedRunLog(EFI_FILE_PROTOCOL *dir,
+                                    CHAR16 chosen_name[12],
+                                    EFI_FILE_PROTOCOL **out_log) {
+  UINTN next_num = 1U;
+  BOOLEAN dir_read_ok = FALSE;
+
+  if (dir->Read) {
+    for (UINTN round = 0; round < 16U; round++) {
+      UINTN count = 0, max_raw = 0, max_low = 0;
+      BOOLEAN saw_high = FALSE, saw_low = FALSE;
+      union {
+        EFI_FILE_INFO info;
+        UINT8 raw[512];
+      } u;
+
+      if (dir->SetPosition)
+        (VOID)dir->SetPosition(dir, 0);
+
+      for (;;) {
+        UINTN sz = sizeof(u.raw);
+        EFI_STATUS rs = dir->Read(dir, &sz, u.raw);
+        if (rs != EFI_SUCCESS)
+          break;
+        if (sz == 0) {
+          dir_read_ok = TRUE;
+          break;
+        }
+        dir_read_ok = TRUE;
+        if (u.info.Attribute & EFI_FILE_DIRECTORY)
+          continue;
+        UINTN num = ParseRunLogNumber(u.info.FileName);
+        if (!num)
+          continue;
+        count++;
+        if (num >= 9900U)
+          saw_high = TRUE;
+        if (num <= 100U) {
+          saw_low = TRUE;
+          if (num > max_low)
+            max_low = num;
+        }
+        if (num > max_raw)
+          max_raw = num;
+      }
+
+      BOOLEAN wrap = (saw_high && saw_low);
+      UINTN latest = wrap ? max_low : max_raw;
+      next_num = (latest == 0U) ? 1U : ((latest < 9999U) ? (latest + 1U) : 1U);
+
+      if (count < GU_MAX_RUN_LOGS)
+        break;
+
+      {
+        UINT16 newest[GU_MAX_RUN_LOGS - 1U];
+        UINT16 del_list[GU_PRUNE_BATCH];
+        UINTN keep_cnt = 0, del_cnt = 0;
+
+        if (dir->SetPosition)
+          (VOID)dir->SetPosition(dir, 0);
+
+        for (;;) {
+          UINTN sz = sizeof(u.raw);
+          EFI_STATUS rs = dir->Read(dir, &sz, u.raw);
+          if (rs != EFI_SUCCESS || sz == 0)
+            break;
+          if (u.info.Attribute & EFI_FILE_DIRECTORY)
+            continue;
+          UINTN num = ParseRunLogNumber(u.info.FileName);
+          if (num)
+            InsertNewestRunLog(newest, &keep_cnt, num, wrap, del_list, &del_cnt);
+        }
+
+        if (del_cnt == 0)
+          break;
+
+        for (UINTN k = 0; k < del_cnt; k++) {
+          CHAR16 del_name[12];
+          EFI_FILE_PROTOCOL *oldf = NULL;
+          FormatRunLogName(del_list[k], del_name);
+          if (dir->Open(dir, &oldf, del_name,
+                        EFI_FILE_MODE_READ | EFI_FILE_MODE_WRITE, 0) == EFI_SUCCESS &&
+              oldf) {
+            if (oldf->Delete)
+              (VOID)oldf->Delete(oldf);
+            else
+              (VOID)oldf->Close(oldf);
+          }
+        }
+        if (del_cnt < GU_PRUNE_BATCH)
+          break;
+      }
+    }
+  }
+
+  /* Verify candidate is free; if dir->Read wasn't supported, fall back to bounded scan. */
+  if (dir_read_ok) {
+    FormatRunLogName(next_num, chosen_name);
+    EFI_FILE_PROTOCOL *existing = NULL;
+    EFI_STATUS probe = dir->Open(dir, &existing, chosen_name, EFI_FILE_MODE_READ, 0);
+    if (probe == EFI_SUCCESS && existing) {
+      (VOID)existing->Close(existing);
+      dir_read_ok = FALSE;
+    } else if (probe == EFI_NOT_FOUND) {
+      return dir->Open(
+          dir, out_log, chosen_name,
+          EFI_FILE_MODE_READ | EFI_FILE_MODE_WRITE | EFI_FILE_MODE_CREATE, 0);
+    }
+  }
+
+  for (UINTN slot = 1; slot <= GU_MAX_RUN_LOGS; slot++) {
+    FormatRunLogName(slot, chosen_name);
+    EFI_FILE_PROTOCOL *existing = NULL;
+    EFI_STATUS s = dir->Open(dir, &existing, chosen_name, EFI_FILE_MODE_READ, 0);
+    if (s == EFI_SUCCESS && existing) {
+      s = existing->Close(existing);
+      if (s != EFI_SUCCESS)
+        return s;
+      continue;
+    }
+    if (s != EFI_NOT_FOUND)
+      return s;
+    return dir->Open(
+        dir, out_log, chosen_name,
+        EFI_FILE_MODE_READ | EFI_FILE_MODE_WRITE | EFI_FILE_MODE_CREATE, 0);
+  }
+  return EFI_OUT_OF_RESOURCES;
+}
+
 EFI_STATUS GuBootOpen(EFI_HANDLE image, EFI_SYSTEM_TABLE *t) {
 
   if (Table && Root)
@@ -208,39 +413,13 @@ EFI_STATUS GuBootOpen(EFI_HANDLE image, EFI_SYSTEM_TABLE *t) {
     return b->SetWatchdogTimer(0, 0, 0, NULL);
   }
 
-  for (UINTN slot = 1; slot <= 9999; slot++) {
-
-    CHAR16 name[] = L"RUN0000.TXT";
-    UINTN number = slot;
-
-    for (UINTN at = 7; at > 3;) {
-      at--;
-      name[at] = (CHAR16)('0' + number % 10);
-      number /= 10;
-    }
-
-    EFI_FILE_PROTOCOL *existing = NULL;
-    s = dir->Open(dir, &existing, name, EFI_FILE_MODE_READ, 0);
-
-    if (s == EFI_SUCCESS && existing) {
-      s = existing->Close(existing);
-      if (s != EFI_SUCCESS)
-        break;
-      continue;
-    }
-
-    if (s != EFI_NOT_FOUND)
-      break;
-
-    s = dir->Open(
-        dir, &Log, name,
-        EFI_FILE_MODE_READ | EFI_FILE_MODE_WRITE | EFI_FILE_MODE_CREATE, 0);
-    if (s == EFI_SUCCESS && Log) {
-      UINTN cap = sizeof(ActiveLogName) / sizeof(ActiveLogName[0]);
-      UINTN d = GuStrCopy(ActiveLogName, cap, is_ad102_dir ? L"\\AD102-UNLOCK\\" : L"\\GPU-UNLOCK\\");
-      (VOID)GuStrCopy(ActiveLogName + d, cap - d, name);
-    }
-    break;
+  CHAR16 log_name[12];
+  s = OpenRotatedRunLog(dir, log_name, &Log);
+  if (s == EFI_SUCCESS && Log) {
+    UINTN cap = sizeof(ActiveLogName) / sizeof(ActiveLogName[0]);
+    UINTN d = GuStrCopy(ActiveLogName, cap,
+                        is_ad102_dir ? L"\\AD102-UNLOCK\\" : L"\\GPU-UNLOCK\\");
+    (VOID)GuStrCopy(ActiveLogName + d, cap - d, log_name);
   }
 
   EFI_STATUS closed = dir->Close(dir);

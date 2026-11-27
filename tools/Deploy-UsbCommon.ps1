@@ -50,6 +50,7 @@ function Get-GuUsbToolFiles {
         'Create-Unlock-Partition.bat',
         'Create-Unlock-Partition.ps1',
         'Setup-FastResume.bat',
+        'Export-Boot-Log.ps1',
         'Universal-Control-Center.ps1',
         'Universal-Control-Center.xaml',
         'Universal-Control-Center-Detection.ps1',
