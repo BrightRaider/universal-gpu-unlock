@@ -88,9 +88,26 @@ flowchart TD
 - [ ] **2. EFI Binaries:** Are `bin/BOOTX64.EFI` and `bin/AdaUnlockDxe.efi` compiled with the current version and Authenticode-signed?
 - [ ] **3. Toolchain in Sync:**
   - Are Launcher & Setup (`Setup.bat`, `tools/Setup-AdaUnlock.ps1`, `tools/Update-USB.bat`, `tools/Create-Unlock-Partition.bat`), WPF GUI (`tools/Universal-Control-Center.ps1` / `.xaml` / `.Detection.ps1`), and Cockpit (`Launch-Dashboard.bat`, `tools/gpu_dashboard.py`, `tools/gu_system_info.py`) on the same revision?
-- [ ] **4. Test Suite:** Do all 11 MSVC host test suites pass (`powershell -ExecutionPolicy Bypass -File tests/Run-MsvcHostTests.ps1`)?
+- [ ] **4. Test Suite:** Do all 12 MSVC host test suites pass (`powershell -ExecutionPolicy Bypass -File tests/Run-MsvcHostTests.ps1`)?
 - [ ] **5. GUI & Python Validation:** Does the GUI XAML load cleanly (`[System.Windows.Markup.XamlReader]::Load`) and do `py_compile` + telemetry smoke checks pass?
 - [ ] **6. Doc Copies:** Are `bin/README.md`, `bin/DOCUMENTATION.md`, and `bin/CHANGELOG.md` bit-identical to their root counterparts?
 - [ ] **7. Release Package:** Was the all-in-one archive `Universal_GPU_Unlock_v<VERSION>.zip` packaged cleanly from `HEAD` via `src/Build-Release-Zip.ps1` (`git archive` + `.gitattributes` `export-ignore`, excluding `.github/`, `.gitignore`, `.gitattributes`, `REDDIT_POST.md`, `scratch/`, `*.obj`)?
 - [ ] **8. Privacy & Security:** No local usernames, local paths, or private details in commit messages or files?
 - [ ] **9. Git Rules:** No auto-closing keywords (`fixes #X`), only non-closing references (`refs #X`)?
+- [ ] **10. Issue Closing Standard Reply:** Always confirm issues explicitly with the user before closing, and include the standard `> [!TIP]` closing block asking for **unlocked GPU screenshots** (`Check-GPU-Unlock.bat` / `Launch-Dashboard.bat` results, plus before/after or post-S3 benchmarks) alongside the **[Ko-fi support link](https://ko-fi.com/brightraider)** (strict first-person singular `"I"`/`"me"`/`"my"`, never `"we"`/`"us"`/`"our"`).
+
+---
+
+## 4. Standard GitHub Issue Closing Block
+
+```markdown
+---
+> [!TIP]
+> **A little favor to support the project:**
+> If you have a moment back in Windows, please feel free to share a quick **screenshot of your unlocked GPU results** (`Check-GPU-Unlock.bat` or the `Launch-Dashboard.bat` Cockpit, including before/after or post-S3 wake benchmarks) right here or in Discussions! Real unlocked screenshots help showcase verified setups and help other users on similar hardware. 🚀
+>
+> And if you'd like to support the ongoing firmware research, development, and hardware testing behind this project, you can always [buy me a coffee on Ko-fi](https://ko-fi.com/brightraider). ☕
+
+Cheers,
+**BrightRaider**
+```
