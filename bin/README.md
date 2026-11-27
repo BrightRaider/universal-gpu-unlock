@@ -139,6 +139,19 @@ The unlock removes artificial firmware restrictions on the **Tensor Cores (GEMM 
 > * **ComfyUI / Stable Diffusion:** Launch with benchmark/autotune enabled.
 > * **Result:** Yields an additional **+15% to +35%** real-world matrix throughput across dense GEMM, SDXL, and LLM prefill workloads!
 
+### ⚡ Ada Efficiency Sweetspot: Why Clock-Capping (`-lgc`) Beats Power Throttling (`-pl`)
+
+Sustained `10.1s` (`242`-frame, `1184×896`) **MiniMax-H3** Video DiT runs on an unlocked **RTX 4090 (`+600 MHz` VRAM)** explain why NVIDIA targets `~300 W` on workstation silicon like the RTX 6000 Ada — and why locking SM clocks beats lowering `-pl`:
+
+| Tuning Profile *(Admin CLI)* | Render Time | Avg Power | Energy / Video | Takeaway |
+| :--- | :--- | :--- | :--- | :--- |
+| **`450 W` Stock (`-pl 450`)** | `6m 24s` (`384.4s`) | `411.4 W` | `43.93 Wh` | Peak speed; scales only `+3.1%` above `2445 MHz` at `+40–60 W` cost |
+| **`315 W` Limit (`-pl 315` / `70%`)** | `7m 42s` (`462.5s`) | `307.0 W` | `39.44 Wh` | `SW Power Cap` stalls SM clock (`~2108 MHz` avg, `20.3%` slower) |
+| **`-lgc 210,2450` *(Open `450 W` PL)*** | **`6m 36s`** (`396.4s`) | `370.8 W` | **`40.89 Wh`** (`-6.9%`) | **Sweetspot:** **66s faster** than `70% PL`, within `3.1%` of `450 W` |
+| **`-lgc 210,2300` *(Open `450 W` PL)*** | **`7m 08s`** (`427.9s`) | `325.6 W` | **`38.74 Wh`** (`-11.8%`) | **Max Efficiency:** **34.6s faster & fewer total Wh** than `70% PL` |
+
+- **Practical tip:** Pair open power budget + **`nvidia-smi -lgc 210,2450`** (or **`210,2300`** for 24/7 efficiency) with `+600–700 MHz` VRAM (`+3.5–4.5%` faster sampling in CUDA `P2` state; `+800/+900 MHz` adds no gain due to GDDR6X timing/ECC overhead). Run **`nvidia-smi -rgc`** afterward to unlock clocks before gaming! *(Clock targets above apply to RTX 40 Ada silicon; RTX 30/20 cards boost lower by default. Full sweep tables live in [DOCUMENTATION.md](DOCUMENTATION.md#1353-ada-rtx-4090-efficiency-sweetspot--clock-capping-vs-power-limiting).)*
+
 ---
 
 ## 🛡️ Safety & Anti-Cheat
