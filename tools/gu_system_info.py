@@ -247,6 +247,71 @@ def _run_elevated_exe(exe_path, params, timeout_ms=20000):
     return True, exit_code, False, ""
 
 
+def _run_nvidia_smi_batch(cmd_arg_lists, allow_uac=True, action_label="GPU tuning"):
+    """Execute one or more nvidia-smi invocations cleanly, elevating once via UAC if needed."""
+    exe = find_nvidia_smi()
+    if not exe:
+        return False, "nvidia-smi not found."
+    if not cmd_arg_lists:
+        return True, "No changes requested."
+
+    clean_lists = [[str(tok) for tok in args] for args in cmd_arg_lists]
+    if os.name != "nt" or _is_windows_admin():
+        try:
+            kwargs = {"capture_output": True, "text": True}
+            if os.name == "nt":
+                si = subprocess.STARTUPINFO()
+                si.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+                kwargs["startupinfo"] = si
+                kwargs["creationflags"] = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+            for args in clean_lists:
+                proc = subprocess.run([exe] + args, **kwargs)
+                if proc.returncode != 0:
+                    detail = (proc.stderr or proc.stdout or f"nvidia-smi exited with code {proc.returncode}").strip()
+                    return False, detail
+            return True, ""
+        except Exception as e:
+            return False, str(e)
+
+    if os.name == "nt" and allow_uac:
+        if len(clean_lists) == 1:
+            params = " ".join(clean_lists[0])
+            launched, exit_code, cancelled, uac_err = _run_elevated_exe(exe, params)
+            if cancelled:
+                return False, "Administrator permission (UAC) was cancelled."
+            if launched and (exit_code is None or exit_code == 0):
+                return True, ""
+            return False, uac_err or f"Elevated nvidia-smi exited with code {exit_code}."
+
+        cfg_dir = get_config_dir()
+        os.makedirs(cfg_dir, exist_ok=True)
+        batch_path = os.path.join(cfg_dir, "elevated_tune.cmd")
+        lines = ["@echo off"]
+        for args in clean_lists:
+            lines.append(f'"{exe}" ' + " ".join(args))
+            lines.append("if errorlevel 1 exit /b 1")
+        with open(batch_path, "w", encoding="ascii", errors="replace") as f:
+            f.write("\r\n".join(lines) + "\r\n")
+        try:
+            comspec = os.environ.get("ComSpec") or r"C:\Windows\System32\cmd.exe"
+            launched, exit_code, cancelled, uac_err = _run_elevated_exe(
+                comspec, f'/d /c "{batch_path}"'
+            )
+            if cancelled:
+                return False, "Administrator permission (UAC) was cancelled."
+            if launched and (exit_code is None or exit_code == 0):
+                return True, ""
+            return False, uac_err or f"Elevated {action_label} exited with code {exit_code}."
+        finally:
+            try:
+                if os.path.exists(batch_path):
+                    os.remove(batch_path)
+            except Exception:
+                pass
+
+    return False, f"Administrator permissions required for {action_label}."
+
+
 def set_power_limit(gpu_index, watts, allow_uac=True):
     """Clamp watts to [min_w, max_w], apply via nvidia-smi -pl, and read back."""
     info = get_power_limit_info(gpu_index)
@@ -257,47 +322,252 @@ def set_power_limit(gpu_index, watts, allow_uac=True):
     max_w = int(round(info["max_w"]))
     target_w = max(min_w, min(max_w, int(round(float(watts)))))
 
-    exe = find_nvidia_smi()
-    if not exe:
-        return False, info, "nvidia-smi not found."
-
-    applied = False
-    err_msg = ""
-    if os.name != "nt" or _is_windows_admin():
-        try:
-            kwargs = {"capture_output": True, "text": True}
-            if os.name == "nt":
-                si = subprocess.STARTUPINFO()
-                si.dwFlags |= subprocess.STARTF_USESHOWWINDOW
-                kwargs["startupinfo"] = si
-                kwargs["creationflags"] = getattr(subprocess, "CREATE_NO_WINDOW", 0)
-            proc = subprocess.run([exe, "-i", str(gpu_index), "-pl", str(target_w)], **kwargs)
-            if proc.returncode == 0:
-                applied = True
-            else:
-                err_msg = (proc.stderr or proc.stdout or "").strip()
-        except Exception as e:
-            err_msg = str(e)
-    elif os.name == "nt" and allow_uac:
-        launched, exit_code, cancelled, uac_err = _run_elevated_exe(
-            exe, f"-i {int(gpu_index)} -pl {target_w}"
-        )
-        if launched and (exit_code is None or exit_code == 0):
-            applied = True
-        elif cancelled:
-            return False, info, "Administrator permission (UAC) was cancelled."
-        else:
-            err_msg = uac_err or f"Elevated nvidia-smi exited with code {exit_code}."
-    else:
-        return False, info, "Administrator permissions required to set power limit."
+    applied, err_msg = _run_nvidia_smi_batch(
+        [["-i", str(int(gpu_index)), "-pl", str(target_w)]],
+        allow_uac=allow_uac,
+        action_label="power limit adjustment",
+    )
+    if not applied and "cancelled" in err_msg.lower():
+        return False, info, err_msg
 
     readback = get_power_limit_info(gpu_index)
     actual_w = readback.get("current_w")
-    if actual_w is not None and abs(actual_w - target_w) <= 2.0:
+    if actual_w is not None and abs(actual_w - target_w) <= 2.0 and applied:
         return True, readback, f"Power limit set to {actual_w:.0f} W (readback verified)."
 
     detail = err_msg or f"Readback is {actual_w} W instead of {target_w} W (admin permissions may be required)."
     return False, readback, detail
+
+
+def _parse_supported_graphics_clocks(raw_text):
+    """Parse unique sorted Graphics MHz steps from nvidia-smi -q -d SUPPORTED_CLOCKS."""
+    vals = []
+    seen = set()
+    for m in re.finditer(r"^\s*Graphics\s*:\s*(\d+)\s*MHz\s*$", raw_text or "", re.MULTILINE):
+        mhz = int(m.group(1))
+        if mhz > 0 and mhz not in seen:
+            seen.add(mhz)
+            vals.append(mhz)
+    vals.sort()
+    return vals
+
+
+def snap_clock_mhz(target_mhz, supported_clocks, min_mhz, max_mhz):
+    """Clamp target MHz and snap to nearest supported discrete clock step if known."""
+    target = max(int(min_mhz), min(int(max_mhz), int(round(float(target_mhz)))))
+    if supported_clocks:
+        return min(supported_clocks, key=lambda c: (abs(c - target), c))
+    step = 15
+    return max(int(min_mhz), min(int(max_mhz), int(round(target / float(step))) * step))
+
+
+def resolve_clock_cap_presets(gpu_name, min_mhz, max_mhz, supported_clocks=None):
+    """Compute architecture-aware Max-Efficiency and Speed-Sweetspot SM clock caps."""
+    low_name = (gpu_name or "").lower()
+    is_ada = any(tok in low_name for tok in ("rtx 40", "4090", "4080", "4070", "4060", "rtx 6000 ada", "rtx 5000 ada", "rtx 4000 ada", "l40"))
+    if is_ada and max_mhz >= 2500:
+        eff_raw = 2300
+        sweet_raw = 2450
+    elif any(tok in low_name for tok in ("rtx 30", "3090", "3080", "3070", "3060", "3050", "cmp 90", "rtx 20", "titan rtx", "2080", "2070", "2060", "cmp 40", "cmp 50")):
+        eff_raw = int(round(max_mhz * 0.78))
+        sweet_raw = int(round(max_mhz * 0.85))
+    else:
+        eff_raw = int(round(max_mhz * 0.76))
+        sweet_raw = int(round(max_mhz * 0.82))
+
+    eff = snap_clock_mhz(eff_raw, supported_clocks, min_mhz, max_mhz)
+    sweet = snap_clock_mhz(sweet_raw, supported_clocks, min_mhz, max_mhz)
+    if sweet < eff:
+        sweet = eff
+    return {
+        "efficiency_mhz": eff,
+        "sweetspot_mhz": sweet,
+        "is_ada": is_ada,
+    }
+
+
+def get_clock_cap_info(gpu_index=0, gpu_name=""):
+    """Query live SM clock, SW Power Cap state, supported clock range, and saved lock state."""
+    info = {
+        "name": gpu_name or "",
+        "current_sm_mhz": None,
+        "max_sm_mhz": None,
+        "min_sm_mhz": None,
+        "sw_power_cap": None,
+        "supported_clocks": [],
+        "adjustable": False,
+        "efficiency_mhz": None,
+        "sweetspot_mhz": None,
+        "is_ada": False,
+        "lock_enabled": False,
+        "locked_min_mhz": None,
+        "locked_max_mhz": None,
+        "error": None,
+    }
+    exe = find_nvidia_smi()
+    if not exe:
+        info["error"] = "nvidia-smi not found"
+        return info
+
+    try:
+        out = _run_hidden([
+            exe, "-i", str(int(gpu_index)),
+            "--query-gpu=name,clocks.current.sm,clocks.max.sm,clocks_event_reasons.sw_power_cap",
+            "--format=csv,noheader,nounits",
+        ])
+        parts = [p.strip() for p in out.strip().splitlines()[0].split(",")]
+        if len(parts) >= 4:
+            if not info["name"] and parts[0]:
+                info["name"] = parts[0]
+            cur_f = _parse_float(parts[1])
+            max_f = _parse_float(parts[2])
+            if cur_f is not None:
+                info["current_sm_mhz"] = int(round(cur_f))
+            if max_f is not None:
+                info["max_sm_mhz"] = int(round(max_f))
+            cap_str = parts[3].strip().lower()
+            if cap_str == "active":
+                info["sw_power_cap"] = True
+            elif cap_str in ("not active", "none"):
+                info["sw_power_cap"] = False
+    except Exception:
+        pass
+
+    try:
+        sup_out = _run_hidden([exe, "-i", str(int(gpu_index)), "-q", "-d", "SUPPORTED_CLOCKS"])
+        clocks = _parse_supported_graphics_clocks(sup_out)
+        if clocks:
+            info["supported_clocks"] = clocks
+            info["min_sm_mhz"] = clocks[0]
+            info["max_sm_mhz"] = clocks[-1]
+    except Exception:
+        pass
+
+    if info["min_sm_mhz"] is None and info["max_sm_mhz"] is not None and info["max_sm_mhz"] > 400:
+        info["min_sm_mhz"] = 210
+
+    if info["min_sm_mhz"] is not None and info["max_sm_mhz"] is not None and info["max_sm_mhz"] > info["min_sm_mhz"]:
+        info["adjustable"] = True
+        presets = resolve_clock_cap_presets(
+            info["name"], info["min_sm_mhz"], info["max_sm_mhz"], info["supported_clocks"]
+        )
+        info["efficiency_mhz"] = presets["efficiency_mhz"]
+        info["sweetspot_mhz"] = presets["sweetspot_mhz"]
+        info["is_ada"] = presets["is_ada"]
+
+    cfg = load_user_config()
+    clk_cfg = cfg.get("clock_lock", {})
+    if clk_cfg.get("enabled") and int(clk_cfg.get("gpu_index", 0)) == int(gpu_index):
+        info["lock_enabled"] = True
+        info["locked_min_mhz"] = clk_cfg.get("min_mhz")
+        info["locked_max_mhz"] = clk_cfg.get("max_mhz")
+
+    return info
+
+
+def _save_clock_lock_state(gpu_index, enabled, min_mhz=None, max_mhz=None, reapply_on_wake=None):
+    cfg = load_user_config()
+    clk_cfg = cfg.setdefault("clock_lock", {})
+    clk_cfg["gpu_index"] = int(gpu_index)
+    clk_cfg["enabled"] = bool(enabled)
+    if min_mhz is not None:
+        clk_cfg["min_mhz"] = int(min_mhz)
+    if max_mhz is not None:
+        clk_cfg["max_mhz"] = int(max_mhz)
+    if reapply_on_wake is not None:
+        clk_cfg["reapply_on_wake"] = bool(reapply_on_wake)
+    save_user_config(cfg)
+
+
+def set_sm_clock_cap(gpu_index, max_mhz, min_mhz=None, allow_uac=True):
+    """Lock GPU SM clock ceiling via nvidia-smi -lgc <min>,<max> while keeping low idle clocks."""
+    info = get_clock_cap_info(gpu_index)
+    if not info["adjustable"]:
+        return False, info, "SM clock capping is unavailable on this GPU."
+
+    floor_mhz = int(min_mhz) if min_mhz is not None else int(info["min_sm_mhz"])
+    floor_mhz = snap_clock_mhz(floor_mhz, info["supported_clocks"], info["min_sm_mhz"], info["max_sm_mhz"])
+    ceil_mhz = snap_clock_mhz(max_mhz, info["supported_clocks"], floor_mhz, info["max_sm_mhz"])
+
+    ok, err_msg = _run_nvidia_smi_batch(
+        [["-i", str(int(gpu_index)), "-lgc", f"{floor_mhz},{ceil_mhz}"]],
+        allow_uac=allow_uac,
+        action_label="SM clock cap",
+    )
+    if ok:
+        _save_clock_lock_state(gpu_index, True, min_mhz=floor_mhz, max_mhz=ceil_mhz)
+        readback = get_clock_cap_info(gpu_index)
+        return True, readback, f"SM clock cap locked to {floor_mhz}-{ceil_mhz} MHz (-lgc)."
+    return False, get_clock_cap_info(gpu_index), err_msg
+
+
+def reset_sm_clock_cap(gpu_index, allow_uac=True):
+    """Reset any SM clock lock via nvidia-smi -rgc."""
+    ok, err_msg = _run_nvidia_smi_batch(
+        [["-i", str(int(gpu_index)), "-rgc"]],
+        allow_uac=allow_uac,
+        action_label="SM clock reset",
+    )
+    if ok:
+        _save_clock_lock_state(gpu_index, False)
+        readback = get_clock_cap_info(gpu_index)
+        return True, readback, "SM clock lock cleared (-rgc); full dynamic boost active."
+    return False, get_clock_cap_info(gpu_index), err_msg
+
+
+def apply_efficiency_profile(gpu_index, target_watts=None, clock_max_mhz=None, unlock_clocks=False, allow_uac=True):
+    """Apply power limit and SM clock cap/reset together in a single elevated operation."""
+    pl_info = get_power_limit_info(gpu_index)
+    clk_info = get_clock_cap_info(gpu_index)
+    cmds = []
+
+    final_w = None
+    if target_watts is not None and pl_info.get("adjustable"):
+        min_w = int(round(pl_info["min_w"]))
+        max_w = int(round(pl_info["max_w"]))
+        final_w = max(min_w, min(max_w, int(round(float(target_watts)))))
+        cmds.append(["-i", str(int(gpu_index)), "-pl", str(final_w)])
+
+    final_min_clk = None
+    final_max_clk = None
+    if unlock_clocks and clk_info.get("adjustable"):
+        cmds.append(["-i", str(int(gpu_index)), "-rgc"])
+    elif clock_max_mhz is not None and clk_info.get("adjustable"):
+        floor = snap_clock_mhz(
+            clk_info["min_sm_mhz"], clk_info["supported_clocks"],
+            clk_info["min_sm_mhz"], clk_info["max_sm_mhz"]
+        )
+        ceil = snap_clock_mhz(
+            clock_max_mhz, clk_info["supported_clocks"],
+            floor, clk_info["max_sm_mhz"]
+        )
+        final_min_clk = floor
+        final_max_clk = ceil
+        cmds.append(["-i", str(int(gpu_index)), "-lgc", f"{floor},{ceil}"])
+
+    if not cmds:
+        return False, pl_info, clk_info, "Neither power limit nor SM clock controls are adjustable on this GPU."
+
+    ok, err_msg = _run_nvidia_smi_batch(cmds, allow_uac=allow_uac, action_label="efficiency profile")
+    if ok:
+        if unlock_clocks:
+            _save_clock_lock_state(gpu_index, False)
+        elif final_max_clk is not None:
+            _save_clock_lock_state(gpu_index, True, min_mhz=final_min_clk, max_mhz=final_max_clk)
+
+    new_pl = get_power_limit_info(gpu_index)
+    new_clk = get_clock_cap_info(gpu_index)
+    if not ok:
+        return False, new_pl, new_clk, err_msg
+
+    parts = []
+    if final_w is not None:
+        parts.append(f"PL={final_w} W")
+    if unlock_clocks:
+        parts.append("Clocks=Unlocked (-rgc)")
+    elif final_max_clk is not None:
+        parts.append(f"SM Cap={final_min_clk}-{final_max_clk} MHz")
+    return True, new_pl, new_clk, "Applied " + ", ".join(parts) + "."
 
 
 def get_config_dir():
@@ -350,14 +620,24 @@ def load_benchmark_baseline(gpu_index):
     return cfg.get("baselines", {}).get(str(gpu_index))
 
 
-def configure_wake_reapply_task(enable, repo_root, gpu_index=0, watts=None):
-    """Save wake power-limit preference and manage optional Windows Wake Scheduled Task."""
+def configure_wake_reapply_task(enable, repo_root, gpu_index=0, watts=None, clock_max_mhz=None, clock_min_mhz=None, clock_enabled=None):
+    """Save wake tuning preferences (PL and/or SM clock cap) and manage Wake Scheduled Task."""
     cfg = load_user_config()
     pl_cfg = cfg.setdefault("power_limit", {})
     pl_cfg["reapply_on_wake"] = bool(enable)
     if watts is not None:
         pl_cfg["target_watts"] = int(round(float(watts)))
     pl_cfg["gpu_index"] = int(gpu_index)
+
+    clk_cfg = cfg.setdefault("clock_lock", {})
+    clk_cfg["reapply_on_wake"] = bool(enable)
+    clk_cfg["gpu_index"] = int(gpu_index)
+    if clock_enabled is not None:
+        clk_cfg["enabled"] = bool(clock_enabled)
+    if clock_min_mhz is not None:
+        clk_cfg["min_mhz"] = int(clock_min_mhz)
+    if clock_max_mhz is not None:
+        clk_cfg["max_mhz"] = int(clock_max_mhz)
     save_user_config(cfg)
 
     if os.name != "nt":
@@ -446,17 +726,32 @@ def configure_wake_reapply_task(enable, repo_root, gpu_index=0, watts=None):
 
 
 def apply_saved_power_limits():
-    """Apply saved wake power limit if enabled (used by --reapply-pl)."""
+    """Apply saved wake power limit and/or SM clock cap if enabled (used by --reapply-pl)."""
     cfg = load_user_config()
     pl_cfg = cfg.get("power_limit", {})
-    if not pl_cfg.get("reapply_on_wake"):
-        return False, "Wake power-limit reapply is disabled."
-    target = pl_cfg.get("target_watts")
-    idx = pl_cfg.get("gpu_index", 0)
-    if target is None:
-        return False, "No saved target power limit."
-    ok, _, msg = set_power_limit(idx, target, allow_uac=False)
-    return ok, msg
+    clk_cfg = cfg.get("clock_lock", {})
+
+    want_pl = bool(pl_cfg.get("reapply_on_wake")) and pl_cfg.get("target_watts") is not None
+    want_clk = bool(clk_cfg.get("reapply_on_wake")) and bool(clk_cfg.get("enabled")) and clk_cfg.get("max_mhz") is not None
+    if not want_pl and not want_clk:
+        return False, "Wake tuning reapply is disabled or no saved settings."
+
+    msgs = []
+    overall_ok = True
+    if want_pl:
+        ok_pl, _, msg_pl = set_power_limit(pl_cfg.get("gpu_index", 0), pl_cfg["target_watts"], allow_uac=False)
+        overall_ok = overall_ok and ok_pl
+        msgs.append(msg_pl)
+    if want_clk:
+        ok_clk, _, msg_clk = set_sm_clock_cap(
+            clk_cfg.get("gpu_index", 0),
+            clk_cfg["max_mhz"],
+            min_mhz=clk_cfg.get("min_mhz"),
+            allow_uac=False,
+        )
+        overall_ok = overall_ok and ok_clk
+        msgs.append(msg_clk)
+    return overall_ok, " | ".join(msgs)
 
 
 def read_live_acpi_fadt():

@@ -12,12 +12,14 @@ from tkinter import messagebox, ttk
 # Shared helpers live next to this script (tools/gu_system_info.py).
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from gu_system_info import (  # noqa: E402
+    apply_efficiency_profile,
     apply_saved_power_limits,
     benchmark_gemm,
     classify_unlock_status,
     configure_wake_reapply_task,
     export_latest_boot_logs,
     find_nvidia_smi,
+    get_clock_cap_info,
     get_firmware_mode,
     get_gpu_utilization,
     get_last_wake_time,
@@ -27,9 +29,12 @@ from gu_system_info import (  # noqa: E402
     load_benchmark_baseline,
     load_user_config,
     measure_fmla_ratio,
+    reset_sm_clock_cap,
     resolve_card_profile,
     save_benchmark_baseline,
     set_power_limit,
+    set_sm_clock_cap,
+    snap_clock_mhz,
 )
 
 
@@ -101,8 +106,8 @@ class GpuUnlockApp(tk.Tk):
     def __init__(self):
         super().__init__()
         self.title("Universal GPU Unlock - Status & Diagnostics")
-        self.geometry("920x860")
-        self.minsize(840, 800)
+        self.geometry("920x940")
+        self.minsize(840, 860)
         self.configure(bg="#121212")
 
         # Color Palette
@@ -124,12 +129,15 @@ class GpuUnlockApp(tk.Tk):
         self.s3_status = get_s3_armed_status()
         self.bar1, self.fb, self.rebar_active = get_rebar_info(self.gpu_info["index"])
         self.pl_info = get_power_limit_info(self.gpu_info["index"])
+        self.clk_info = get_clock_cap_info(self.gpu_info["index"], self.gpu_info["name"])
         self.last_metrics = None
         self.benchmark_running = False
         self._slider_syncing = False
+        self._clk_slider_syncing = False
 
         self.build_ui()
         self.sync_power_limit_ui()
+        self.sync_clock_cap_ui()
         self.after(15000, self._poll_wake_event)
 
     def get_repo_dir(self):
@@ -369,11 +377,14 @@ class GpuUnlockApp(tk.Tk):
         self.btn_pl_max.pack(side="left", padx=4)
 
         self.wake_reapply_var = tk.BooleanVar(
-            value=bool(load_user_config().get("power_limit", {}).get("reapply_on_wake", False))
+            value=bool(
+                load_user_config().get("power_limit", {}).get("reapply_on_wake", False)
+                or load_user_config().get("clock_lock", {}).get("reapply_on_wake", False)
+            )
         )
         self.chk_wake_reapply = tk.Checkbutton(
             pl_markers_row,
-            text="Re-apply PL on S3 Wake",
+            text="Re-apply Tuning on S3 Wake",
             variable=self.wake_reapply_var,
             command=self.on_wake_reapply_toggled,
             bg=self.c_card,
@@ -386,18 +397,104 @@ class GpuUnlockApp(tk.Tk):
         self.chk_wake_reapply.pack(side="left", padx=12)
 
         self.btn_prof_ai = tk.Button(
-            pl_markers_row, text="AI / Compute", font=("Segoe UI", 8, "bold"),
+            pl_markers_row, text="AI Efficiency", font=("Segoe UI", 8, "bold"),
             bg="#00695C", fg="#FFFFFF", activebackground="#00897B", relief="flat", padx=8, pady=3,
             cursor="hand2", command=lambda: self.apply_quick_profile("ai"),
         )
         self.btn_prof_ai.pack(side="right", padx=(4, 0))
 
         self.btn_prof_gaming = tk.Button(
-            pl_markers_row, text="Gaming / Quiet", font=("Segoe UI", 8, "bold"),
+            pl_markers_row, text="Gaming / Stock", font=("Segoe UI", 8, "bold"),
             bg="#2E2E2E", fg="#FFFFFF", activebackground="#424242", relief="flat", padx=8, pady=3,
             cursor="hand2", command=lambda: self.apply_quick_profile("gaming"),
         )
         self.btn_prof_gaming.pack(side="right", padx=4)
+
+        # SM Clock Cap Card (-lgc): beats -pl power throttling in render speed & Wh
+        clk_box = tk.Frame(container, bg=self.c_card, highlightbackground=self.c_card_border, highlightthickness=1, padx=14, pady=9)
+        clk_box.pack(fill="x", pady=(2, 6))
+
+        clk_top = tk.Frame(clk_box, bg=self.c_card)
+        clk_top.pack(fill="x")
+
+        tk.Label(
+            clk_top, text="SM CLOCK CAP (-lgc) — Ada / AI Efficiency", font=("Segoe UI", 10, "bold"),
+            fg=self.c_text_bright, bg=self.c_card,
+        ).pack(side="left")
+
+        self.lbl_clk_live = tk.Label(
+            clk_top, text="Querying SM clocks...", font=("Segoe UI", 9),
+            fg=self.c_text_dim, bg=self.c_card,
+        )
+        self.lbl_clk_live.pack(side="right")
+
+        clk_slider_row = tk.Frame(clk_box, bg=self.c_card, pady=3)
+        clk_slider_row.pack(fill="x")
+
+        self.clk_var = tk.IntVar(value=2295)
+        self.clk_scale = tk.Scale(
+            clk_slider_row,
+            from_=210,
+            to=3105,
+            resolution=15,
+            orient="horizontal",
+            variable=self.clk_var,
+            showvalue=False,
+            bg=self.c_card,
+            fg=self.c_text_bright,
+            troughcolor="#2E2E2E",
+            activebackground="#00897B",
+            highlightthickness=0,
+            bd=0,
+            command=self.on_clk_slider_move,
+        )
+        self.clk_scale.pack(side="left", fill="x", expand=True, padx=(0, 12))
+
+        self.lbl_clk_preview = tk.Label(
+            clk_slider_row, text="---- MHz", font=("Segoe UI", 10, "bold"),
+            fg="#80CBC4", bg=self.c_card, width=20, anchor="e",
+        )
+        self.lbl_clk_preview.pack(side="left", padx=(0, 8))
+
+        self.btn_clk_reset = tk.Button(
+            clk_slider_row, text="Reset (-rgc)", font=("Segoe UI", 9),
+            bg="#37474F", fg="#FFFFFF", activebackground="#455A64", activeforeground="#FFFFFF",
+            relief="flat", padx=10, pady=4, cursor="hand2", command=self.reset_clock_cap_clicked,
+        )
+        self.btn_clk_reset.pack(side="right", padx=(4, 0))
+
+        self.btn_clk_apply = tk.Button(
+            clk_slider_row, text="Apply Cap", font=("Segoe UI", 9, "bold"),
+            bg="#00695C", fg="#FFFFFF", activebackground="#00897B", activeforeground="#FFFFFF",
+            relief="flat", padx=12, pady=4, cursor="hand2", command=self.apply_slider_clock_cap,
+        )
+        self.btn_clk_apply.pack(side="right")
+
+        clk_markers_row = tk.Frame(clk_box, bg=self.c_card)
+        clk_markers_row.pack(fill="x", pady=(2, 0))
+
+        self.btn_clk_eff = tk.Button(
+            clk_markers_row, text="Max Eff (~2300)", font=("Segoe UI", 8, "bold"),
+            bg="#263238", fg="#80CBC4", activebackground="#37474F", relief="flat", padx=8, pady=3,
+            cursor="hand2", command=lambda: self.snap_clock_marker("efficiency"),
+        )
+        self.btn_clk_eff.pack(side="left", padx=(0, 4))
+
+        self.btn_clk_sweet = tk.Button(
+            clk_markers_row, text="Sweetspot (~2450)", font=("Segoe UI", 8, "bold"),
+            bg="#263238", fg="#FFD54F", activebackground="#37474F", relief="flat", padx=8, pady=3,
+            cursor="hand2", command=lambda: self.snap_clock_marker("sweetspot"),
+        )
+        self.btn_clk_sweet.pack(side="left", padx=4)
+
+        self.lbl_clk_tip = tk.Label(
+            clk_markers_row,
+            text="Tip: Open PL + -lgc prevents SW Power Cap oscillation (pair with +600 MHz VRAM; reset before gaming).",
+            font=("Segoe UI", 8),
+            fg=self.c_text_dim,
+            bg=self.c_card,
+        )
+        self.lbl_clk_tip.pack(side="right")
 
         # Progress / Status Log Line
         self.lbl_log = tk.Label(
@@ -497,6 +594,19 @@ class GpuUnlockApp(tk.Tk):
             command=lambda: self.launch_script("Setup.bat"),
         ).pack(side="right", padx=3)
 
+    def _set_tuning_controls_state(self, state):
+        pl_adj = bool(self.pl_info and self.pl_info.get("adjustable"))
+        clk_adj = bool(self.clk_info and self.clk_info.get("adjustable"))
+        pl_widgets = (self.pl_scale, self.btn_pl_apply, self.btn_pl_eco, self.btn_pl_stock, self.btn_pl_max)
+        clk_widgets = (self.clk_scale, self.btn_clk_apply, self.btn_clk_reset, self.btn_clk_eff, self.btn_clk_sweet)
+        for w in pl_widgets:
+            w.config(state=state if pl_adj else "disabled")
+        for w in clk_widgets:
+            w.config(state=state if clk_adj else "disabled")
+        any_adj = pl_adj or clk_adj
+        for w in (self.chk_wake_reapply, self.btn_prof_ai, self.btn_prof_gaming):
+            w.config(state=state if any_adj else "disabled")
+
     def sync_power_limit_ui(self):
         info = self.pl_info
         adjustable = bool(info and info.get("adjustable"))
@@ -504,9 +614,7 @@ class GpuUnlockApp(tk.Tk):
             err = info.get("error") if info else "unavailable"
             self.lbl_pl_live.config(text=f"Power limit read-only / locked ({err or 'VBIOS'})")
             self.lbl_pl_preview.config(text="Locked", fg=self.c_text_dim)
-            for w in (self.pl_scale, self.btn_pl_apply, self.btn_pl_eco, self.btn_pl_stock,
-                      self.btn_pl_max, self.chk_wake_reapply, self.btn_prof_ai, self.btn_prof_gaming):
-                w.config(state="disabled")
+            self._set_tuning_controls_state("normal")
             return
 
         min_w = int(round(info["min_w"]))
@@ -520,15 +628,143 @@ class GpuUnlockApp(tk.Tk):
         self.btn_pl_stock.config(text=f"Stock ({info['stock_w']} W)")
         self.btn_pl_max.config(text=f"Max ({max_w} W)")
 
-        for w in (self.pl_scale, self.btn_pl_apply, self.btn_pl_eco, self.btn_pl_stock,
-                  self.btn_pl_max, self.chk_wake_reapply, self.btn_prof_ai, self.btn_prof_gaming):
-            w.config(state="normal")
-
         self._slider_syncing = True
         self.pl_scale.config(from_=min_w, to=max_w)
         self.pl_var.set(cur_w)
         self._slider_syncing = False
         self.update_pl_preview(cur_w)
+        self._set_tuning_controls_state("normal")
+
+    def sync_clock_cap_ui(self):
+        cinfo = self.clk_info
+        adjustable = bool(cinfo and cinfo.get("adjustable"))
+        if not adjustable:
+            err = cinfo.get("error") if cinfo else "unavailable"
+            self.lbl_clk_live.config(text=f"SM clock cap unavailable ({err or 'Unsupported'})")
+            self.lbl_clk_preview.config(text="N/A", fg=self.c_text_dim)
+            self._set_tuning_controls_state("normal")
+            return
+
+        min_c = int(cinfo["min_sm_mhz"])
+        max_c = int(cinfo["max_sm_mhz"])
+        cur_sm = cinfo.get("current_sm_mhz")
+        cur_txt = f"{cur_sm} MHz" if cur_sm is not None else "N/A"
+        sw_cap_txt = " | SW Power Cap: ACTIVE" if cinfo.get("sw_power_cap") else ""
+        if cinfo.get("lock_enabled") and cinfo.get("locked_max_mhz"):
+            cap_txt = f"Cap: {cinfo['locked_min_mhz']}-{cinfo['locked_max_mhz']} MHz (-lgc)"
+            slider_val = int(cinfo["locked_max_mhz"])
+        else:
+            cap_txt = "Cap: Unlocked (-rgc)"
+            slider_val = int(cinfo["sweetspot_mhz"] or max_c)
+
+        self.lbl_clk_live.config(text=f"Live SM: {cur_txt} | {cap_txt} | Range: {min_c}-{max_c} MHz{sw_cap_txt}")
+        self.btn_clk_eff.config(text=f"Max Eff ({cinfo['efficiency_mhz']} MHz)")
+        self.btn_clk_sweet.config(text=f"Sweetspot ({cinfo['sweetspot_mhz']} MHz)")
+
+        self._clk_slider_syncing = True
+        self.clk_scale.config(from_=min_c, to=max_c)
+        self.clk_var.set(slider_val)
+        self._clk_slider_syncing = False
+        self.update_clk_preview(slider_val)
+        self._set_tuning_controls_state("normal")
+
+    def update_clk_preview(self, mhz):
+        cinfo = self.clk_info or {}
+        snapped = snap_clock_mhz(
+            mhz,
+            cinfo.get("supported_clocks") or None,
+            cinfo.get("min_sm_mhz") or 210,
+            cinfo.get("max_sm_mhz") or 3500,
+        )
+        eff = cinfo.get("efficiency_mhz")
+        sweet = cinfo.get("sweetspot_mhz")
+        tag = "Max Eff" if eff and snapped == eff else ("Sweetspot" if sweet and snapped == sweet else "Custom")
+        self.lbl_clk_preview.config(text=f"{snapped} MHz ({tag})", fg="#80CBC4")
+
+    def on_clk_slider_move(self, val):
+        if self._clk_slider_syncing:
+            return
+        try:
+            self.update_clk_preview(int(float(val)))
+        except Exception:
+            pass
+
+    def snap_clock_marker(self, marker):
+        if not self.clk_info or not self.clk_info.get("adjustable"):
+            return
+        target = self.clk_info["efficiency_mhz"] if marker == "efficiency" else self.clk_info["sweetspot_mhz"]
+        self.clk_var.set(target)
+        self.update_clk_preview(target)
+        self.apply_clock_cap_value(target)
+
+    def apply_slider_clock_cap(self):
+        self.apply_clock_cap_value(self.clk_var.get())
+
+    def apply_clock_cap_value(self, target_mhz):
+        if getattr(self, "_pl_busy", False):
+            return
+        cinfo = self.clk_info or {}
+        snapped = snap_clock_mhz(
+            target_mhz,
+            cinfo.get("supported_clocks") or None,
+            cinfo.get("min_sm_mhz") or 210,
+            cinfo.get("max_sm_mhz") or 3500,
+        )
+        self._pl_busy = True
+        self._set_tuning_controls_state("disabled")
+        self.lbl_log.config(text=f"Locking SM clock ceiling to {snapped} MHz (-lgc, accept UAC if prompted)...", fg=self.c_yellow)
+        idx = self.selected_gpu_idx
+        repo_dir = self.get_repo_dir()
+
+        def worker():
+            ok = False
+            readback = self.clk_info
+            msg = ""
+            wake_msg = None
+            try:
+                ok, readback, msg = set_sm_clock_cap(idx, snapped, allow_uac=True)
+                if ok and self.wake_reapply_var.get():
+                    _, wake_msg = configure_wake_reapply_task(
+                        True, repo_dir, idx,
+                        clock_min_mhz=readback.get("locked_min_mhz"),
+                        clock_max_mhz=readback.get("locked_max_mhz"),
+                        clock_enabled=True,
+                    )
+            except Exception as e:
+                msg = str(e)
+            self.after(0, lambda: self._finish_apply_clock_cap(ok, readback, msg, wake_msg))
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def reset_clock_cap_clicked(self):
+        if getattr(self, "_pl_busy", False):
+            return
+        self._pl_busy = True
+        self._set_tuning_controls_state("disabled")
+        self.lbl_log.config(text="Clearing SM clock lock (-rgc, accept UAC if prompted)...", fg=self.c_yellow)
+        idx = self.selected_gpu_idx
+
+        def worker():
+            ok = False
+            readback = self.clk_info
+            msg = ""
+            try:
+                ok, readback, msg = reset_sm_clock_cap(idx, allow_uac=True)
+            except Exception as e:
+                msg = str(e)
+            self.after(0, lambda: self._finish_apply_clock_cap(ok, readback, msg, None))
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _finish_apply_clock_cap(self, ok, readback, msg, wake_msg=None):
+        self._pl_busy = False
+        self.clk_info = readback
+        self.sync_clock_cap_ui()
+        if ok:
+            full_msg = f"{msg} | {wake_msg}" if wake_msg else msg
+            self.lbl_log.config(text=full_msg, fg=self.c_green)
+        else:
+            self.lbl_log.config(text=msg, fg=self.c_red)
 
     def update_pl_preview(self, watts):
         stock_w = (self.pl_info or {}).get("stock_w") or 1
@@ -559,16 +795,11 @@ class GpuUnlockApp(tk.Tk):
     def apply_slider_power_limit(self):
         self.apply_power_limit_value(self.pl_var.get())
 
-    def _set_pl_controls_state(self, state):
-        for w in (self.pl_scale, self.btn_pl_apply, self.btn_pl_eco, self.btn_pl_stock,
-                  self.btn_pl_max, self.chk_wake_reapply, self.btn_prof_ai, self.btn_prof_gaming):
-            w.config(state=state)
-
     def apply_power_limit_value(self, target_w, enable_wake_after=None):
         if getattr(self, "_pl_busy", False):
             return
         self._pl_busy = True
-        self._set_pl_controls_state("disabled")
+        self._set_tuning_controls_state("disabled")
         self.lbl_log.config(text=f"Applying {int(target_w)} W power limit (accept UAC if prompted)...", fg=self.c_yellow)
         idx = self.selected_gpu_idx
         repo_dir = self.get_repo_dir()
@@ -606,9 +837,13 @@ class GpuUnlockApp(tk.Tk):
         if getattr(self, "_pl_busy", False):
             return
         self._pl_busy = True
-        self._set_pl_controls_state("disabled")
+        self._set_tuning_controls_state("disabled")
         enabled = bool(self.wake_reapply_var.get())
         target = self.pl_var.get() if (self.pl_info and self.pl_info.get("adjustable")) else None
+        cinfo = self.clk_info or {}
+        clk_enabled = bool(cinfo.get("lock_enabled"))
+        clk_min = cinfo.get("locked_min_mhz")
+        clk_max = cinfo.get("locked_max_mhz")
         idx = self.selected_gpu_idx
         repo_dir = self.get_repo_dir()
 
@@ -616,7 +851,10 @@ class GpuUnlockApp(tk.Tk):
             ok = False
             msg = ""
             try:
-                ok, msg = configure_wake_reapply_task(enabled, repo_dir, idx, target)
+                ok, msg = configure_wake_reapply_task(
+                    enabled, repo_dir, idx, target,
+                    clock_min_mhz=clk_min, clock_max_mhz=clk_max, clock_enabled=clk_enabled,
+                )
             except Exception as e:
                 msg = str(e)
             self.after(0, lambda: self._finish_wake_toggle(ok, msg))
@@ -626,24 +864,79 @@ class GpuUnlockApp(tk.Tk):
     def _finish_wake_toggle(self, ok, msg):
         self._pl_busy = False
         self.sync_power_limit_ui()
+        self.sync_clock_cap_ui()
         self.lbl_log.config(text=msg, fg=self.c_green if ok else self.c_yellow)
 
     def apply_quick_profile(self, mode):
         if getattr(self, "_pl_busy", False):
             return
-        if not self.pl_info or not self.pl_info.get("adjustable"):
+        pl_adj = bool(self.pl_info and self.pl_info.get("adjustable"))
+        clk_adj = bool(self.clk_info and self.clk_info.get("adjustable"))
+        if not pl_adj and not clk_adj:
             return
+
         if mode == "ai":
-            target = int(round(self.pl_info["max_w"]))
-            self.wake_reapply_var.set(True)
+            target_w = int(round(self.pl_info["max_w"])) if pl_adj else None
+            target_clk = self.clk_info["sweetspot_mhz"] if clk_adj else None
+            unlock_clks = False
             wake_after = True
         else:
-            target = int(round(self.pl_info["stock_w"]))
-            self.wake_reapply_var.set(False)
+            target_w = int(round(self.pl_info["stock_w"])) if pl_adj else None
+            target_clk = None
+            unlock_clks = True
             wake_after = False
-        self.pl_var.set(target)
-        self.update_pl_preview(target)
-        self.apply_power_limit_value(target, enable_wake_after=wake_after)
+
+        if target_w is not None:
+            self.pl_var.set(target_w)
+            self.update_pl_preview(target_w)
+        if target_clk is not None:
+            self.clk_var.set(target_clk)
+            self.update_clk_preview(target_clk)
+
+        self._pl_busy = True
+        self._set_tuning_controls_state("disabled")
+        label = "AI Efficiency" if mode == "ai" else "Gaming / Stock"
+        self.lbl_log.config(text=f"Applying {label} profile (accept UAC if prompted)...", fg=self.c_yellow)
+        idx = self.selected_gpu_idx
+        repo_dir = self.get_repo_dir()
+
+        def worker():
+            ok = False
+            new_pl = self.pl_info
+            new_clk = self.clk_info
+            msg = ""
+            wake_msg = None
+            try:
+                ok, new_pl, new_clk, msg = apply_efficiency_profile(
+                    idx, target_watts=target_w, clock_max_mhz=target_clk,
+                    unlock_clocks=unlock_clks, allow_uac=True,
+                )
+                if ok:
+                    _, wake_msg = configure_wake_reapply_task(
+                        wake_after, repo_dir, idx, watts=target_w,
+                        clock_min_mhz=new_clk.get("locked_min_mhz"),
+                        clock_max_mhz=new_clk.get("locked_max_mhz"),
+                        clock_enabled=bool(new_clk.get("lock_enabled")),
+                    )
+            except Exception as e:
+                msg = str(e)
+            self.after(0, lambda: self._finish_apply_profile(ok, new_pl, new_clk, wake_after, msg, wake_msg))
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _finish_apply_profile(self, ok, new_pl, new_clk, wake_after, msg, wake_msg):
+        self._pl_busy = False
+        self.pl_info = new_pl
+        self.clk_info = new_clk
+        if ok:
+            self.wake_reapply_var.set(wake_after)
+        self.sync_power_limit_ui()
+        self.sync_clock_cap_ui()
+        if ok:
+            full_msg = f"{msg} | {wake_msg}" if wake_msg else msg
+            self.lbl_log.config(text=full_msg, fg=self.c_green)
+        else:
+            self.lbl_log.config(text=msg, fg=self.c_red)
 
     def _poll_wake_event(self):
         try:
@@ -683,7 +976,9 @@ class GpuUnlockApp(tk.Tk):
         bar_sub = f"BAR1: {self.bar1} MiB" if self.bar1 else "Query unavailable"
         self.lbl_rebar_detail.config(text=bar_sub)
         self.pl_info = get_power_limit_info(self.gpu_info["index"])
+        self.clk_info = get_clock_cap_info(self.gpu_info["index"], self.gpu_info["name"])
         self.sync_power_limit_ui()
+        self.sync_clock_cap_ui()
         self.lbl_baseline_delta.config(text=self.baseline_summary_text())
 
     def firmware_detail_text(self):
@@ -811,7 +1106,9 @@ class GpuUnlockApp(tk.Tk):
         self.lbl_rebar_detail.config(text=bar_sub)
 
         self.pl_info = get_power_limit_info(self.gpu_info["index"])
+        self.clk_info = get_clock_cap_info(self.gpu_info["index"], self.gpu_info["name"])
         self.sync_power_limit_ui()
+        self.sync_clock_cap_ui()
         self.lbl_baseline_delta.config(text=self.baseline_summary_text())
 
         self.guard_active = self.check_idle_guard()

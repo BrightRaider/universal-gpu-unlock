@@ -42,7 +42,7 @@
    - `[I]` **Stickless Auto-Unlock (`NVRAM`):** Installs `AdaUnlockDxe.efi` (`Driver####`) so Windows unlocks automatically on cold boots and survives ACPI S3 sleep — no USB drive required afterward.
    - `[R]` **Remove DXE Driver:** Cleanly uninstalls `[I]` from UEFI NVRAM and internal partitions.
    - `[S]` **Stock Windows:** Diagnostic scan & log only (boots stock).
-3. **Verify & Control:** In Windows, run **`Launch-Dashboard.bat`** (GUI Cockpit: live `S3 ARMED` indicator, 1-W power-limit slider with S3-wake re-apply, baseline comparison) or **`Check-GPU-Unlock.bat`** (CLI benchmark & `FMLA32/16` check).
+3. **Verify & Control:** In Windows, run **`Launch-Dashboard.bat`** (GUI Cockpit: live `S3 ARMED` indicator, 1-W power-limit & SM clock-cap (`-lgc`) controls with S3-wake re-apply, baseline comparison) or **`Check-GPU-Unlock.bat`** (CLI benchmark & `FMLA32/16` check).
 
 > [!TIP]
 > **First-Boot Checklist:** Set **CSM = Disabled** (Pure UEFI) in your BIOS to avoid blank screens or Error 43, and enable **Above 4G Decoding** + **Resizable BAR** for full memory throughput (+10% to +15%).
@@ -150,7 +150,7 @@ Sustained `10.1s` (`242`-frame, `1184×896`) **MiniMax-H3** Video DiT runs on an
 | **`-lgc 210,2450` *(Open `450 W` PL)*** | **`6m 36s`** (`396.4s`) | `370.8 W` | **`40.89 Wh`** (`-6.9%`) | **Sweetspot:** **66s faster** than `70% PL`, within `3.1%` of `450 W` |
 | **`-lgc 210,2300` *(Open `450 W` PL)*** | **`7m 08s`** (`427.9s`) | `325.6 W` | **`38.74 Wh`** (`-11.8%`) | **Max Efficiency:** **34.6s faster & fewer total Wh** than `70% PL` |
 
-- **Practical tip:** Pair open power budget + **`nvidia-smi -lgc 210,2450`** (or **`210,2300`** for 24/7 efficiency) with `+600–700 MHz` VRAM (`+3.5–4.5%` faster sampling in CUDA `P2` state; `+800/+900 MHz` adds no gain due to GDDR6X timing/ECC overhead). Run **`nvidia-smi -rgc`** afterward to unlock clocks before gaming! *(Clock targets above apply to RTX 40 Ada silicon; RTX 30/20 cards boost lower by default. Full sweep tables live in [DOCUMENTATION.md](DOCUMENTATION.md#1353-ada-rtx-4090-efficiency-sweetspot--clock-capping-vs-power-limiting).)*
+- **Practical tip:** Use **`Launch-Dashboard.bat`** (`SM CLOCK CAP` ➔ **Sweetspot** / **Max Eff** or **AI Efficiency** preset) — or run `nvidia-smi -lgc 210,2450` / `210,2300` — paired with `+600–700 MHz` VRAM (`+3.5–4.5%` faster sampling in CUDA `P2` state; `+800/+900 MHz` adds no gain due to GDDR6X timing/ECC overhead). Click **Gaming / Stock** (`-rgc`) afterward to unlock clocks before gaming! *(Preset MHz targets above apply to RTX 40 Ada silicon; RTX 30/20 scale automatically to supported clocks. Full sweep details live in [DOCUMENTATION.md](DOCUMENTATION.md#1353-ada-rtx-4090-efficiency-sweetspot--clock-capping-vs-power-limiting).)*
 
 ---
 

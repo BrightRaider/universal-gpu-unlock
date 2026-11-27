@@ -30,6 +30,7 @@ from gu_system_info import (  # noqa: E402
     benchmark_gemm,
     classify_unlock_status,
     find_nvidia_smi,
+    get_clock_cap_info,
     get_firmware_mode,
     get_gpu_utilization,
     get_last_wake_time,
@@ -263,6 +264,7 @@ def main():
     wake_time = get_last_wake_time()
     s3_status = get_s3_armed_status()
     pl_info = get_power_limit_info(0)
+    clk_info = get_clock_cap_info(0)
 
     def _s3_line():
         code = s3_status["code"]
@@ -279,6 +281,19 @@ def main():
         )
         return f"  * Power Limit        : {pl_info['current_w']:.0f} W ({rng})"
 
+    def _clock_line():
+        if not clk_info or clk_info.get("current_sm_mhz") is None:
+            return None
+        cur = clk_info["current_sm_mhz"]
+        if clk_info.get("lock_enabled") and clk_info.get("locked_max_mhz"):
+            cap_str = f"Locked {clk_info.get('locked_min_mhz')}-{clk_info.get('locked_max_mhz')} MHz (-lgc)"
+        elif clk_info.get("adjustable"):
+            cap_str = f"Unlocked (-rgc | Range {clk_info['min_sm_mhz']}-{clk_info['max_sm_mhz']} MHz)"
+        else:
+            cap_str = "Default"
+        sw_cap = " | SW Power Cap: ACTIVE" if clk_info.get("sw_power_cap") else ""
+        return f"  * SM Clock State     : {cur} MHz ({cap_str}{sw_cap})"
+
     try:
         global torch
         import torch
@@ -294,6 +309,9 @@ def main():
         pl_txt = _pl_line()
         if pl_txt:
             print(pl_txt)
+        clk_txt = _clock_line()
+        if clk_txt:
+            print(clk_txt)
         if wake_time:
             print(f"  * Last Wake (S3/S4)  : {wake_time}")
         if rebar_active is True:
@@ -344,6 +362,9 @@ def main():
     pl_txt = _pl_line()
     if pl_txt:
         print(pl_txt)
+    clk_txt = _clock_line()
+    if clk_txt:
+        print(clk_txt)
     if wake_time:
         print(f"  * Last Wake (S3/S4)  : {wake_time}")
     print(f"  * NVIDIA CUDA GPUs   : {dev_count} device(s) detected")

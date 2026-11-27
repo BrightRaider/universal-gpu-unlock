@@ -123,6 +123,9 @@ jobs:
       - name: Run MSVC host tests (driver_nvram, boot selection)
         shell: pwsh
         run: '& .\tests\Run-MsvcHostTests.ps1 -OutDir "$env:RUNNER_TEMP\msvc-host-tests"'
+      - name: Run Python cockpit clock-cap unit tests
+        shell: pwsh
+        run: python -m unittest tests.test_clock_cap -v
       - uses: actions/upload-artifact@v4
         if: success()
         with:
