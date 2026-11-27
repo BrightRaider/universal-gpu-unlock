@@ -43,6 +43,19 @@ By default, Windows Setup creates an EFI System Partition (ESP) of only 100 MB, 
   3. **Expand ESP:** Enlarge the existing 100 MB ESP to ~500 MB using a partition manager.
 * **Automatic Detection in Setup & Control Center:** Both `Setup.bat` (`tools\Setup-AdaUnlock.ps1` — in `v2.0.0` including BitLocker, Secure Boot, and S0ix pre-flight checks) and Universal Control Center inspect the Windows ESP size automatically and recommend option `[P]` or `GPU_UNLOCK` when a 100 MB ESP is detected.
 
+### 2.2 Architecture Note: Stickless `[I]` with S3 Included vs. Optional No-S3 Opt-Out
+
+By design, the boot menu stays fixed at five keys (`[U / P / I / R / S]`) with option **`[I]` (`AdaUnlockDxe.efi`)** passing `GU_UNLOCK_REGISTER_S3` (`src/dxe_main.c`):
+
+- **Why S3 stays enabled in `[I]` by default:**
+  - Reboot persistence and ACPI S3 sleep persistence work together without requiring separate menu branches or user choices.
+  - On boards where `GuRegisterS3()` returns an error, `GuUnlockAllGpus()` (`src/multi_gpu.c`) logs `[!] S3 Persistence registration returned ...` without aborting the GPU unlock itself.
+  - Pre-mutation early-BDS issues (such as `#24`) fail in `GuUnlockPreflight()` (`src/unlock_release.c`) *before* any GPU or S3 step executes, so disabling S3 would not prevent them.
+- **What `GU_UNLOCK_REGISTER_S3` adds compared to a hypothetical S3-free DXE build:**
+  - Allocates persistent `EfiACPIMemoryNVS`, an `EfiReservedMemoryType` DMA arena, and a `< 0xA0000` low-memory trampoline (`src/s3_resume.c`).
+  - When Tier 1 (`EFI_S3_SAVE_STATE_PROTOCOL`) is locked down by SMM LockBox, Tier 2 (`ShadowFACS` / Plan C) clones `RSDP`/`XSDT`/`FADT`/`FACS`, hooks `BootServices->StartImage` & `ExitBootServices`, and recalculates `BootServices->Hdr.CRC32` (`src/dxe_main.c`, `src/s3_facs.c`).
+- **Planned Escape Hatch (Future Opt-Out Without Menu Bloat):** Should an ACPI/BIOS edge case, dual-boot loader (`GRUB`/`rEFInd`), S0ix/S4 conflict, or third-party anti-cheat specifically collide with Plan-C ACPI tables or hooks on a system that never uses S3 sleep, the clean solution is a silent flag file (e.g. `\GPU-UNLOCK\NO_S3.FLG`) or install option passed in NVRAM `LoadOptions` checked in `src/dxe_main.c` (`0U` instead of `GU_UNLOCK_REGISTER_S3`), keeping the `[U / P / I / R / S]` menu clean.
+
 ---
 
 ## 3. Headless Compute & Secondary GPUs (e.g., NVIDIA CMP 40HX)
@@ -712,3 +725,4 @@ Fixed the early-kernel BSOD in `v1.9.3` (`RUN0100.TXT`) caused by late AMI BDS u
   1. `GuUnlockPreflight()` and `Alive()` allow optional or split console handles (`ConsoleOutHandle`, `ConsoleInHandle`, `StandardErrorHandle`) while continuing to verify integrity of every populated handle/protocol, routing `InputGuid` checks via `ConsoleHost()`, explicitly logging all refusal reasons, and cleanly deferring if `ConsoleOutHandle` directly aliases `Plan.gop` without `ConSplitter`.
   2. Both `dxe_main.c` and `app.c` clear `ATTEMPT.FLG` immediately when preflight refuses without touching hardware (`!mutated && !started && !retained`); `GuBootOpen()` checks `if (Table && Root)` and `GuBootLoadAssets()` frees any stale asset buffer before reloading so `ReadyToBoot` retries cleanly in the same boot.
   3. Verified in `tests/test_multi_gpu_second_preflight.c` (no-`ConIn`, all-`NULL`, split handles, invalid `ConIn` vtable, GOP-alias deferral) and `tests/test_dxe_main.c` (pre-mutation refusal clearing `ATTEMPT.FLG` followed by `ReadyToBoot` Plan-C completion).
+  4. **Hardware Context (`@henry-richard7` in `#24`):** Gigabyte GeForce RTX 3060 12GB (`10DE:2504`) on Gigabyte B760M D2H (Rev. 1.0, ReBAR `16384 MB` active, PCIe Gen4 x16) verified **24.2 ➔ 47.0 TFLOPS** (**+94.2%**) in USB mode (`BOOTX64.EFI`, `RUN0003.TXT`); Stickless `[I]` confirmation pending on `test/v2.0.0-dxe-preflight`.
