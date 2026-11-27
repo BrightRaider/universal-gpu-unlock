@@ -54,6 +54,7 @@ static EFI_STATUS RunFailure(EFI_SYSTEM_TABLE *t, EFI_HANDLE image,
   }
 
   GuReleaseStagedVbiosEfiImage();
+  (VOID) GuClearSafeguardFlag();
 
   GuBootSay(L"\r\n=======================================================\r\n"
             L" UNIVERSAL GPU UNLOCK - PREFLIGHT REFUSED\r\n"

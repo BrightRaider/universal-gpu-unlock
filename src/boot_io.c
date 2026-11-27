@@ -146,7 +146,7 @@ const CHAR16 *GuBootGetLogPath(VOID) { return ActiveLogName; }
 
 EFI_STATUS GuBootOpen(EFI_HANDLE image, EFI_SYSTEM_TABLE *t) {
 
-  if (Table)
+  if (Table && Root)
     return EFI_ALREADY_STARTED;
 
   if (!image || !t || !t->BootServices)
@@ -406,6 +406,12 @@ EFI_STATUS GuBootLoadAssets(VOID) {
     return EFI_NOT_READY;
   const GU_ARCH_ASSETS *arch = GuGetArchAssets();
   for (UINTN i = 0; i < GU_ASSET_COUNT; i++) {
+    if (GuAssets[i].firmware.data) {
+      GuFree((VOID *)GuAssets[i].firmware.data);
+      GuAssets[i].firmware.data = NULL;
+      GuAssets[i].firmware.size = 0;
+      GuAssets[i].name = NULL;
+    }
     VOID *p = NULL;
     EFI_STATUS s =
         ReadFile(Root, arch->entries[i].path, arch->entries[i].bytes, &p);

@@ -287,6 +287,9 @@ finish:
           stage, (unsigned long long)s, GuUnlockMutated(), Gu.retained, Gu.fault);
     if (Gu.started || Gu.master_attributes_pending) (VOID)GuClearMaster();
     GuReleaseStagedVbiosEfiImage();
+    if (!GuUnlockMutated() && !Gu.started && !Gu.retained) {
+      (VOID)GuClearSafeguardFlag();
+    }
     (VOID)GuBootSyncLog();
     if (GuUnlockMutated() || Gu.started || Gu.retained) {
       /* The GPU may still own DMA buffers: the OS must never inherit that memory,

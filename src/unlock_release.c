@@ -164,10 +164,14 @@ static BOOLEAN PointerOwner(const GRAPH *g,const EDGE *e) {
   }
   return owners==1;
 }
+static EFI_HANDLE ConsoleHost(const EDGE *e) {
+  return Guid(&e->protocol, &InputGuid) ? Plan.input : Plan.console;
+}
 static BOOLEAN PointerAddition(const EDGE *e) {
   BOOLEAN splitter=(PointerProto(&e->protocol)&&Plan.pointer_agent&&e->agent==Plan.pointer_agent)||
     (Guid(&e->protocol,&InputGuid)&&Plan.key_agent&&e->agent==Plan.key_agent);
-  return splitter&&e->controller==Plan.console&&
+  EFI_HANDLE host=ConsoleHost(e);
+  return splitter&&host&&e->controller==host&&
     !ProtectedHandle(e->handle)&&!ProtectedHandle(e->agent)&&
     e->attributes==EFI_OPEN_PROTOCOL_BY_CHILD_CONTROLLER&&e->count==1&&
     PointerOwner(&Current,e)&&UsbPointerPath(e->handle);
@@ -176,7 +180,8 @@ static EFI_STATUS PointerBaseline(VOID) {
   for(UINTN i=0;i<Original.count;i++) {
     const EDGE *e=&Original.edges[i];
     BOOLEAN pointer=PointerProto(&e->protocol),key=Guid(&e->protocol,&InputGuid);
-    if((!pointer&&!key)||e->controller!=Plan.console||e->attributes!=8)continue;
+    EFI_HANDLE host=ConsoleHost(e);
+    if((!pointer&&!key)||!host||e->controller!=host||e->attributes!=8)continue;
     EFI_HANDLE *agent=pointer?&Plan.pointer_agent:&Plan.key_agent;
     if(e->count!=1||ProtectedHandle(e->handle)||ProtectedHandle(e->agent)||
        !PointerOwner(&Original,e)||
@@ -192,7 +197,8 @@ static EFI_STATUS PointerBaseline(VOID) {
 static BOOLEAN UsbConsoleChild(const EDGE *e,const GRAPH *g) {
   BOOLEAN splitter=(PointerProto(&e->protocol)&&Plan.pointer_agent&&e->agent==Plan.pointer_agent)||
     (Guid(&e->protocol,&InputGuid)&&Plan.key_agent&&e->agent==Plan.key_agent);
-  return splitter&&e->controller==Plan.console&&e->attributes==8&&e->count==1&&PointerOwner(g,e);
+  EFI_HANDLE host=ConsoleHost(e);
+  return splitter&&host&&e->controller==host&&e->attributes==8&&e->count==1&&PointerOwner(g,e);
 }
 static EFI_STATUS UsbBaseline(VOID) {
   memset(OriginalUsb,0,sizeof(OriginalUsb));
@@ -323,13 +329,23 @@ static EFI_STATUS Driver(UINTN which) {
 static EFI_STATUS Alive(VOID) {
   EFI_SYSTEM_TABLE *t=Plan.table;VOID *in=NULL,*out=NULL,*err=NULL;
   if(t->ConsoleOutHandle!=Plan.console||t->ConsoleInHandle!=Plan.input||t->StandardErrorHandle!=Plan.error||
-     t->ConIn!=Plan.keys||t->ConOut!=Plan.text||t->StdErr!=Plan.err||!t->ConIn||
-     (UINTN)t->ConIn->Reset!=Plan.key_reset||(UINTN)t->ConIn->ReadKeyStroke!=Plan.key_read||
-     t->ConIn->WaitForKey!=Plan.key_wait)return EFI_NOT_READY;
-  EFI_STATUS s=Interface(Plan.input,&InputGuid,&in);
-  if(s==EFI_SUCCESS)s=Interface(Plan.console,&TextGuid,&out);
-  if(s==EFI_SUCCESS)s=Interface(Plan.error,&TextGuid,&err);
-  return s==EFI_SUCCESS&&(in!=Plan.keys||out!=Plan.text||err!=Plan.err)?EFI_NOT_READY:s;
+     t->ConIn!=Plan.keys||t->ConOut!=Plan.text||t->StdErr!=Plan.err||
+     (Plan.keys&&((UINTN)t->ConIn->Reset!=Plan.key_reset||(UINTN)t->ConIn->ReadKeyStroke!=Plan.key_read||
+      t->ConIn->WaitForKey!=Plan.key_wait)))return EFI_NOT_READY;
+  EFI_STATUS s=EFI_SUCCESS;
+  if(s==EFI_SUCCESS&&Plan.input&&Plan.keys){
+    s=Interface(Plan.input,&InputGuid,&in);
+    if(s==EFI_SUCCESS&&in!=Plan.keys)s=EFI_NOT_READY;
+  }
+  if(s==EFI_SUCCESS&&Plan.console&&Plan.text){
+    s=Interface(Plan.console,&TextGuid,&out);
+    if(s==EFI_SUCCESS&&out!=Plan.text)s=EFI_NOT_READY;
+  }
+  if(s==EFI_SUCCESS&&Plan.error&&Plan.err){
+    s=Interface(Plan.error,&TextGuid,&err);
+    if(s==EFI_SUCCESS&&err!=Plan.err)s=EFI_NOT_READY;
+  }
+  return s;
 }
 static EFI_STATUS Gops(BOOLEAN first) {
   EFI_BOOT_SERVICES *b=Plan.table->BootServices;EFI_HANDLE *h=NULL;UINTN count=0,physical=0;
@@ -524,15 +540,37 @@ EFI_STATUS GuUnlockPreflight(EFI_SYSTEM_TABLE *t,EFI_HANDLE self,EFI_HANDLE pci)
      !Gu.profile_verified||!Gu.prom_checked||Gu.started||Gu.owned||Gu.armed)return EFI_INVALID_PARAMETER;
   EFI_BOOT_SERVICES *b=t->BootServices;
   if(!b->DisconnectController||!b->OpenProtocol||!b->CloseProtocol||!b->RaiseTPL||!b->RestoreTPL||
-     !b->ProtocolsPerHandle||!b->OpenProtocolInformation||!b->LocateHandleBuffer||!b->HandleProtocol)return EFI_UNSUPPORTED;
+     !b->ProtocolsPerHandle||!b->OpenProtocolInformation||!b->LocateHandleBuffer||!b->HandleProtocol){
+    GuLog("Preflight failed: incomplete BootServices table\n");
+    return EFI_UNSUPPORTED;
+  }
   Plan.console=t->ConsoleOutHandle;Plan.input=t->ConsoleInHandle;Plan.error=t->StandardErrorHandle;
   Plan.text=t->ConOut;Plan.err=t->StdErr;Plan.keys=t->ConIn;
-  if(!Plan.console||Plan.console!=Plan.input||Plan.console!=Plan.error||!Plan.text||!Plan.err||!Plan.keys||
-     !Plan.keys->ReadKeyStroke||!Plan.keys->Reset||!Plan.keys->WaitForKey)return EFI_UNSUPPORTED;
-  Plan.key_reset=(UINTN)Plan.keys->Reset;Plan.key_read=(UINTN)Plan.keys->ReadKeyStroke;Plan.key_wait=Plan.keys->WaitForKey;
-  if(!pci||!GuColdEntry())return EFI_NOT_READY;
+  if(Plan.keys){
+    if(!Plan.keys->ReadKeyStroke||!Plan.keys->Reset||!Plan.keys->WaitForKey){
+      GuLog("Preflight failed: invalid ConIn vtable (in=%#llx keys=%p)\n",
+        (unsigned long long)(UINTN)Plan.input,(void *)Plan.keys);
+      return EFI_UNSUPPORTED;
+    }
+    Plan.key_reset=(UINTN)Plan.keys->Reset;Plan.key_read=(UINTN)Plan.keys->ReadKeyStroke;Plan.key_wait=Plan.keys->WaitForKey;
+  }
+  if(!Plan.console||Plan.console!=Plan.input||Plan.console!=Plan.error||!Plan.text||!Plan.err||!Plan.keys){
+    GuLog("Preflight console: non-unified handles (out=%#llx/%p in=%#llx/%p err=%#llx/%p); continuing safely\n",
+      (unsigned long long)(UINTN)Plan.console,(void *)Plan.text,
+      (unsigned long long)(UINTN)Plan.input,(void *)Plan.keys,
+      (unsigned long long)(UINTN)Plan.error,(void *)Plan.err);
+  }
+  if(!pci||!GuColdEntry()){
+    GuLog("Preflight failed: GuColdEntry check (pci=%p)\n",(void *)pci);
+    return EFI_NOT_READY;
+  }
   EFI_STATUS s=Gops(TRUE);
   if(s!=EFI_SUCCESS) GuLog("Preflight failed at Gops(): %#llx\n", (unsigned long long)s);
+  if(s==EFI_SUCCESS&&Plan.console&&Plan.gop&&Plan.console==Plan.gop){
+    GuLog("Preflight failed: ConsoleOutHandle (%#llx) aliases target GOP without ConSplitter; deferring cleanly\n",
+      (unsigned long long)(UINTN)Plan.console);
+    s=EFI_NOT_READY;
+  }
   if(s==EFI_SUCCESS) { s=Alive(); if(s!=EFI_SUCCESS) GuLog("Preflight failed at Alive(): %#llx\n", (unsigned long long)s); }
   if(s==EFI_SUCCESS) { s=Bar(); if(s!=EFI_SUCCESS) GuLog("Preflight failed at Bar(): %#llx\n", (unsigned long long)s); }
   if(s==EFI_SUCCESS) { s=ReadConfig(Plan.config); if(s!=EFI_SUCCESS) GuLog("Preflight failed at ReadConfig(): %#llx\n", (unsigned long long)s); }

@@ -9,6 +9,7 @@ For packaged binaries and downloads, visit [GitHub Releases](https://github.com/
 
 ## [Unreleased]
 ### Fixed
+- **Stickless `[I]` Early-BDS Console Preflight & `ReadyToBoot` Retry (`src/unlock_release.c`, `src/dxe_main.c`, `src/boot_io.c`, `src/app.c`, `refs #24`):** Relaxed over-strict `ConsoleOutHandle == ConsoleInHandle == StandardErrorHandle` and `ConIn` requirements in `GuUnlockPreflight()` / `Alive()` so early-BDS `Driver####` execution (e.g. Fast Boot / ununified or `NULL` `ConIn`) proceeds safely while verifying all present console handles and deferring cleanly if `ConsoleOutHandle` aliases the target GOP; cleared `ATTEMPT.FLG` when preflight refuses before mutation (`!mutated`) and allowed `GuBootOpen()` to re-open `Root`/`Log` after `GuBootClose()` so `ReadyToBoot` fallback retries cleanly.
 - **VeraCrypt UEFI / Small EFI Chainloader Support (`src/boot_io.c`, `tests/test_boot_select.c`, `refs #23`):** Lowered `ReadWindowsBinary()` minimum size threshold from `65536` bytes (`64 KiB`) to `4096` bytes (`4 KiB`) and added strict `ValidateWindowsPeImage()` verification (`MZ`, bounded `e_lfanew`, `PE\0\0`, `Machine == 0x8664`, `SizeOfOptionalHeader >= 72`, PE32+ `Magic == 0x020B`, `Subsystem == 10` `EFI_APPLICATION`) so VeraCrypt's `~24 KiB` `\EFI\Microsoft\Boot\bootmgfw.efi` (`DcsBoot.efi`) stages cleanly instead of failing `stage-windows-image` with `EFI_COMPROMISED_DATA` (`0x8000000000000021`).
 
 ### Documentation

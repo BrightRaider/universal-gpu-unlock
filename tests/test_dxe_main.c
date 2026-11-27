@@ -26,6 +26,8 @@ static UINTN create_legacy_calls = 0;
 static UINTN orig_start_image_calls = 0;
 static UINTN crc_calls = 0;
 static UINTN append_log_calls = 0;
+static UINTN clear_safeguard_calls = 0;
+static UINTN disable_driver_calls = 0;
 static EFI_STATUS mock_create_ex_status = EFI_SUCCESS;
 static EFI_EVENT_NOTIFY last_callback = NULL;
 static VOID *last_context = NULL;
@@ -49,13 +51,13 @@ VOID GuBootHalt(VOID) {}
 VOID GuBootAppendLog(const char *Format, ...) { (void)Format; append_log_calls++; }
 BOOLEAN GuCheckSafeguardFlag(VOID) { return FALSE; }
 EFI_STATUS GuSetSafeguardFlag(VOID) { return EFI_SUCCESS; }
-EFI_STATUS GuClearSafeguardFlag(VOID) { return EFI_SUCCESS; }
+EFI_STATUS GuClearSafeguardFlag(VOID) { clear_safeguard_calls++; return EFI_SUCCESS; }
 EFI_STATUS GuBootLoadAssets(VOID) { return EFI_SUCCESS; }
 EFI_STATUS GuPrepare(VOID) { return EFI_SUCCESS; }
 BOOLEAN GuUnlockMutated(VOID) { return FALSE; }
 EFI_STATUS GuClearMaster(VOID) { return EFI_SUCCESS; }
 VOID GuReleaseStagedVbiosEfiImage(VOID) {}
-EFI_STATUS GuDisableDriverOption(EFI_SYSTEM_TABLE *t) { (void)t; return EFI_SUCCESS; }
+EFI_STATUS GuDisableDriverOption(EFI_SYSTEM_TABLE *t) { (void)t; disable_driver_calls++; return EFI_SUCCESS; }
 
 EFI_STATUS GuDiscoverAllGpus(EFI_HANDLE image, EFI_SYSTEM_TABLE *table,
                              GU_DISCOVERED_DEVICE *devices, UINTN max_devices,
@@ -267,6 +269,8 @@ static VOID ResetTestState(BOOLEAN use_create_ex) {
   orig_start_image_calls = 0;
   crc_calls = 0;
   append_log_calls = 0;
+  clear_safeguard_calls = 0;
+  disable_driver_calls = 0;
   last_callback = NULL;
   last_context = NULL;
   on_orig_start_image = NULL;
@@ -372,6 +376,24 @@ int main(void) {
   CHECK(mStartImageDepth == 0);
   CHECK(mPlanCActivated == FALSE);
   CHECK(MockConfigTable[0].VendorTable == REAL_RSDP_PTR);
+
+  /* 6. Early BDS preflight refuses cleanly without mutation (EFI_UNSUPPORTED, refs #24):
+   *    ATTEMPT.FLG MUST be cleared before ReadyToBoot retry so the fallback runs cleanly. */
+  ResetTestState(TRUE);
+  mock_unlock_status = EFI_UNSUPPORTED;
+  CHECK(AdaUnlockDriverEntryPoint(img, &MockSt) == EFI_SUCCESS);
+  CHECK(mDriverExecuted == FALSE);
+  CHECK(clear_safeguard_calls == 1);
+  CHECK(disable_driver_calls == 0);
+  CHECK(mReadyToBootEvent != NULL);
+  CHECK(last_callback == AdaUnlockOnReadyToBoot);
+
+  mock_unlock_status = EFI_SUCCESS;
+  last_callback(mReadyToBootEvent, last_context);
+  CHECK(mDriverExecuted == TRUE);
+  CHECK(clear_safeguard_calls == 2);
+  CHECK(mPlanCActivated == TRUE);
+  CHECK(mStartImageHookActive == TRUE);
 
   if (failures) {
     printf("test_dxe_main: FAILED (%d failures)\n", failures);

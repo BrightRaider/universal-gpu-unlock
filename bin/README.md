@@ -82,6 +82,7 @@
 - **ESP Space for Stickless `[I]`:** **Turing** needs ~28 MB (fits standard `100 MB` Windows ESPs automatically). **Ada & Ampere** need ~85 MB — use `Setup.bat [3]` to create a hidden `512 MB` `GPU_UNLOCK` partition, keep the USB drive plugged in as storage (`bootmgfw.efi` still boots Windows), or use `[P]` S3 Sleep ([#19](https://github.com/BrightRaider/universal-gpu-unlock/issues/19)).
 - **Desktop RTX 4060 Ti (`AD106`, `v2.0.0`):** Added desktop IDs `0x2803` (8GB), `0x2805` (16GB), and `0x2807` ([#21](https://github.com/BrightRaider/universal-gpu-unlock/issues/21), closed after 3 days without user reply — hardware benchmark confirmation still open).
 - **VeraCrypt UEFI System Encryption (`main` / upcoming `v2.0.1`):** Fixed staging of compact `~24 KiB` PE32+ EFI chainloaders (`DcsBoot.efi`) at `\EFI\Microsoft\Boot\bootmgfw.efi` ([#23](https://github.com/BrightRaider/universal-gpu-unlock/issues/23), pre-release EFI test patch linked in `#23`).
+- **Stickless `[I]` Early-BDS Preflight (`main` / upcoming `v2.0.1`):** Relaxed over-strict unified `ConIn`/`ConsoleOut` checks in `AdaUnlockDxe.efi` and fixed `ATTEMPT.FLG` + `ReadyToBoot` log/ESP cleanup for Fast Boot motherboards ([#24](https://github.com/BrightRaider/universal-gpu-unlock/issues/24), pre-release EFI test patch linked in `#24`).
 
 <details>
 <summary><b>⚙️ Platform & UEFI Engine Highlights (Turing GSP, Multi-GPU, Safeguards)</b></summary>
