@@ -1,6 +1,8 @@
 # SPDX-License-Identifier: GPL-2.0-only
 """Unit tests for SM clock-cap parsing, Ada/Ampere/Turing presets, and wake reapply."""
 import os
+import re
+import string
 import sys
 import tempfile
 import unittest
@@ -10,6 +12,7 @@ TOOLS_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "tools
 if TOOLS_DIR not in sys.path:
     sys.path.insert(0, TOOLS_DIR)
 
+import dashboard_i18n as di18n  # noqa: E402
 import gu_system_info as gsi  # noqa: E402
 
 
@@ -131,6 +134,72 @@ class ClockCapTests(unittest.TestCase):
             self.assertTrue(ok_prof)
             self.assertEqual(recorded[0][0], [["-i", "0", "-pl", "450"], ["-i", "0", "-rgc"]])
             self.assertFalse(clk_after["lock_enabled"])
+
+    def test_laptop_card_profiles_and_plm_decode(self):
+        p_desktop = gsi.resolve_card_profile("NVIDIA GeForce RTX 4090", 8, 9, 128)
+        p_laptop_4090 = gsi.resolve_card_profile("NVIDIA GeForce RTX 4090 Laptop GPU", 8, 9, 76)
+        p_laptop_4080 = gsi.resolve_card_profile("NVIDIA GeForce RTX 4080 Laptop GPU", 8, 9, 58)
+        p_laptop_4070 = gsi.resolve_card_profile("NVIDIA GeForce RTX 4070 Laptop GPU", 8, 9, 36)
+        p_laptop_4060 = gsi.resolve_card_profile("NVIDIA GeForce RTX 4060 Laptop GPU", 8, 9, 24)
+        self.assertGreater(p_desktop["threshold"], p_laptop_4090["threshold"])
+        self.assertEqual(p_laptop_4090["threshold"], 120.0)
+        self.assertEqual(p_laptop_4080["threshold"], 82.0)
+        self.assertEqual(p_laptop_4070["threshold"], 46.0)
+        self.assertEqual(p_laptop_4060["threshold"], 32.0)
+
+        self.assertIn("OPEN", gsi.decode_plm_mask(0xFFFFFFFF))
+        self.assertIn("STOCK-LOCK", gsi.decode_plm_mask(0xFFFFFF8F))
+        self.assertIn("RELOCK-L0", gsi.decode_plm_mask(0xFFFFFFEF))
+        self.assertIn("DEEP-LOCK", gsi.decode_plm_mask(0xFFFFFFCF))
+
+    def test_dashboard_i18n_key_parity_and_formatting(self):
+        self.assertEqual(di18n.SUPPORTED_LANGUAGES, ("en", "zh", "de"))
+        en_keys = set(di18n.STRINGS["en"])
+        fmt = string.Formatter()
+
+        for lang in di18n.SUPPORTED_LANGUAGES:
+            self.assertEqual(set(di18n.STRINGS[lang]), en_keys, f"Key mismatch for {lang}")
+
+        for key in en_keys:
+            base_fields = {fname for _, fname, _, _ in fmt.parse(di18n.STRINGS["en"][key]) if fname is not None}
+            for lang in di18n.SUPPORTED_LANGUAGES:
+                val = di18n.STRINGS[lang][key]
+                self.assertTrue(isinstance(val, str) and len(val) > 0, f"Empty string {lang}.{key}")
+                lang_fields = {fname for _, fname, _, _ in fmt.parse(val) if fname is not None}
+                self.assertEqual(lang_fields, base_fields, f"Placeholder mismatch in {lang}.{key}")
+                self.assertIsNone(re.search(r"\b(we|us|our|wir|uns)\b", val, re.IGNORECASE), val)
+                self.assertNotIn("我们", val)
+
+    def test_dashboard_i18n_persistence_and_s3_translation(self):
+        self.assertEqual(di18n.normalize_language("zh-CN"), "zh")
+        self.assertEqual(di18n.normalize_language("de_DE"), "de")
+        self.assertEqual(di18n.normalize_language("fr"), "en")
+
+        saved_zh = di18n.save_saved_language("zh-CN")
+        self.assertEqual(saved_zh, "zh")
+        self.assertEqual(di18n.load_saved_language(), "zh")
+        self.assertEqual(gsi.load_user_config()["ui"]["language"], "zh")
+
+        saved_de = di18n.save_saved_language("de-DE")
+        self.assertEqual(saved_de, "de")
+        self.assertEqual(di18n.load_saved_language(), "de")
+
+        for lang in di18n.SUPPORTED_LANGUAGES:
+            h_arm, d_arm = di18n.translate_s3_status(
+                lang, {"code": "ARMED", "log_name": "RUN0001.TXT", "shadow_facs": "0xDC637400"}, True
+            )
+            self.assertTrue(h_arm)
+            self.assertIn("RUN0001.TXT", d_arm)
+
+            h_s0ix, d_s0ix = di18n.translate_s3_status(lang, {"code": "S0IX_WARN"}, True)
+            self.assertIn("S0ix", h_s0ix)
+            self.assertTrue(d_s0ix)
+
+            h_unv, _ = di18n.translate_s3_status(lang, {"code": "UNVERIFIED"}, True)
+            self.assertTrue(h_unv)
+
+            h_csm, _ = di18n.translate_s3_status(lang, {"code": "ARMED"}, False)
+            self.assertIn("CSM", h_csm)
 
 
 if __name__ == "__main__":

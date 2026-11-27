@@ -43,6 +43,7 @@ function Get-GuUsbToolFiles {
     return @(
         'quick_check.py',
         'gpu_dashboard.py',
+        'dashboard_i18n.py',
         'gu_system_info.py',
         'Deploy-UsbCommon.ps1',
         'Setup-AdaUnlock.ps1',
