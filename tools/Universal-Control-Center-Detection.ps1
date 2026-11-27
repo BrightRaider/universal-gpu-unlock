@@ -272,17 +272,17 @@ function Get-PreflightChecks {
         }
         if ($assetOkCount -eq $requiredAssets.Count) {
             $assetsValid = $true
-            $assetDetail = "All 5 Universal GSP booter and microcode assets verified in AD102-ASSETS/."
+            $assetDetail = "All 5 Universal GSP booter and microcode assets verified in assets/AD102-ASSETS/."
         } else {
-            $assetDetail = "$($assetOkCount)/$($requiredAssets.Count) assets present in AD102-ASSETS/."
+            $assetDetail = "$($assetOkCount)/$($requiredAssets.Count) assets present in assets/AD102-ASSETS/."
         }
     } else {
-        $assetDetail = "AD102-ASSETS folder missing from repository."
+        $assetDetail = "assets/AD102-ASSETS folder missing from repository."
     }
 
     $checks['FirmwareAssets'] = @{
         Status = if ($assetsValid) { 'PASS' } else { 'WARN' }
-        Title  = "Universal Firmware Assets (AD102-ASSETS)"
+        Title  = "Universal Firmware Assets (assets/AD102-ASSETS)"
         Detail = $assetDetail
     }
 

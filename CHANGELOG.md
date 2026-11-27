@@ -9,6 +9,7 @@ For packaged binaries and downloads, visit [GitHub Releases](https://github.com/
 
 ## [Unreleased]
 ### Added & Improved
+- **Clean Repository Root (`assets/`):** Consolidated `AD102-ASSETS/`, `GA102-ASSETS/`, and `TU102-ASSETS/` under `assets/` (`tools/Deploy-UsbCommon.ps1`, `tools/Universal-Control-Center*.ps1`, `tests/test_turing_local.c`) while preserving exact `\AD102-ASSETS\`, `\GA102-ASSETS\`, and `\TU102-ASSETS\` target paths on USB drives and internal ESPs for 100% compatibility.
 - **Automatic UEFI Boot Log Rotation (`src/boot_io.c`, `tests/test_boot_select.c`):** Capped retained `RUNxxxx.TXT` files at **`50`** via `OpenRotatedRunLog()` (`dir->Read()` single-pass scan + multi-round pruning of oldest logs + clean `9999 -> 1` wraparound, preserving `ATTEMPT.FLG` and unrelated files). Prevents small `100 MB` ESPs from filling up and keeps boot-time directory scanning constant.
 - **Hidden-Volume Log Detection & 1-Click `Export Boot Log` (`tools/gu_system_info.py`, `tools/gpu_dashboard.py`, `tools/Export-Boot-Log.ps1`, `Setup.bat [5]`):** Added Win32 `FindFirstVolumeW` detection of unmounted `FAT32` volumes (`GPU_UNLOCK` / `UNLOCK_ESP`) so `Launch-Dashboard.bat` and `Check-GPU-Unlock.bat` read current-boot `RUN*.TXT` files without drive letters or UAC; added 1-click **`Export Boot Log`** in the Cockpit Dashboard and **`Setup.bat [5]`** (with automatic UAC + `mountvol` fallback for protected Windows ESPs) to copy logs into `Boot-Logs\` and highlight them in Explorer.
 

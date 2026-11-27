@@ -193,9 +193,10 @@ All version releases, bug fixes, and device expansions are maintained in the sep
 ├── bin/
 │   ├── BOOTX64.EFI              <- Pre-compiled, Authenticode-signed universal UEFI bootloader
 │   └── AdaUnlockDxe.efi         <- Pre-compiled, Authenticode-signed early DXE driver
-├── AD102-ASSETS/                <- Ada microcode payloads (4090, 4080, 4070TiS)
-├── GA102-ASSETS/                <- Ampere microcode payloads (3090, 3080, 3070, 3060)
-├── TU102-ASSETS/                <- Turing microcode staging payloads (2080Ti, 2080, 2070, 2060)
+├── assets/
+│   ├── AD102-ASSETS/            <- Ada Lovelace microcode payloads (RTX 40 series)
+│   ├── GA102-ASSETS/            <- Ampere microcode payloads (RTX 30 series)
+│   └── TU102-ASSETS/            <- Turing microcode staging payloads (RTX 20 / CMP series)
 ├── src/                         <- Full C source code, MSVC EFI build scripts & Build-Release-Zip.ps1
 ├── tests/                       <- Host tests with mocked UEFI services (no GPU required)
 ├── docs/                        <- Operational whitepapers, CHANGELOG_ARCHIVE.md & images/

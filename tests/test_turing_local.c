@@ -103,12 +103,12 @@ int main(void) {
   CHECK(!GuIsSupportedPciId(0x1e041002U), "Non-NVIDIA vendor must be rejected");
 
   /* 2. TU102 Asset Verification */
-  printf("[2] Verifying TU102-ASSETS directory and payload files...\n");
-  long sz_booter = CheckFileSize("TU102-ASSETS/booter_load_tu102.bin");
-  long sz_desc   = CheckFileSize("TU102-ASSETS/gsp_boot_desc_tu102.bin");
-  long sz_boot   = CheckFileSize("TU102-ASSETS/gsp_boot_tu102.bin");
-  long sz_v67    = CheckFileSize("TU102-ASSETS/v67-tu102-610.43.03.bin");
-  long sz_gsp    = CheckFileSize("TU102-ASSETS/gsp_tu10x.bin");
+  printf("[2] Verifying assets/TU102-ASSETS directory and payload files...\n");
+  long sz_booter = CheckFileSize("assets/TU102-ASSETS/booter_load_tu102.bin");
+  long sz_desc   = CheckFileSize("assets/TU102-ASSETS/gsp_boot_desc_tu102.bin");
+  long sz_boot   = CheckFileSize("assets/TU102-ASSETS/gsp_boot_tu102.bin");
+  long sz_v67    = CheckFileSize("assets/TU102-ASSETS/v67-tu102-610.43.03.bin");
+  long sz_gsp    = CheckFileSize("assets/TU102-ASSETS/gsp_tu10x.bin");
 
   CHECK(sz_booter == 59976L, "booter_load_tu102.bin must be exactly 59976 bytes");
   CHECK(sz_desc == 76L,      "gsp_boot_desc_tu102.bin must be exactly 76 bytes");

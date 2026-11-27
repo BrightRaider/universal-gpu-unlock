@@ -53,7 +53,11 @@ $Script:AppVersion = Get-GuVersion $Script:RepoRoot
 # Paths shared by the Control Center modules (they are dot-sourced into this script scope).
 $Script:ReleaseEfi = Join-Path $Script:RepoRoot 'bin\BOOTX64.EFI'
 $Script:DxeEfi = Join-Path $Script:RepoRoot 'bin\AdaUnlockDxe.efi'
-$Script:AssetsPath = Join-Path $Script:RepoRoot 'AD102-ASSETS'
+$Script:AssetsPath = if (Test-Path -LiteralPath (Join-Path $Script:RepoRoot 'assets\AD102-ASSETS')) {
+    Join-Path $Script:RepoRoot 'assets\AD102-ASSETS'
+} else {
+    Join-Path $Script:RepoRoot 'AD102-ASSETS'
+}
 
 # --- MODULE INCLUSIONS ---
 . (Join-Path $scriptDir "Universal-Control-Center-Detection.ps1")
@@ -754,17 +758,17 @@ $btnDisableFastStartup.Add_Click({
 
 $btnDownloadAssets.Add_Click({
         Write-GuiLog "Auditing firmware assets in repository..."
-        if ((Test-Path -LiteralPath (Join-Path $Script:RepoRoot 'AD102-ASSETS')) -and (Test-Path -LiteralPath (Join-Path $Script:RepoRoot 'GA102-ASSETS'))) {
+        if ((Test-Path -LiteralPath (Join-Path $Script:RepoRoot 'assets\AD102-ASSETS')) -and (Test-Path -LiteralPath (Join-Path $Script:RepoRoot 'assets\GA102-ASSETS'))) {
             Write-GuiLog "Universal firmware assets (AD102 & GA102) are already verified and ready."
             [System.Windows.MessageBox]::Show("Universal firmware assets for Ada Lovelace (AD102) and Ampere (GA102) are already pre-packaged and verified in this installation!`n`nNo additional downloads or extractions are required.", "Assets Already Present", [System.Windows.MessageBoxButton]::OK, [System.Windows.MessageBoxImage]::Information) | Out-Null
         } else {
-            [System.Windows.MessageBox]::Show("Firmware assets folder missing from repository root.", "Assets Error", [System.Windows.MessageBoxButton]::OK, [System.Windows.MessageBoxImage]::Warning) | Out-Null
+            [System.Windows.MessageBox]::Show("Firmware assets folder missing from repository assets/.", "Assets Error", [System.Windows.MessageBoxButton]::OK, [System.Windows.MessageBoxImage]::Warning) | Out-Null
         }
     })
 
 $btnImportAssets.Add_Click({
         Write-GuiLog "Universal firmware assets are already present and active."
-        [System.Windows.MessageBox]::Show("Universal firmware assets are already present in AD102-ASSETS/ and GA102-ASSETS/.`n`nManual import of external assets is not required.", "Assets Already Present", [System.Windows.MessageBoxButton]::OK, [System.Windows.MessageBoxImage]::Information) | Out-Null
+        [System.Windows.MessageBox]::Show("Universal firmware assets are already present in assets/AD102-ASSETS/ and assets/GA102-ASSETS/.`n`nManual import of external assets is not required.", "Assets Already Present", [System.Windows.MessageBoxButton]::OK, [System.Windows.MessageBoxImage]::Information) | Out-Null
     })
 
 $btnAssetsGuide.Add_Click({

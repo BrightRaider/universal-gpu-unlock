@@ -131,9 +131,15 @@ function Deploy-UniversalToUsb {
         Emit-Log "  [OK] DXE Driver copied to $driveRoot\EFI\Drivers\AdaUnlockDxe.efi" "Green"
     }
 
-    # 2. Copy AD102-ASSETS, GA102-ASSETS, TU102-ASSETS
+    function Resolve-GuAssetSourceDir([string]$FolderName) {
+        $nested = Join-Path (Join-Path $RepoRoot 'assets') $FolderName
+        if (Test-Path -LiteralPath $nested) { return $nested }
+        return (Join-Path $RepoRoot $FolderName)
+    }
+
+    # 2. Copy AD102-ASSETS, GA102-ASSETS, TU102-ASSETS (repo assets/ -> USB root for EFI/NVRAM compatibility)
     $assetsCopied = 0
-    $ad102Src = Join-Path $RepoRoot "AD102-ASSETS"
+    $ad102Src = Resolve-GuAssetSourceDir 'AD102-ASSETS'
     if (Test-Path -LiteralPath $ad102Src) {
         $assets = Get-ChildItem -LiteralPath $ad102Src -File
         foreach ($a in $assets) {
@@ -143,7 +149,7 @@ function Deploy-UniversalToUsb {
         Emit-Log "  [OK] Ada (AD102/AD103) assets copied to $driveRoot\AD102-ASSETS\" "Green"
     }
 
-    $gaAssetsPath = Join-Path $RepoRoot 'GA102-ASSETS'
+    $gaAssetsPath = Resolve-GuAssetSourceDir 'GA102-ASSETS'
     if (Test-Path -LiteralPath $gaAssetsPath) {
         $targetGaDir = Join-Path $driveRoot 'GA102-ASSETS'
         New-Item -ItemType Directory -Path $targetGaDir -Force | Out-Null
@@ -162,7 +168,7 @@ function Deploy-UniversalToUsb {
         Emit-Log "  [OK] Ampere (GA102) assets copied to $driveRoot\GA102-ASSETS\" "Green"
     }
 
-    $tu102Src = Join-Path $RepoRoot "TU102-ASSETS"
+    $tu102Src = Resolve-GuAssetSourceDir 'TU102-ASSETS'
     if (Test-Path -LiteralPath $tu102Src) {
         $targetTuDir = Join-Path $driveRoot 'TU102-ASSETS'
         New-Item -ItemType Directory -Path $targetTuDir -Force | Out-Null
