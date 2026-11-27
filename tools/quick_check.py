@@ -126,7 +126,9 @@ def evaluate_gpu(dev_idx, dev_count, fw_str):
             matmul.allow_tf32 = orig_tf32
         torch.cuda.empty_cache()
 
-    verdict = classify_unlock_status(tflops_fp16, profile, util_info, fmla_info, props.major, props.minor)
+    verdict = classify_unlock_status(
+        tflops_fp16, profile, util_info, fmla_info, props.major, props.minor, gpu_name=gpu_name
+    )
     is_unlocked = verdict["is_unlocked"]
     code = verdict["code"]
     ratio = tflops_fp16 / tflops_fp32 if tflops_fp32 > 0 else 1.0
@@ -192,6 +194,8 @@ def evaluate_gpu(dev_idx, dev_count, fw_str):
         print("  * Hardware Status       : Raw TFLOPS suppressed by concurrent GPU load (status inconclusive).")
     elif code == "UNLOCKED_LOW_TFLOPS":
         print("  * Hardware Status       : FMLA32/FMLA16 ratio looks unlocked; inspect power limit or clocks.")
+    elif code == "NO_TENSOR_CORES":
+        print("  * Hardware Status       : GTX 16-series GPU lacks Tensor Cores (intentionally skipped at boot).")
     else:
         print("  * Hardware Status       : Tensor datapath is restricted by factory rate-limiter.")
     print("-" * 72)
@@ -218,6 +222,9 @@ def evaluate_gpu(dev_idx, dev_count, fw_str):
     elif code == "UNLOCKED_LOW_TFLOPS":
         print(f"  {C_YELLOW}STATUS: [!] LIKELY UNLOCKED AT REDUCED CLOCKS/POWER ({tflops_fp16:.1f} TFLOPS | FMLA {fmla_ratio:.2f}x){C_RESET}")
         print(f"  Expected idle unrestricted throughput: > {profile['threshold']:.0f} TFLOPS. Check Power Limit / thermals.")
+    elif code == "NO_TENSOR_CORES":
+        print(f"  {C_CYAN}STATUS: [SKIPPED] NO TENSOR CORES (GTX 16xx TU116/TU117){C_RESET}")
+        print("  GTX 16-series cards have no hardware Tensor Cores and are intentionally bypassed.")
     else:
         print(f"  {C_RED_BOLD}STATUS: [WARNING] STOCK RATE-LIMITER ACTIVE! ({tflops_fp16:.1f} TFLOPS){C_RESET}")
         print(f"  Expected unlocked performance: > {profile['threshold']:.0f} TFLOPS (typical ~{profile['min_unlocked']:.0f} TFLOPS).")
@@ -228,7 +235,7 @@ def evaluate_gpu(dev_idx, dev_count, fw_str):
         if props.major == 7:
             print("  Note for Turing: Verify EnableGpuFirmware = 1 is configured in Windows Registry.")
 
-    if rebar_active is False:
+    if rebar_active is False and code != "NO_TENSOR_CORES":
         print("-" * 72)
         print(f"  {C_RED_BOLD}[!] PRO-TUNING ALERT (Resizable BAR):{C_RESET}")
         print(f"  {C_YELLOW}Resizable BAR is currently DISABLED in your BIOS (BAR1 = 256 MiB restricted).{C_RESET}")
@@ -375,14 +382,14 @@ def main():
     print("-" * 72)
 
     results = []
-    all_unlocked = True
     for i in range(dev_count):
         if i > 0:
             print("\n" + "=" * 72)
         res = evaluate_gpu(i, dev_count, fw_str)
         results.append(res)
-        if not res["is_unlocked"]:
-            all_unlocked = False
+
+    supported_results = [r for r in results if r.get("status_code") != "NO_TENSOR_CORES"]
+    all_unlocked = bool(supported_results) and all(r["is_unlocked"] for r in supported_results)
 
     if dev_count > 1:
         print("\n" + "=" * 72)
@@ -392,6 +399,8 @@ def main():
             sc = res.get("status_code")
             if res["is_unlocked"]:
                 tag = f"{C_GREEN}[UNLOCKED]{C_RESET}"
+            elif sc == "NO_TENSOR_CORES":
+                tag = f"{C_CYAN}[SKIPPED - NO TENSOR CORES]{C_RESET}"
             elif sc == "EXTERNAL_LOAD":
                 tag = f"{C_YELLOW}[EXTERNAL LOAD]{C_RESET}"
             else:
@@ -399,10 +408,12 @@ def main():
             print(f"  * GPU {res['dev_idx']} [{res['name']}]: {res['tflops']:.1f} TFLOPS  {tag}")
         print("-" * 72)
         if all_unlocked:
-            print(f"  {C_GREEN_BOLD}OVERALL STATUS: ALL {dev_count} GPUS FULLY UNLOCKED!{C_RESET}")
+            skipped_cnt = len(results) - len(supported_results)
+            skip_note = f" ({skipped_cnt} skipped: no Tensor Cores)" if skipped_cnt else ""
+            print(f"  {C_GREEN_BOLD}OVERALL STATUS: ALL {len(supported_results)} SUPPORTED GPU(S) FULLY UNLOCKED!{skip_note}{C_RESET}")
         else:
-            unlocked_num = sum(1 for r in results if r["is_unlocked"])
-            print(f"  {C_YELLOW}OVERALL STATUS: {unlocked_num} of {dev_count} GPUs verified unlocked.{C_RESET}")
+            unlocked_num = sum(1 for r in supported_results if r["is_unlocked"])
+            print(f"  {C_YELLOW}OVERALL STATUS: {unlocked_num} of {len(supported_results) or dev_count} supported GPU(s) verified unlocked.{C_RESET}")
 
     # Build clipboard summary badge
     if dev_count == 1:
@@ -413,7 +424,12 @@ def main():
         summary_badge = f"[{tag}] {r0['name']}: {r0['tflops']:.1f} TFLOPS | ReBAR: {rebar_str} | PCIe: {pcie_str} | BIOS: {fw_str}"
     else:
         tag = "UNLOCKED" if all_unlocked else "PARTIAL"
-        gpu_snippets = " | ".join(f"GPU {r['dev_idx']}: {r['tflops']:.1f} TF" for r in results)
+        gpu_snippets = " | ".join(
+            f"GPU {r['dev_idx']}: No-Tensor"
+            if r.get("status_code") == "NO_TENSOR_CORES"
+            else f"GPU {r['dev_idx']}: {r['tflops']:.1f} TF"
+            for r in results
+        )
         summary_badge = f"[{tag} x{dev_count}] {gpu_snippets} | BIOS: {fw_str}"
 
     print("-" * 72)

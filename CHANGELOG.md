@@ -8,6 +8,8 @@ For packaged binaries and downloads, visit [GitHub Releases](https://github.com/
 ---
 
 ## [Unreleased]
+### Fixed
+- **Multi-GPU CUDA Event Stream Synchronization & `GTX 16xx` Benchmark Classification (`tools/gu_system_info.py`, `tools/quick_check.py`, `tools/gpu_dashboard.py`, `tools/dashboard_i18n.py`, `tests/test_clock_cap.py`, `refs #23`):** Bound `benchmark_gemm()` CUDA timing events explicitly to the target GPU context (`torch.cuda.device(device)`) and active stream (`current_stream(device)`) so secondary GPUs (`cuda:1+`) measure real compute kernels instead of empty `cuda:0` launch overhead; classified Tensor-Core-less `GTX 16xx` (`TU116`/`TU117`) display GPUs cleanly as `[SKIPPED] NO TENSOR CORES` (`NO_TENSOR_CORES`) across CLI, trilingual Dashboard, and multi-GPU exit/summary logic.
 
 ---
 

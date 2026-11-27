@@ -1423,7 +1423,9 @@ class GpuUnlockApp(tk.Tk):
                     matmul.allow_tf32 = orig_tf32
                 torch.cuda.empty_cache()
 
-            verdict = classify_unlock_status(tflops_fp16, profile, util_info, fmla_info, props.major, props.minor)
+            verdict = classify_unlock_status(
+                tflops_fp16, profile, util_info, fmla_info, props.major, props.minor, gpu_name=gpu_name
+            )
             ratio = tflops_fp16 / tflops_fp32 if tflops_fp32 > 0 else 1.0
 
             self.after(0, lambda: self.display_benchmark_results(
@@ -1484,6 +1486,11 @@ class GpuUnlockApp(tk.Tk):
                 thresh=profile["threshold"],
             )
             self.lbl_log.config(text=log_text, fg=self.c_yellow)
+        elif code == "NO_TENSOR_CORES":
+            self.lbl_tflops_big.config(fg="#80D8FF")
+            self.lbl_status_badge.config(text=self._t("badge_status_no_tensor"), bg="#263238", fg="#FFFFFF")
+            log_text = self._t("bench_verdict_no_tensor")
+            self.lbl_log.config(text=log_text, fg="#80D8FF")
         else:
             self.lbl_tflops_big.config(fg=self.c_red)
             self.lbl_status_badge.config(text=self._t("badge_status_rate_limited"), bg="#D50000", fg="#FFFFFF")

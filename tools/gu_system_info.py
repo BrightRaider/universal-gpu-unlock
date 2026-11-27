@@ -4,6 +4,7 @@ for quick_check.py and gpu_dashboard.py.
 SPDX-License-Identifier: GPL-2.0-only
 """
 import ctypes
+from contextlib import nullcontext
 from ctypes import wintypes
 import json
 import os
@@ -1376,30 +1377,52 @@ def resolve_card_profile(gpu_name, major, minor, sm_count):
     }
 
 
+def is_gtx16_no_tensor(gpu_name):
+    """Return True for Turing TU116/TU117 GTX 16-series cards (no Tensor Cores)."""
+    low = str(gpu_name or "").lower()
+    return bool(re.search(r"\bgtx\s*16\d{2}\b|\b16(?:30|50|60)\b", low))
+
+
 def benchmark_gemm(torch_mod, device, dtype, size=4096, warmup=5, runs=25):
-    """Run synchronized square CUDA GEMM and return (avg_ms, tflops)."""
+    """Run synchronized square CUDA GEMM on the target device stream and return (avg_ms, tflops)."""
     if hasattr(torch_mod.backends, "cudnn") and hasattr(torch_mod.backends.cudnn, "benchmark"):
         torch_mod.backends.cudnn.benchmark = True
     flops = 2.0 * (size ** 3)
-    a = torch_mod.randn((size, size), dtype=dtype, device=device)
-    b = torch_mod.randn((size, size), dtype=dtype, device=device)
+    cuda_mod = getattr(torch_mod, "cuda", None)
+    dev_ctx = cuda_mod.device(device) if (cuda_mod and hasattr(cuda_mod, "device")) else nullcontext()
+    with dev_ctx:
+        a = torch_mod.randn((size, size), dtype=dtype, device=device)
+        b = torch_mod.randn((size, size), dtype=dtype, device=device)
 
-    for _ in range(warmup):
-        c = torch_mod.matmul(a, b)
-    torch_mod.cuda.synchronize(device)
+        for _ in range(warmup):
+            c = torch_mod.matmul(a, b)
+        if cuda_mod and hasattr(cuda_mod, "synchronize"):
+            cuda_mod.synchronize(device)
 
-    start_ev = torch_mod.cuda.Event(enable_timing=True)
-    end_ev = torch_mod.cuda.Event(enable_timing=True)
-    start_ev.record()
-    for _ in range(runs):
-        c = torch_mod.matmul(a, b)
-    end_ev.record()
-    torch_mod.cuda.synchronize(device)
+        stream = (
+            cuda_mod.current_stream(device)
+            if (cuda_mod and hasattr(cuda_mod, "current_stream"))
+            else None
+        )
+        start_ev = cuda_mod.Event(enable_timing=True)
+        end_ev = cuda_mod.Event(enable_timing=True)
+        if stream is not None:
+            start_ev.record(stream)
+        else:
+            start_ev.record()
+        for _ in range(runs):
+            c = torch_mod.matmul(a, b)
+        if stream is not None:
+            end_ev.record(stream)
+        else:
+            end_ev.record()
+        if cuda_mod and hasattr(cuda_mod, "synchronize"):
+            cuda_mod.synchronize(device)
 
-    avg_ms = start_ev.elapsed_time(end_ev) / runs
-    tflops = (flops / (avg_ms * 1e-3)) / 1e12 if avg_ms > 0 else 0.0
-    del a, b, c
-    return avg_ms, tflops
+        avg_ms = start_ev.elapsed_time(end_ev) / runs
+        tflops = (flops / (avg_ms * 1e-3)) / 1e12 if avg_ms > 0 else 0.0
+        del a, b, c
+        return avg_ms, tflops
 
 
 def measure_fmla_ratio(torch_mod, device, size=4096, tflops_fmla16=None):
@@ -1435,7 +1458,7 @@ def measure_fmla_ratio(torch_mod, device, size=4096, tflops_fmla16=None):
     }
 
 
-def classify_unlock_status(tflops_fp16, profile, util_info, fmla_info, major, minor):
+def classify_unlock_status(tflops_fp16, profile, util_info, fmla_info, major, minor, gpu_name=None):
     """Determine unlock verdict without misclassifying external GPU load as stock clamping.
 
     On Ampere (sm_80/sm_86), FMLA32/FMLA16 stays near ~1.00x when unlocked vs ~0.50x
@@ -1443,6 +1466,20 @@ def classify_unlock_status(tflops_fp16, profile, util_info, fmla_info, major, mi
     On Ada (sm_89) and Turing (sm_75), PyTorch FMLA32 natively runs at ~0.50-0.63x of
     FMLA16 even when unlocked, so those architectures avoid treating ~0.55x as clamped.
     """
+    if gpu_name and is_gtx16_no_tensor(gpu_name):
+        gpu_util = util_info.get("gpu_util") if util_info else None
+        fmla_ratio = fmla_info.get("ratio") if (fmla_info and fmla_info.get("supported")) else None
+        return {
+            "code": "NO_TENSOR_CORES",
+            "is_unlocked": False,
+            "supported_for_unlock": False,
+            "inconclusive": False,
+            "under_load": bool(util_info and util_info.get("under_load")),
+            "gpu_util": gpu_util,
+            "fmla_ratio": fmla_ratio,
+            "supports_fmla_verdict": False,
+        }
+
     tflops_ok = tflops_fp16 >= profile["threshold"]
     under_load = bool(util_info and util_info.get("under_load"))
     gpu_util = util_info.get("gpu_util") if util_info else None

@@ -225,6 +225,72 @@ class ClockCapTests(unittest.TestCase):
                 with open(cfg_file, "r", encoding="ascii") as f:
                     self.assertEqual(f.read(), "zh\n")
 
+    def test_multigpu_benchmark_stream_and_gtx16_classification(self):
+        events = []
+
+        class _DevCtx:
+            def __init__(self, dev):
+                self.dev = dev
+
+            def __enter__(self):
+                events.append(("enter", str(self.dev)))
+                return self
+
+            def __exit__(self, *args):
+                events.append(("exit", str(self.dev)))
+                return False
+
+        class _FakeEvent:
+            def __init__(self, enable_timing=True):
+                self.stream = None
+
+            def record(self, stream=None):
+                events.append(("record", stream))
+                self.stream = stream
+
+            def elapsed_time(self, other):
+                return 20.0
+
+        class _FakeCuda:
+            def device(self, dev):
+                return _DevCtx(dev)
+
+            def current_stream(self, dev):
+                return f"stream:{dev}"
+
+            def synchronize(self, dev=None):
+                events.append(("sync", str(dev)))
+
+            def Event(self, enable_timing=True):
+                return _FakeEvent(enable_timing=enable_timing)
+
+        class _FakeTorch:
+            backends = type("B", (), {"cudnn": type("C", (), {"benchmark": False})()})()
+            cuda = _FakeCuda()
+
+            def randn(self, shape, dtype=None, device=None):
+                return ("t", str(device))
+
+            def matmul(self, a, b):
+                return ("m", a[1])
+
+        avg_ms, tflops = gsi.benchmark_gemm(_FakeTorch(), "cuda:1", "fp16", size=4096, warmup=1, runs=5)
+        self.assertAlmostEqual(avg_ms, 4.0)
+        self.assertGreater(tflops, 30.0)
+        self.assertIn(("enter", "cuda:1"), events)
+        self.assertIn(("exit", "cuda:1"), events)
+        self.assertEqual(events.count(("record", "stream:cuda:1")), 2)
+        self.assertEqual(events.count(("sync", "cuda:1")), 2)
+
+        prof = {"min_unlocked": 18.0, "threshold": 14.0, "stock_typical": 10.0}
+        v_1660 = gsi.classify_unlock_status(0.59, prof, {}, None, 7, 5, gpu_name="NVIDIA GeForce GTX 1660 SUPER")
+        self.assertEqual(v_1660["code"], "NO_TENSOR_CORES")
+        self.assertFalse(v_1660["is_unlocked"])
+
+        v_3060ti = gsi.classify_unlock_status(61.2, prof, {}, {"supported": True, "ratio": 1.01}, 8, 6, gpu_name="NVIDIA GeForce RTX 3060 Ti")
+        self.assertEqual(v_3060ti["code"], "UNLOCKED")
+        self.assertTrue(v_3060ti["is_unlocked"])
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
