@@ -201,6 +201,30 @@ class ClockCapTests(unittest.TestCase):
             h_csm, _ = di18n.translate_s3_status(lang, {"code": "ARMED"}, False)
             self.assertIn("CSM", h_csm)
 
+    def test_sync_boot_lang_cfg_writes_only_existing_boot_volumes(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            vol_boot = os.path.join(tmp, "vol_boot")
+            vol_empty = os.path.join(tmp, "vol_empty")
+            boot_dir = os.path.join(vol_boot, "EFI", "BOOT")
+            os.makedirs(boot_dir, exist_ok=True)
+            os.makedirs(vol_empty, exist_ok=True)
+            with open(os.path.join(boot_dir, "BOOTX64.EFI"), "wb") as f:
+                f.write(b"MZ")
+
+            mock_roots = [(vol_boot, "USB", False), (vol_empty, "OTHER", True)]
+            with mock.patch.object(gsi, "_list_log_search_roots", return_value=mock_roots):
+                updated = gsi.sync_boot_lang_cfg("de-DE")
+                cfg_file = os.path.join(boot_dir, "lang.cfg")
+                self.assertEqual(updated, [cfg_file])
+                with open(cfg_file, "r", encoding="ascii") as f:
+                    self.assertEqual(f.read(), "de\n")
+                self.assertFalse(os.path.exists(os.path.join(vol_empty, "EFI", "BOOT", "lang.cfg")))
+
+                saved = di18n.save_saved_language("zh-CN")
+                self.assertEqual(saved, "zh")
+                with open(cfg_file, "r", encoding="ascii") as f:
+                    self.assertEqual(f.read(), "zh\n")
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

@@ -56,15 +56,9 @@ static EFI_STATUS RunFailure(EFI_SYSTEM_TABLE *t, EFI_HANDLE image,
   GuReleaseStagedVbiosEfiImage();
   (VOID) GuClearSafeguardFlag();
 
-  GuBootSay(L"\r\n=======================================================\r\n"
-            L" UNIVERSAL GPU UNLOCK - PREFLIGHT REFUSED\r\n"
-            L"=======================================================\r\n"
-            L" Preflight check refused unlock. Hardware remains stock.\r\n"
-            L" Diagnostic log saved to USB: ");
+  GuBootSay(GuBootUiStr(GU_STR_FAIL_HDR));
   GuBootSay(GuBootGetLogPath());
-  GuBootSay(L"\r\n Please report this log on GitHub if unexpected:\r\n"
-            L" https://github.com/BrightRaider/universal-gpu-unlock/issues\r\n\r\n"
-            L" Booting Windows in stock mode in 5 seconds...\r\n");
+  GuBootSay(GuBootUiStr(GU_STR_FAIL_FTR));
 
   (VOID) GuBootClose();
 
@@ -82,22 +76,13 @@ static EFI_STATUS RunInstall(EFI_HANDLE image, EFI_SYSTEM_TABLE *t) {
 
   if (s == EFI_SUCCESS && GuDriverInstalledOnEsp()) {
     GuLog("DXE Driver installed to the internal ESP (Driver#### / DriverOrder)\n");
-    GuBootSay(L"\r\n\r\n[OK] AdaUnlock DXE Driver installed to the internal ESP and UEFI NVRAM.\r\n"
-              L"It runs during UEFI POST on every cold boot. The USB drive can be removed.\r\n"
-              L"Rebooting system in 3 seconds...\r\n");
+    GuBootSay(GuBootUiStr(GU_STR_INST_ESP_OK));
   } else if (s == EFI_SUCCESS) {
     GuLog("DXE Driver registered on the USB drive (Driver#### / DriverOrder)\n");
-    GuBootSay(L"\r\n\r\n[OK] AdaUnlock DXE Driver registered in UEFI NVRAM, on this USB drive.\r\n"
-              L"[!] NOTE: The internal ESP was unavailable or had insufficient space for assets (~85MB).\r\n"
-              L"Keep the USB drive connected (or use [P] S3 Sleep / create a 500MB FAT32 partition).\r\n"
-              L"Rebooting system in 3 seconds...\r\n");
+    GuBootSay(GuBootUiStr(GU_STR_INST_USB_OK));
   } else {
     GuLog("ERROR: Failed to install DXE Driver: %#llx\n", (unsigned long long)s);
-    GuBootSay(L"\r\n\r\n[ERROR] Failed to install DXE Driver to NVRAM! "
-              L"Nothing was registered.\r\n"
-              L"Check that EFI\\Drivers\\AdaUnlockDxe.efi exists on this USB "
-              L"drive.\r\n"
-              L"Rebooting in 5 seconds...\r\n");
+    GuBootSay(GuBootUiStr(GU_STR_INST_ERR));
     if (t->BootServices->Stall)
       t->BootServices->Stall(2000000);
   }
@@ -114,15 +99,10 @@ static EFI_STATUS RunRemove(EFI_SYSTEM_TABLE *t) {
   GuLog("DXE Driver removal from Driver#### / DriverOrder: status=%#llx\n",
         (unsigned long long)s);
 
-  GuBootSay(
-      s == EFI_SUCCESS
-          ? L"\r\n\r\n[OK] AdaUnlock DXE Driver removed from UEFI NVRAM & Internal ESP.\r\n"
-      : s == EFI_NOT_FOUND ? L"\r\n\r\n[INFO] No AdaUnlock DXE Driver entry "
-                             L"found. Nothing was changed.\r\n"
-                           : L"\r\n\r\n[ERROR] Could not remove the "
-                             L"AdaUnlock DXE Driver. See the USB log.\r\n");
-
-  GuBootSay(L"Rebooting system in 3 seconds...\r\n");
+  GuBootSay(GuBootUiStr(
+      s == EFI_SUCCESS     ? GU_STR_REM_OK
+      : s == EFI_NOT_FOUND ? GU_STR_REM_NOTFOUND
+                           : GU_STR_REM_ERR));
 
   return GuRebootSystem(t, s);
 }
@@ -162,29 +142,13 @@ static EFI_STATUS RunUnlock(EFI_SYSTEM_TABLE *t, EFI_HANDLE image,
   if (s != EFI_SUCCESS || Gu.fault)
     return RunFailure(t, image, gpu, stage, s);
 
+  GuBootSay(GuBootUiStr(GU_STR_STATUS_HDR));
+  GuBootSay(GuBootUiStr(GU_STR_ST_STEP12));
   if (Gu.already_unlocked) {
-    GuBootSay(
-        L"\r\n=======================================================\r\n"
-        L" UNIVERSAL GPU UNLOCK " GU_VERSION_TAG_WIDE L" - Status Monitor\r\n"
-        L"=======================================================\r\n"
-        L" [1/4] GPU and PCIe Topology Discovery ..... [ OK ]\r\n"
-        L" [2/4] Firmware Hashes and VBIOS Parse ..... [ OK ]\r\n"
-        L" [3/4] Hardware Silicon Status ............. [ ALREADY UNLOCKED ]\r\n");
-    if (enable_s3) {
-      GuBootSay(L" [4/4] S3 Sleep Persistence ................ [ REGISTERING ]\r\n");
-    } else {
-      GuBootSay(L" [4/4] S3 Sleep Persistence ................ [ SKIPPED ]\r\n");
-    }
+    GuBootSay(GuBootUiStr(GU_STR_ST_ALREADY3));
+    GuBootSay(GuBootUiStr(enable_s3 ? GU_STR_ST_S3_REG : GU_STR_ST_S3_SKIP));
   } else {
-    GuBootSay(
-        L"\r\n=======================================================\r\n"
-        L" UNIVERSAL GPU UNLOCK " GU_VERSION_TAG_WIDE L" - Status Monitor\r\n"
-        L"=======================================================\r\n"
-        L" [1/4] GPU and PCIe Topology Discovery ..... [ OK ]\r\n"
-        L" [2/4] Firmware Hashes and VBIOS Parse ..... [ OK ]\r\n"
-        L" [3/4] Display Handover .................... [ PENDING ]\r\n"
-        L" [4/4] Hardware SEC2 and MSR Unlock ........ [ PENDING ]\r\n\r\n"
-        L" --> Starting GPU unlock...\r\n");
+    GuBootSay(GuBootUiStr(GU_STR_ST_PEND34));
   }
 
   GuBootSilence();
@@ -207,49 +171,22 @@ static EFI_STATUS RunUnlock(EFI_SYSTEM_TABLE *t, EFI_HANDLE image,
   (VOID) GuClearSafeguardFlag();
 
   GuBootUnsilence();
-  if (Gu.already_unlocked) {
-    GuBootSay(L" [3/4] Display Handover .................... [ OK ]\r\n");
-    if (enable_s3) {
-      if (Gu.s3_registered) {
-        GuBootSay(L" [4/4] Hardware & S3 Persistence Status .... [ OK ]\r\n");
-      } else {
-        GuBootSay(L" [4/4] Hardware [OK] | S3 Reg .............. [ FAILED ]\r\n");
-      }
-    } else {
-      GuBootSay(L" [4/4] Hardware & S3 Persistence Status .... [ OK ]\r\n");
-    }
+  GuBootSay(GuBootUiStr(GU_STR_ST_DISP_OK));
+  if (enable_s3) {
+    GuBootSay(GuBootUiStr(Gu.s3_registered ? GU_STR_ST_S3_DONE : GU_STR_ST_S3_FAIL));
   } else {
-    GuBootSay(L" [3/4] Display Handover .................... [ OK ]\r\n");
-    if (enable_s3) {
-      if (Gu.s3_registered) {
-        GuBootSay(L" [4/4] Hardware SEC2 and S3 Persistence .... [ OK ]\r\n");
-      } else {
-        GuBootSay(L" [4/4] Hardware SEC2 [OK] | S3 Reg ......... [ FAILED ]\r\n");
-      }
-    } else {
-      GuBootSay(L" [4/4] Hardware SEC2 and MSR Unlock ........ [ OK ]\r\n");
-    }
+    GuBootSay(GuBootUiStr(GU_STR_ST_UNLOCK_OK));
   }
 
   if (GuUnlockIsCsmVideo()) {
-    GuBootSay(
-        L"\r\n"
-        L"  [!] BIOS WARNING: Legacy CSM Video Mode Detected!\r\n"
-        L"      If Windows boots with low resolution or Code 43 in Device Manager,\r\n"
-        L"      restart into BIOS and set CSM to [Disabled] (pure UEFI mode).\r\n"
-        L"\r\n");
+    GuBootSay(GuBootUiStr(GU_STR_WARN_CSM_POST));
   }
 
   if (enable_s3 && Gu.s3_s0ix_warning) {
-    GuBootSay(
-        L"\r\n"
-        L"  [!] ACPI S3 WARNING: Board advertises Modern Standby (S0ix, FADT Bit 21)!\r\n"
-        L"      Classic ACPI S3 wake may NOT execute the FACS trampoline on this board.\r\n"
-        L"      Check BIOS Power/ACPI settings and enable S3 Sleep if available.\r\n"
-        L"\r\n");
+    GuBootSay(GuBootUiStr(GU_STR_WARN_S0IX));
   }
 
-  GuBootSay(L" Handing over control to Windows Boot Manager in 3 seconds...\r\n\r\n");
+  GuBootSay(GuBootUiStr(GU_STR_HANDOFF_WIN));
   t->BootServices->Stall(3000000);
 
   GuLog("TRANSACTION OK: %u of %u GPU(s) unlocked, hardware readbacks passed!\n",
@@ -270,6 +207,8 @@ EFI_STATUS EFIAPI UefiMain(EFI_HANDLE image, EFI_SYSTEM_TABLE *t) {
   if (s != EFI_SUCCESS)
     return s;
 
+  GuBootEnableLargeConsole();
+
   GuLog("=== Universal Multi-Gen GPU Unlock %s (BOOTX64.EFI) ===\n", GU_VERSION_TAG);
 
   /* MindAllik v1.3.3 / v1.3.4 Safeguard check: If previous attempt did not complete,
@@ -277,12 +216,7 @@ EFI_STATUS EFIAPI UefiMain(EFI_HANDLE image, EFI_SYSTEM_TABLE *t) {
   if (GuCheckSafeguardFlag()) {
     GuLog("[SAFEGUARD ACTIVE] Previous unlock attempt detected (ATTEMPT.FLG present)!\n");
     GuLog("[SAFEGUARD ACTIVE] Bypassing hardware unlock to prevent boot loop. Chainloading stock Windows.\n");
-    GuBootSay(L"\r\n=======================================================\r\n"
-              L" [SAFEGUARD ACTIVE] BOOT-LOOP PROTECTION TRIGGERED\r\n"
-              L"=======================================================\r\n"
-              L" An uncompleted GPU unlock attempt was detected (ATTEMPT.FLG).\r\n"
-              L" Safeguard active: Skipping hardware unlock and clearing flag.\r\n"
-              L" Chainloading Windows in safe factory mode in 3 seconds...\r\n");
+    GuBootSay(GuBootUiStr(GU_STR_SAFEGUARD));
     (VOID) GuClearSafeguardFlag();
     (VOID) GuBootSyncLog();
     if (t->BootServices && t->BootServices->Stall)
@@ -315,12 +249,14 @@ EFI_STATUS EFIAPI UefiMain(EFI_HANDLE image, EFI_SYSTEM_TABLE *t) {
 
   GuLogInventory("", devices, device_count);
   if (device_count > 1) {
-    GuBootSay(L"\r\n[INFO] Multi-GPU system detected: All supported GPUs will be unlocked.\r\n");
+    GuBootSay(GuBootUiStr(GU_STR_MULTIGPU_INFO));
   }
 
   s = GuBootLoadWindows();
   if (s != EFI_SUCCESS || Gu.fault)
     return RunFailure(t, image, gpu, "stage-windows-image", s);
+
+  GuBootSetCsmStatus(GuProbePreMenuCsmStatus(t));
 
   CHAR16 choice = L'S';
   s = GuBootChoose(&choice);

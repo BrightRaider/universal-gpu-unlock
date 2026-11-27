@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: GPL-2.0-only */
 #pragma once
 #include "port.h"
+#include "uefi_lang.h"
 EFI_STATUS GuBootOpen(EFI_HANDLE,EFI_SYSTEM_TABLE *);
 EFI_STATUS GuBootLoadAssets(VOID);
 EFI_STATUS GuBootLoadWindows(VOID);
@@ -9,6 +10,7 @@ EFI_STATUS GuBootWindows(VOID);
 EFI_STATUS GuBootSyncLog(VOID);
 EFI_STATUS GuBootClose(VOID);
 VOID GuBootSay(const CHAR16 *);
+VOID GuBootEnableLargeConsole(VOID);
 VOID GuBootSilence(VOID);
 VOID GuBootUnsilence(VOID);
 VOID GuBootHalt(VOID);
@@ -21,3 +23,7 @@ const CHAR16 *GuBootGetLogPath(VOID);
 BOOLEAN GuCheckSafeguardFlag(VOID);
 EFI_STATUS GuSetSafeguardFlag(VOID);
 EFI_STATUS GuClearSafeguardFlag(VOID);
+VOID GuBootSetCsmStatus(UINT32 status);
+UINT32 GuBootGetLanguage(VOID);
+VOID GuBootSetLanguage(UINT32 lang);
+const CHAR16 *GuBootUiStr(UINT32 str_id);

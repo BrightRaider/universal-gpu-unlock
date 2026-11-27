@@ -86,6 +86,9 @@ def save_saved_language(lang):
         ui_cfg["language"] = norm
         cfg["ui"] = ui_cfg
         gsi.save_user_config(cfg)
+        sync_fn = getattr(gsi, "sync_boot_lang_cfg", None)
+        if callable(sync_fn):
+            sync_fn(norm)
     except Exception:
         pass
     return norm

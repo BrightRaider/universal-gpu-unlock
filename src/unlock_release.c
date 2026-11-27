@@ -48,6 +48,7 @@ static EFI_GUID PointerGuid={0x31878c87,0x0b75,0x11d5,{0x9a,0x4f,0,0x90,0x27,0x3
 static EFI_GUID AbsPointerGuid={0x8d59d32b,0xc655,0x4ae9,{0x9b,0x15,0xf2,0x59,0x04,0x99,0x2a,0x43}};
 static EFI_GUID UsbHcGuid={0x3e745226,0x9818,0x45b6,{0xa2,0xac,0xd7,0xcd,0x0e,0x8b,0xa2,0xbc}};
 static EFI_GUID BindingGuid=EFI_DRIVER_BINDING_PROTOCOL_GUID,ImageGuid=EFI_LOADED_IMAGE_PROTOCOL_GUID;
+static EFI_GUID LegacyBiosGuid={0xdb9a1e3d,0x45cb,0x4abb,{0x85,0x3b,0xe5,0x38,0x7f,0xdb,0x2e,0x2d}};
 
 static BOOLEAN Equal(const VOID *a,const VOID *b,UINTN n){return !memcmp(a,b,n);}
 static BOOLEAN Guid(const EFI_GUID *a,const EFI_GUID *b){return Equal(a,b,16);}
@@ -928,6 +929,71 @@ BOOLEAN GuDetectCsmVideoDriver(UINT64 pci_attributes, BOOLEAN has_nv_agent,
 
 BOOLEAN GuUnlockIsCsmVideo(VOID) {
   return Plan.csm_video;
+}
+
+UINT32 GuProbePreMenuCsmStatus(EFI_SYSTEM_TABLE *t) {
+  if (!t || !t->BootServices) return GU_CSM_DISABLED;
+  EFI_BOOT_SERVICES *b = t->BootServices;
+
+  BOOLEAN legacy_bios_present = FALSE;
+  if (b->LocateProtocol) {
+    VOID *legacy_if = NULL;
+    if (b->LocateProtocol(&LegacyBiosGuid, NULL, &legacy_if) == EFI_SUCCESS && legacy_if) {
+      legacy_bios_present = TRUE;
+    }
+  }
+
+  UINT64 attrs = 0;
+  if (Gu.pci && Gu.pci->Attributes) {
+    if (Gu.pci->Attributes(Gu.pci, EfiPciIoAttributeOperationGet, 0, &attrs) != EFI_SUCCESS) {
+      attrs = 0;
+    }
+  }
+
+  BOOLEAN has_nv_agent = FALSE;
+  UINT32 driver_ver = 0;
+  UINTN driver_size = 0;
+  if (Gu.handle && b->OpenProtocolInformation) {
+    EFI_OPEN_PROTOCOL_INFORMATION_ENTRY *entries = NULL;
+    UINTN ec = 0;
+    if (b->OpenProtocolInformation(Gu.handle, &PciGuid, &entries, &ec) == EFI_SUCCESS && entries) {
+      for (UINTN k = 0; k < ec; k++) {
+        if ((entries[k].Attributes & EFI_OPEN_PROTOCOL_BY_DRIVER) &&
+            entries[k].ControllerHandle == Gu.handle && entries[k].AgentHandle) {
+          has_nv_agent = TRUE;
+          EFI_DRIVER_BINDING_PROTOCOL *drv = NULL;
+          EFI_LOADED_IMAGE_PROTOCOL *im = NULL;
+          if (b->HandleProtocol &&
+              b->HandleProtocol(entries[k].AgentHandle, &BindingGuid, (VOID **)&drv) == EFI_SUCCESS &&
+              drv) {
+            driver_ver = drv->Version;
+            if (drv->ImageHandle &&
+                b->HandleProtocol(drv->ImageHandle, &ImageGuid, (VOID **)&im) == EFI_SUCCESS &&
+                im) {
+              driver_size = (UINTN)im->ImageSize;
+            }
+          }
+          break;
+        }
+      }
+      if (b->FreePool) b->FreePool(entries);
+    }
+  }
+
+  if (GuDetectCsmVideoDriver(attrs, has_nv_agent, driver_ver, driver_size)) {
+    NOTE("Pre-menu CSM probe: LEGACY CSM VIDEO ACTIVE (legacy_bios=%u attrs=%#llx nv_agent=%u ver=%#x size=%zu)\n",
+         (unsigned)legacy_bios_present, (unsigned long long)attrs,
+         (unsigned)has_nv_agent, (unsigned)driver_ver, (size_t)driver_size);
+    return GU_CSM_VIDEO_ACTIVE;
+  }
+  if (legacy_bios_present) {
+    NOTE("Pre-menu CSM probe: BIOS CSM ENABLED (EFI_LEGACY_BIOS_PROTOCOL present; attrs=%#llx ver=%#x size=%zu)\n",
+         (unsigned long long)attrs, (unsigned)driver_ver, (size_t)driver_size);
+    return GU_CSM_LEGACY_BIOS;
+  }
+  NOTE("Pre-menu CSM probe: BIOS CSM OFF (pure UEFI; attrs=%#llx ver=%#x size=%zu)\n",
+       (unsigned long long)attrs, (unsigned)driver_ver, (size_t)driver_size);
+  return GU_CSM_DISABLED;
 }
 
 BOOLEAN GuFindVbiosEfiOptionRom(const UINT8 *rom, UINTN length, GU_VBIOS_EFI_IMAGE *out) {

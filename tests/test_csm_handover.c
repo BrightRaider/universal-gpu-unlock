@@ -194,6 +194,75 @@ static EFI_GRAPHICS_OUTPUT_PROTOCOL MockChildGop;
 static EFI_GRAPHICS_OUTPUT_PROTOCOL_MODE MockChildGopMode;
 static EFI_GRAPHICS_OUTPUT_MODE_INFORMATION MockChildGopInfo;
 
+static EFI_STATUS EFIAPI MockHaltReset(EFI_RESET_TYPE T, EFI_STATUS S, UINTN D, VOID *P) {
+  (void)T; (void)S; (void)D; (void)P; return EFI_SUCCESS;
+}
+
+static BOOLEAN MockLegacyBiosPresent = FALSE;
+static UINT64 MockPreMenuPciAttrs = 0;
+static BOOLEAN MockPreMenuHasNvAgent = FALSE;
+static UINT32 MockPreMenuDriverVer = 0x6000aU;
+static UINTN MockPreMenuDriverSize = 179776U;
+static EFI_HANDLE MockPreMenuAgentHandle = (EFI_HANDLE)(UINTN)0x5100;
+static EFI_HANDLE MockPreMenuImageHandle = (EFI_HANDLE)(UINTN)0x5200;
+
+static EFI_STATUS EFIAPI MockPciAttributes(
+    EFI_PCI_IO_PROTOCOL *This,
+    EFI_PCI_IO_PROTOCOL_ATTRIBUTE_OPERATION Op,
+    UINT64 Attrs,
+    UINT64 *Result) {
+  (void)This; (void)Attrs;
+  if (Op == EfiPciIoAttributeOperationGet && Result) {
+    *Result = MockPreMenuPciAttrs;
+    return EFI_SUCCESS;
+  }
+  return EFI_UNSUPPORTED;
+}
+
+static EFI_PCI_IO_PROTOCOL MockPreMenuPciIo;
+
+static EFI_DRIVER_BINDING_PROTOCOL MockPreMenuBinding = {
+  NULL, NULL, NULL, 0x6000aU, NULL, NULL
+};
+
+static EFI_LOADED_IMAGE_PROTOCOL MockPreMenuLoadedImage = {
+  0
+};
+
+static EFI_STATUS EFIAPI MockLocateProtocol(EFI_GUID *Protocol, VOID *Reg, VOID **InterfaceOut) {
+  (void)Reg;
+  if (!InterfaceOut || !Protocol) return EFI_INVALID_PARAMETER;
+  EFI_GUID legacy = {0xdb9a1e3d, 0x45cb, 0x4abb, {0x85, 0x3b, 0xe5, 0x38, 0x7f, 0xdb, 0x2e, 0x2d}};
+  if (MockLegacyBiosPresent && Guid(Protocol, &legacy)) {
+    *InterfaceOut = (VOID *)0x7777;
+    return EFI_SUCCESS;
+  }
+  *InterfaceOut = NULL;
+  return EFI_NOT_FOUND;
+}
+
+static EFI_STATUS EFIAPI MockOpenProtocolInformation(
+    EFI_HANDLE Handle,
+    EFI_GUID *Protocol,
+    EFI_OPEN_PROTOCOL_INFORMATION_ENTRY **EntryBuffer,
+    UINTN *EntryCount) {
+  if (!EntryBuffer || !EntryCount) return EFI_INVALID_PARAMETER;
+  if (MockPreMenuHasNvAgent && Handle == MockPciHandle && Protocol && Guid(Protocol, &PciGuid)) {
+    EFI_OPEN_PROTOCOL_INFORMATION_ENTRY *e =
+        (EFI_OPEN_PROTOCOL_INFORMATION_ENTRY *)malloc(sizeof(*e));
+    e->AgentHandle = MockPreMenuAgentHandle;
+    e->ControllerHandle = MockPciHandle;
+    e->Attributes = EFI_OPEN_PROTOCOL_BY_DRIVER;
+    e->OpenCount = 1;
+    *EntryBuffer = e;
+    *EntryCount = 1;
+    return EFI_SUCCESS;
+  }
+  *EntryBuffer = NULL;
+  *EntryCount = 0;
+  return EFI_NOT_FOUND;
+}
+
 static EFI_STATUS EFIAPI MockHandleProtocol(EFI_HANDLE Handle, EFI_GUID *Protocol, VOID **ProtocolInterface) {
   if (!ProtocolInterface) return EFI_INVALID_PARAMETER;
   *ProtocolInterface = NULL;
@@ -217,6 +286,21 @@ static EFI_STATUS EFIAPI MockHandleProtocol(EFI_HANDLE Handle, EFI_GUID *Protoco
 
   if (Guid(Protocol, &BindingGuid)) {
     if (Handle == (EFI_HANDLE)(UINTN)0x5000) { *ProtocolInterface = &MockBinding; return EFI_SUCCESS; }
+    if (Handle == MockPreMenuAgentHandle) {
+      MockPreMenuBinding.Version = MockPreMenuDriverVer;
+      MockPreMenuBinding.ImageHandle = MockPreMenuImageHandle;
+      *ProtocolInterface = &MockPreMenuBinding;
+      return EFI_SUCCESS;
+    }
+    return EFI_UNSUPPORTED;
+  }
+
+  if (Guid(Protocol, &ImageGuid)) {
+    if (Handle == MockPreMenuImageHandle) {
+      MockPreMenuLoadedImage.ImageSize = MockPreMenuDriverSize;
+      *ProtocolInterface = &MockPreMenuLoadedImage;
+      return EFI_SUCCESS;
+    }
     return EFI_UNSUPPORTED;
   }
 
@@ -272,6 +356,8 @@ static void SetupMocks(void) {
   MockBootServices.StartImage = MockStartImage;
   MockBootServices.HandleProtocol = MockHandleProtocol;
   MockBootServices.LocateHandleBuffer = MockLocateHandleBuffer;
+  MockBootServices.LocateProtocol = MockLocateProtocol;
+  MockBootServices.OpenProtocolInformation = MockOpenProtocolInformation;
 
   memset(&MockSystemTable, 0, sizeof(MockSystemTable));
   MockSystemTable.BootServices = &MockBootServices;
@@ -601,6 +687,50 @@ static void TestCsmHaltNoFallback(void) {
   CHECK(FallbackHandle == NULL);
 }
 
+static void TestProbePreMenuCsmStatus(void) {
+  printf("Running TestProbePreMenuCsmStatus...\n");
+  SetupMocks();
+  memset(&MockPreMenuPciIo, 0, sizeof(MockPreMenuPciIo));
+  MockPreMenuPciIo.Attributes = MockPciAttributes;
+  memset(&Gu, 0, sizeof(Gu));
+  Gu.handle = MockPciHandle;
+  Gu.pci = &MockPreMenuPciIo;
+
+  /* 1. Pure UEFI (no LegacyBios protocol, normal attrs & native GOP size/ver) */
+  MockLegacyBiosPresent = FALSE;
+  MockPreMenuPciAttrs = EFI_PCI_IO_ATTRIBUTE_MEMORY | EFI_PCI_IO_ATTRIBUTE_BUS_MASTER;
+  MockPreMenuHasNvAgent = TRUE;
+  MockPreMenuDriverVer = 0x6000aU;
+  MockPreMenuDriverSize = 179776U;
+  CHECK(GuProbePreMenuCsmStatus(&MockSystemTable) == GU_CSM_DISABLED);
+  CHECK(Plan.ready == FALSE && Plan.mutated == FALSE);
+
+  /* 2. BIOS CSM enabled via EFI_LEGACY_BIOS_PROTOCOL while GOP driver itself is native UEFI */
+  MockLegacyBiosPresent = TRUE;
+  CHECK(GuProbePreMenuCsmStatus(&MockSystemTable) == GU_CSM_LEGACY_BIOS);
+  CHECK(Plan.ready == FALSE && Plan.mutated == FALSE);
+
+  /* 3. Active legacy CsmVideo (VGA attributes + tiny 16 KB Option ROM wrapper) */
+  MockPreMenuPciAttrs = 0x718ULL;
+  MockPreMenuDriverVer = 0x24U;
+  MockPreMenuDriverSize = 16384U;
+  CHECK(GuProbePreMenuCsmStatus(&MockSystemTable) == GU_CSM_VIDEO_ACTIVE);
+
+  /* 4. VGA attributes even without LegacyBios protocol still flag active CSM video */
+  MockLegacyBiosPresent = FALSE;
+  MockPreMenuHasNvAgent = FALSE;
+  MockPreMenuPciAttrs = EFI_PCI_IO_ATTRIBUTE_VGA_MEMORY;
+  CHECK(GuProbePreMenuCsmStatus(&MockSystemTable) == GU_CSM_VIDEO_ACTIVE);
+
+  /* 5. NULL guards */
+  CHECK(GuProbePreMenuCsmStatus(NULL) == GU_CSM_DISABLED);
+
+  MockLegacyBiosPresent = FALSE;
+  MockPreMenuHasNvAgent = FALSE;
+  MockPreMenuPciAttrs = 0;
+  memset(&Gu, 0, sizeof(Gu));
+}
+
 int main(void) {
   TestDetectCsmVideoDriver();
   TestFindVbiosEfiOptionRom();
@@ -609,6 +739,7 @@ int main(void) {
   TestCsmLayer1OptionRomBind();
   TestCsmLayer2FallbackGop();
   TestCsmHaltNoFallback();
+  TestProbePreMenuCsmStatus();
 
   if (failures != 0) {
     printf("test_csm_handover: %d failures\n", failures);

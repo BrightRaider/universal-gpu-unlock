@@ -1,7 +1,7 @@
 # Technical Documentation: Universal GPU Unlock (Multi-Gen)
 
 > **Tool:** Universal GPU Unlock  
-> **Version:** v2.0.0  
+> **Version:** v2.1.0  
 > **Architectures:** NVIDIA Ada Lovelace (RTX 40), Ampere (RTX 30), Turing (RTX 20 / CMP)  
 > **Supported Operating Systems:** Windows 10, Windows 11, WSL2 / Ubuntu CUDA Containers  
 
@@ -718,12 +718,12 @@ Fixed the early-kernel BSOD in `v1.9.3` (`RUN0100.TXT`) caused by late AMI BDS u
 4. **Desktop RTX 4060 Ti (`AD106`) Device IDs (`src/gpu_device_ids.h`, `refs #21`):**
    - Added desktop PCI IDs `0x2803` (8GB), `0x2805` (16GB), and `0x2807` alongside `0x2860` (Mobile) in `v2.0.0` (and temporary `test/v1.8.32-4060ti` patch). `#21` was closed as completed after 3 days without user response (external hardware `RUN*.TXT` / benchmark confirmation remains pending).
 
-### 13.49 VeraCrypt DCS & Small EFI Chainloader PE32+ Validation (`[Unreleased / main]`, `refs #23`)
+### 13.49 VeraCrypt DCS & Small EFI Chainloader PE32+ Validation (`v2.1.0`, `refs #23`)
 
 - **Root Cause (`EFI_COMPROMISED_DATA` / `0x8000000000000021` at `stage-windows-image`):** Systems protected by VeraCrypt UEFI Full System Encryption replace `\EFI\Microsoft\Boot\bootmgfw.efi` with `DcsBoot.efi` (`~24,088` bytes) and back up the original Microsoft Boot Manager to `bootmgfw_ms.vc`. Previously, `ReadWindowsBinary()` (`src/boot_io.c`) passed a hardcoded `65536`-byte (`64 KiB`) floor to `ReadFileData()`, rejecting valid compact chainloaders before the boot menu opened.
 - **Strict Structural Fix (`ValidateWindowsPeImage()`):** Lowered the minimum file bound in `ReadWindowsBinary()` to `4096` bytes (`4 KiB`) and replaced the `MZ`-only check with full bounds-checked little-endian PE32+ validation (`e_lfanew >= 0x40`, `"PE\0\0"`, `Machine == 0x8664`, `SizeOfOptionalHeader >= 72`, `Magic == 0x020B`, `Subsystem == 10` `EFI_APPLICATION`), keeping `bootmgfw.efi` (`DcsBoot.efi`) as the staged OS loader so VeraCrypt pre-boot authentication runs normally prior to `bootmgfw_ms.vc`. Verified via host unit tests in `tests/test_boot_select.c`.
 
-### 13.50 Stickless `[I]` Early-BDS Console Preflight & `ReadyToBoot` Fallback Fix (`[Unreleased / main]`, `refs #24`)
+### 13.50 Stickless `[I]` Early-BDS Console Preflight & `ReadyToBoot` Fallback Fix (`v2.1.0`, `refs #24`)
 
 - **Root Cause (`STOP at stage=preflight status=0x8000000000000003` in `AdaUnlockDxe.efi` while USB `BOOTX64.EFI` worked):**
   1. During early `Driver####` dispatch before BDS finishes `ConSplitter` / USB keyboard connection (e.g. Gigabyte B760M D2H with Fast Boot), `t->ConIn`, `t->ConsoleInHandle`, or `t->StandardErrorHandle` can be `NULL` or distinct from `t->ConsoleOutHandle`. `GuUnlockPreflight()` (`src/unlock_release.c`) silently rejected non-unified handles or missing `ConIn` with `EFI_UNSUPPORTED` (`0x8000000000000003`) before any GPU/GOP diagnostic ran.
@@ -734,12 +734,12 @@ Fixed the early-kernel BSOD in `v1.9.3` (`RUN0100.TXT`) caused by late AMI BDS u
   3. Verified in `tests/test_multi_gpu_second_preflight.c` (no-`ConIn`, all-`NULL`, split handles, invalid `ConIn` vtable, GOP-alias deferral) and `tests/test_dxe_main.c` (pre-mutation refusal clearing `ATTEMPT.FLG` followed by `ReadyToBoot` Plan-C completion).
   4. **Hardware Verification (`@henry-richard7` in `#24`, closed `COMPLETED`):** Gigabyte GeForce RTX 3060 12GB (`10DE:2504`) on Gigabyte B760M D2H (Rev. 1.0, ReBAR `16384 MB` active, PCIe Gen4 x16) measured **24.2 ➔ 47.0 TFLOPS** (**+94.2%**) in USB mode (`BOOTX64.EFI`, `RUN0003.TXT`); Stickless `[I]` confirmed working with `test/v2.0.0-dxe-preflight` (`AdaUnlockDxe.efi` `RUN0001.TXT`: `Preflight console: non-unified handles (out=0x33340e98/... in=0/0 ...)`, `SS0=0x88888888`, `SS1=0x8`, Tier-2 `ShadowFACS` Plan C + `StartImage` `patched=2`).
 
-### 13.51 Automatic UEFI Log Rotation (Max 50 Logs) & Hidden-Volume Log Access (`[Unreleased / main]`)
+### 13.51 Automatic UEFI Log Rotation (Max 50 Logs) & Hidden-Volume Log Access (`v2.1.0`)
 
 - **UEFI Log Rotation (`src/boot_io.c`, `tests/test_boot_select.c`):** Replaced the `1..9999` linear `Open` loop inside `GuBootOpen()` with `OpenRotatedRunLog()` (`GU_MAX_RUN_LOGS = 50`). It scans `\GPU-UNLOCK` (`\AD102-UNLOCK`) via `dir->Read()`, prunes older `RUN*.TXT` files whenever 50 or more exist (multi-round batch pruning up to 64 files/round, preserving `ATTEMPT.FLG` and unrelated files), handles `9999 -> 1` wraparound cleanly via `RunLogOrderKey()`, and falls back to bounded linear probing only if `dir->Read()` is unavailable. This caps ESP usage at `< 1 MB` even on `100 MB` Turing ESPs and prevents boot slowdown after hundreds of boots. Verified via 4 mock filesystem rotation tests in `tests/test_boot_select.c`.
 - **Hidden-Volume Log Discovery & 1-Click Export (`tools/gu_system_info.py`, `tools/gpu_dashboard.py`, `tools/Export-Boot-Log.ps1`, `Setup.bat [5]`):** Added Win32 `FindFirstVolumeW` / `GetVolumeInformationW` enumeration (`_enumerate_hidden_fat32_roots()`, 64-bit `wintypes.HANDLE` safe + `SEM_FAILCRITICALERRORS`) so both `gpu_dashboard.py` and `quick_check.py` read live `RUN*.TXT` files from unmounted `GPU_UNLOCK` / `UNLOCK_ESP` partitions without drive letters or UAC. Added **`Export Boot Log`** in the Dashboard and **`Setup.bat [5]`** (`tools/Export-Boot-Log.ps1`), copying the newest logs to `Boot-Logs\` (with UAC + `mountvol` cleanup fallback for ACL-protected Windows ESPs) and selecting the newest log in Windows Explorer.
 
-### 13.52 Non-Identity `PciIo->Map()` S3 Arena Pointer Conversion (`[Unreleased / main]`, `refs #25`)
+### 13.52 Non-Identity `PciIo->Map()` S3 Arena Pointer Conversion (`v2.1.0`, `refs #25`)
 
 - **Root Cause (`MSI MPG X670E Carbon WIFI` + RTX 4090 S3 Sleep Re-Lock despite `ShadowFACS` Armed):**
   - On UEFI platforms with `IoMmuDxe` / Pre-Boot DMA Protection enabled, `Gu.pci->Map(..., EfiPciIoOperationBusMasterCommonBuffer, ...)` remaps the `21,000`-page `<4 GB` `EfiReservedMemoryType` S3 arena (`Gu.s3_arena_phys`, e.g., `0x8c0f8000`) to temporary DXE IOVAs (e.g., `0x00204000..0x052bc000`).
@@ -768,7 +768,7 @@ Controlled `25`-run measurements on an unlocked RTX 4090 (MiniMax-H3 Video DiT, 
    - `get_clock_cap_info()` queries `nvidia-smi -q -d SUPPORTED_CLOCKS`, live SM frequency, and `clocks_event_reasons.sw_power_cap`, computing architecture-aware snaps via `resolve_clock_cap_presets()` (snapped to discrete `15 MHz` bins, e.g., `2295` / `2445 MHz` on RTX 4090 vs. scaled `78%`/`85%` on Ampere/Turing).
    - `gpu_dashboard.py` provides a dedicated **SM CLOCK CAP (`-lgc`)** bar with `Max Eff`, `Sweetspot`, `Apply Cap`, and `Reset (-rgc)` plus 1-click **AI Efficiency** (open PL + `-lgc` in one UAC call) and **Gaming / Stock** (`Stock PL` + `-rgc`) presets persisted cleanly across S3 wake (`--reapply-pl`), alongside the trilingual `EN` / `简体中文` / `DE` switcher (`tools/dashboard_i18n.py`). Verified via mocked unit suite `tests/test_clock_cap.py`.
 
-### 13.54 Ada Laptop Device IDs, PLM/Rate Log Decoding & Hardware Boundaries (`[Unreleased / main]`)
+### 13.54 Ada Laptop Device IDs, PLM/Rate Log Decoding & Hardware Boundaries (`v2.1.0`)
 
 1. **Ada Mobile PCI Device IDs & Profile Calibration (`src/gpu_device_ids.h`, `tools/gu_system_info.py`, `tests/test_turing_local.c`):**
    - Verified official consumer Ada Mobile IDs against `NVIDIA/open-gpu-kernel-modules` (`g_nv_name_released.h`) and added **`0x2717U` / `0x2757U`** (RTX 4090 Laptop, `AD103`), **`0x27a0U` / `0x27e0U`** (RTX 4080 Laptop, `AD104`), **`0x2820U`** (RTX 4070 Laptop, `AD106`), and **`0x28e0U`** (RTX 4060 Laptop, `AD107`), while correcting the `0x2860U` comment from `RTX 4060 Ti Mobile` to **`RTX 4070 Laptop` (`AD106`)**. All consumer Ada dies share the `AD102-ASSETS` transaction pipeline and `ChipMatchesTarget()` (`arch == 0x09U`) check.
@@ -779,3 +779,16 @@ Controlled `25`-run measurements on an unlocked RTX 4090 (MiniMax-H3 Video DiT, 
 3. **Pre-`StartImage` & Hardware Boundary Audit (`src/boot_io.c`, `src/dxe_main.c`, `src/unlock_release.c`):**
    - Confirmed `GuBootWindows()` (`src/boot_io.c`) and `AdaUnlockHookedStartImage()` (`src/dxe_main.c`) perform zero BAR0 scratch/canary writes prior to OS handoff `StartImage()` (avoiding post-`StartImage` hangs reported elsewhere on `28e0` laptops), mutating only in-RAM ACPI shadow pointers when `Gu.s3_registered` is active.
    - Kept `GTX 16xx` (`TU116` / `TU117`) excluded (no Tensor Cores + Windows `nvlddmkm` `RmInitAdapter` Code 43) and documented `USB4`/`Thunderbolt` eGPU (`ASM2464PD`) pre-EBS / Connection-Manager reset boundaries alongside `Q4` LLM decode bandwidth limits across `README.md` and `DOCUMENTATION.md`.
+
+### 13.55 Scaled Trilingual GOP UEFI Console & Live Pre-Menu CSM Probe (`v2.1.0`)
+
+1. **Unified 2x–3x Scrolling GOP Terminal (`src/gop_menu.h`, `src/boot_io.c`, `src/app.c`):**
+   - `GuBootEnableLargeConsole()` (invoked exclusively by `BOOTX64.EFI` in `UefiMain()`, leaving `AdaUnlockDxe.efi` silent POST completely untouched) backs `GuBootSay()` and `GuBootChoose()` with a scrolling `76x20` GOP console (`GuGopCon`): `2x` (`16x32` px narrow / `32x32` px wide) on `1280x680`–`3199x1599` displays (HD/1080p/1440p) and `3x` (`24x48` px narrow / `48x48` px wide) on `>= 3200x1400` (4K) panels over a calm pure-black terminal palette (`~22 KiB` static `.bss`, zero heap allocations).
+   - Both the `[U/P/I/R/S]` boot selection menu and all follow-up status screens (`[1/4]`–`[4/4]` unlock progress, DXE NVRAM install/removal, safeguard, and halt countdowns) share the same readable scale. `GuBootSilence()` detaches the pre-unlock `GOP` pointer prior to `DisconnectController` / FLR, and `GuBootUnsilence()` re-queries `ConsoleOutHandle` GOP to redraw preserved lines seamlessly; displays below `1280x680` (including Legacy CSM `1024x768` fallback GOP) use standard `ConOut->OutputString`.
+2. **Trilingual Boot Menu (`EN` / `简体中文` / `DE`) & Preset Sync (`src/uefi_lang.h`, `tools/Deploy-UsbCommon.ps1`, `tools/gu_system_info.py`, `tools/dashboard_i18n.py`):**
+   - Pressing **`[L]`** inside `GuBootChoose()` cycles `MenuLang` (`EN` ➔ `ZH` ➔ `DE` ➔ `EN`), immediately redraws the selection menu, and keeps the chosen language across follow-up `[1/4]`–`[4/4]` status, install/remove, safeguard, and halt screens.
+   - `GuFont8x16German` provides crisp `8x16` German umlauts/eszett (`Ä`, `Ö`, `Ü`, `ß`, `ä`, `ö`, `ü`) and `GuFont16x16Wide` embeds curated sorted GNU Unifont `18.0.01` `16x16` (`GU_GOP_WIDE_TRAIL` 2-cell tracking with automatic column-75 wrap guard). When `!GopCon.gop` (`<1280x680` / serial ConOut), `GuBootActiveLang()` enforces pure English ASCII so BIOS ROMs without CJK fonts never render `□`. `RUNxxxx.TXT` logs via `GuLog()` always remain pure English ASCII.
+   - `GuReadLangConfig()` reads `EFI\BOOT\lang.cfg` (`en` / `zh` / `de`) at boot menu entry; USB deployment (`tools/Deploy-UsbCommon.ps1`) and the Cockpit Dashboard (`tools/dashboard_i18n.py` ➔ `sync_boot_lang_cfg()`) keep `lang.cfg` synchronized across attached USB drives and hidden `GPU_UNLOCK` volumes. Verified in `tests/test_boot_select.c` and `tests/test_clock_cap.py`.
+3. **Read-Only Pre-Menu BIOS CSM Probe (`src/unlock_release.c`, `src/unlock_release.h`, `tests/test_csm_handover.c`):**
+   - Right before `GuBootChoose()`, `UefiMain()` calls `GuProbePreMenuCsmStatus(t)` which inspects `EFI_LEGACY_BIOS_PROTOCOL` (`0xdb9a1e3d-...`), target GPU PCI I/O decode attributes (`EfiPciIoAttributeOperationGet`), and bound `EFI_DRIVER_BINDING_PROTOCOL` / `EFI_LOADED_IMAGE_PROTOCOL` image metrics via `GuDetectCsmVideoDriver()` without mutating `Plan`.
+   - Displays `[OK] BIOS CSM: OFF` (green), `[!] BIOS CSM: ENABLED` (amber), or `[!] LEGACY CSM VIDEO ACTIVE` (red, Code 43 warning) directly inside the boot menu in all three languages, covered by `TestProbePreMenuCsmStatus()` in `tests/test_csm_handover.c`.

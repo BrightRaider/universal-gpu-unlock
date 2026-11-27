@@ -13,6 +13,12 @@ BOOLEAN GuUnlockPrepareNextGpu(VOID);
 BOOLEAN GuUnlockIsCsmVideo(VOID);
 BOOLEAN GuDetectCsmVideoDriver(UINT64 pci_attributes, BOOLEAN has_nv_agent,
                                UINT32 driver_ver, UINTN driver_size);
+#ifndef GU_CSM_DISABLED
+#define GU_CSM_DISABLED 0U
+#define GU_CSM_LEGACY_BIOS 1U
+#define GU_CSM_VIDEO_ACTIVE 2U
+#endif
+UINT32 GuProbePreMenuCsmStatus(EFI_SYSTEM_TABLE *t);
 EFI_STATUS GuReconnectDisplayAfterUnlock(EFI_SYSTEM_TABLE *t, EFI_HANDLE image,
                                          EFI_HANDLE pci_handle, BOOLEAN allow_fallback_gop);
 EFI_STATUS GuExecuteUnlock(EFI_SYSTEM_TABLE *t, EFI_HANDLE image, const char **stage);

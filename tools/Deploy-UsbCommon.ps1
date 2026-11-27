@@ -116,6 +116,33 @@ function Deploy-UniversalToUsb {
         Emit-Log "  [OK] Bootloader configured with full options: [U/P/I/R/S] menu active." "Green"
     }
 
+    # Sync UEFI Boot Menu Language Preset (en / zh / de)
+    $bootLang = $null
+    try {
+        $cfgPath = Join-Path $env:LOCALAPPDATA "UniversalGpuUnlock\config.json"
+        if (Test-Path -LiteralPath $cfgPath) {
+            $cfgObj = Get-Content -LiteralPath $cfgPath -Raw -Encoding UTF8 | ConvertFrom-Json
+            if ($cfgObj -and $cfgObj.ui -and $cfgObj.ui.language) {
+                $rawLang = ([string]$cfgObj.ui.language).Trim().ToLowerInvariant()
+                if ($rawLang -match '^zh') { $bootLang = 'zh' }
+                elseif ($rawLang -match '^de') { $bootLang = 'de' }
+                elseif ($rawLang -match '^en') { $bootLang = 'en' }
+            }
+        }
+    } catch { }
+    if (-not $bootLang) {
+        try {
+            $lcid = [System.Globalization.CultureInfo]::CurrentUICulture.LCID -band 0x3ff
+            if ($lcid -eq 0x04) { $bootLang = 'zh' }
+            elseif ($lcid -eq 0x07) { $bootLang = 'de' }
+            else { $bootLang = 'en' }
+        } catch {
+            $bootLang = 'en'
+        }
+    }
+    Set-Content -LiteralPath (Join-Path $targetBootDir "lang.cfg") -Value $bootLang -Encoding ascii
+    Emit-Log "  [OK] Boot menu language preset set to '$bootLang' (switch anytime with [L] at boot)." "Green"
+
     # 1. Copy Universal Bootloader & DXE Driver
     $releaseEfi = Join-Path $RepoRoot "bin\BOOTX64.EFI"
     if (Test-Path -LiteralPath $releaseEfi) {

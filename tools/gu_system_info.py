@@ -915,6 +915,36 @@ def _list_log_search_roots():
     return entries
 
 
+def sync_boot_lang_cfg(lang):
+    """Best-effort sync of EFI\\BOOT\\lang.cfg ('en'/'zh'/'de') across USB & hidden FAT32 boot volumes."""
+    raw = str(lang or "en").strip().lower()
+    if raw.startswith("zh"):
+        code = "zh"
+    elif raw.startswith("de"):
+        code = "de"
+    else:
+        code = "en"
+    updated = []
+    seen = set()
+    for root, _label, _hidden in _list_log_search_roots():
+        norm_root = os.path.normcase(os.path.normpath(root))
+        if norm_root in seen:
+            continue
+        seen.add(norm_root)
+        boot_dir = os.path.join(root, "EFI", "BOOT")
+        boot_efi = os.path.join(boot_dir, "BOOTX64.EFI")
+        try:
+            if not os.path.isfile(boot_efi):
+                continue
+            cfg_path = os.path.join(boot_dir, "lang.cfg")
+            with open(cfg_path, "w", encoding="ascii", newline="\n") as f:
+                f.write(code + "\n")
+            updated.append(cfg_path)
+        except Exception:
+            pass
+    return updated
+
+
 def _collect_run_log_candidates():
     candidates = []
     for root, label, is_hidden in _list_log_search_roots():

@@ -3,12 +3,14 @@
 /* USB log/assets only. Windows ESP is opened read-only. Boot variables are only
  * read. */
 
+#define GU_UEFI_LANG_IMPLEMENTATION
 #include "boot_io.h"
 #include "version.h"
 
 #include "compat/compat.h"
 
 #include "format.h"
+#include "gop_menu.h"
 
 #include "profile.h"
 
@@ -28,6 +30,32 @@ static EFI_HANDLE Self, Windows, OwnVolume, TargetEspVolume;
 static EFI_FILE_PROTOCOL *Root, *Log;
 
 static BOOLEAN Silent;
+static BOOLEAN GopConNeedsInit;
+static GU_GOP_CON GopCon;
+static UINT32 MenuLang = GU_LANG_EN;
+static BOOLEAN MenuLangExplicit = FALSE;
+static UINT32 MenuCsmStatus = GU_CSM_DISABLED;
+
+static UINT32 GuBootActiveLang(VOID) {
+  return (GopCon.enabled && GopCon.gop && MenuLang < GU_LANG_COUNT) ? MenuLang : GU_LANG_EN;
+}
+
+VOID GuBootSetCsmStatus(UINT32 status) {
+  MenuCsmStatus = status;
+}
+
+UINT32 GuBootGetLanguage(VOID) {
+  return GuBootActiveLang();
+}
+
+VOID GuBootSetLanguage(UINT32 lang) {
+  MenuLang = (lang < GU_LANG_COUNT) ? lang : GU_LANG_EN;
+  MenuLangExplicit = TRUE;
+}
+
+const CHAR16 *GuBootUiStr(UINT32 str_id) {
+  return GuTr(GuBootActiveLang(), (GU_STR_ID)str_id);
+}
 
 static CHAR16 ActiveLogName[32] = L"\\GPU-UNLOCK\\RUN0001.TXT";
 
@@ -107,16 +135,39 @@ static BOOLEAN Inspect(const EFI_DEVICE_PATH_PROTOCOL *p, UINTN *size,
   return FALSE;
 }
 
+VOID GuBootEnableLargeConsole(VOID) {
+  memset(&GopCon, 0, sizeof(GopCon));
+  GopCon.enabled = TRUE;
+  GopConNeedsInit = TRUE;
+}
+
 VOID GuBootSay(const CHAR16 *text) {
-
-  if (!Silent && Table && Table->ConOut && Table->ConOut->OutputString)
-
+  if (Silent || !text)
+    return;
+  if (GopCon.enabled && !GopCon.gop && GopConNeedsInit) {
+    GopConNeedsInit = FALSE;
+    (VOID)GuGopConAttach(&GopCon, Table, TRUE);
+  }
+  if (GopCon.enabled && GopCon.gop) {
+    GuGopConWrite(&GopCon, text);
+    return;
+  }
+  if (Table && Table->ConOut && Table->ConOut->OutputString)
     Table->ConOut->OutputString(Table->ConOut, (CHAR16 *)text);
 }
 
-VOID GuBootSilence(VOID) { Silent = TRUE; }
+VOID GuBootSilence(VOID) {
+  Silent = TRUE;
+  GuGopConDetach(&GopCon);
+}
 
-VOID GuBootUnsilence(VOID) { Silent = FALSE; }
+VOID GuBootUnsilence(VOID) {
+  Silent = FALSE;
+  if (GopCon.enabled) {
+    GopConNeedsInit = FALSE;
+    (VOID)GuGopConAttach(&GopCon, Table, FALSE);
+  }
+}
 
 VOID GuLog(const char *format, ...) {
 
@@ -359,6 +410,9 @@ EFI_STATUS GuBootOpen(EFI_HANDLE image, EFI_SYSTEM_TABLE *t) {
 
   Table = t;
   Self = image;
+  MenuLang = GU_LANG_EN;
+  MenuLangExplicit = FALSE;
+  MenuCsmStatus = GU_CSM_DISABLED;
 
   EFI_BOOT_SERVICES *b = t->BootServices;
   EFI_LOADED_IMAGE_PROTOCOL *loaded = NULL;
@@ -900,23 +954,101 @@ EFI_STATUS GuBootLoadWindows(VOID) {
   return s;
 }
 
-/* Prints prefix, a two-digit number and suffix. */
+/* Prints prefix, a two-digit number and suffix in a single buffer. */
 static VOID GuBootSayCountdown(const CHAR16 *prefix, UINTN value, const CHAR16 *suffix) {
-  CHAR16 digits[3];
+  CHAR16 line[128];
   if (value > 99)
     value = 99;
-  digits[0] = (CHAR16)(L'0' + value / 10);
-  digits[1] = (CHAR16)(L'0' + value % 10);
-  digits[2] = L'\0';
-  GuBootSay(prefix);
-  GuBootSay(digits);
-  GuBootSay(suffix);
+  UINTN pos = GuStrCopy(line, 128U, prefix);
+  if (pos + 2U < 128U) {
+    line[pos++] = (CHAR16)(L'0' + value / 10);
+    line[pos++] = (CHAR16)(L'0' + value % 10);
+    line[pos] = L'\0';
+  }
+  (VOID)GuStrCopy(line + pos, 128U - pos, suffix);
+  GuBootSay(line);
 }
 
 static VOID GuPrintCountdownPrompt(BOOLEAN hide_s3, UINTN sec, BOOLEAN overwrite) {
-  GuBootSayCountdown(overwrite ? L"\r--> TIMER: " : L"--> TIMER: ", sec,
-                     hide_s3 ? L"s left (default: Stock Windows) - Select [U/I/R/S]: "
-                             : L"s left (default: Stock Windows) - Select [U/P/I/R/S]: ");
+  CHAR16 prefix[64];
+  UINTN p = 0U;
+  if (overwrite)
+    prefix[p++] = L'\r';
+  (VOID)GuStrCopy(prefix + p, 64U - p, GuBootUiStr(GU_STR_TIMER_PFX));
+  GuBootSayCountdown(prefix, sec,
+                     GuBootUiStr(hide_s3 ? GU_STR_TIMER_SFX_NOS3 : GU_STR_TIMER_SFX_ALL));
+}
+
+static UINT32 GuReadLangConfig(VOID) {
+  if (!Root || !Root->Open)
+    return GU_LANG_EN;
+  EFI_FILE_PROTOCOL *cfg = NULL;
+  EFI_STATUS cs = Root->Open(Root, &cfg, L"EFI\\BOOT\\lang.cfg", EFI_FILE_MODE_READ, 0);
+  if (cs != EFI_SUCCESS || !cfg)
+    return GU_LANG_EN;
+  CHAR8 buf[16];
+  UINTN sz = sizeof(buf) - 1U;
+  memset(buf, 0, sizeof(buf));
+  if (cfg->Read) {
+    if (cfg->Read(cfg, &sz, buf) != EFI_SUCCESS)
+      sz = 0U;
+  } else {
+    sz = 0U;
+  }
+  if (cfg->Close)
+    cfg->Close(cfg);
+  if (sz > sizeof(buf) - 1U)
+    sz = sizeof(buf) - 1U;
+  buf[sz] = '\0';
+  UINTN start = 0U;
+  if (sz >= 3U && (UINT8)buf[0] == 0xEFU && (UINT8)buf[1] == 0xBBU && (UINT8)buf[2] == 0xBFU)
+    start = 3U;
+  while (start < sz && (buf[start] == ' ' || buf[start] == '\t' || buf[start] == '\r' || buf[start] == '\n'))
+    start++;
+  if (sz >= start + 2U) {
+    CHAR8 c0 = (buf[start] >= 'A' && buf[start] <= 'Z') ? (CHAR8)(buf[start] - 'A' + 'a') : buf[start];
+    CHAR8 c1 = (buf[start + 1U] >= 'A' && buf[start + 1U] <= 'Z') ? (CHAR8)(buf[start + 1U] - 'A' + 'a') : buf[start + 1U];
+    if (c0 == 'z' && c1 == 'h')
+      return GU_LANG_ZH;
+    if (c0 == 'd' && c1 == 'e')
+      return GU_LANG_DE;
+  }
+  return GU_LANG_EN;
+}
+
+static VOID GuRenderChooseMenu(BOOLEAN hide_s3) {
+  BOOLEAN has_gop = (GopCon.enabled && GopCon.gop != NULL);
+  if (has_gop) {
+    GuGopConClear(&GopCon, Table);
+  }
+  GuBootSay(GuBootUiStr(GU_STR_SEP_LINE));
+  GuBootSay(GuBootUiStr(GU_STR_MENU_TITLE));
+  GuBootSay(GuBootUiStr(GU_STR_SEP_LINE));
+  GuBootSay(GuBootUiStr(GU_STR_MENU_TIMER_HDR));
+  GuBootSay(GuBootUiStr(has_gop ? GU_STR_MENU_HINT_LINE : GU_STR_MENU_HINT_ASCII));
+  GuBootSay(GuBootUiStr(GU_STR_SEP_LINE));
+  UINT32 csm_str = GU_STR_CSM_OFF;
+  if (MenuCsmStatus == GU_CSM_VIDEO_ACTIVE)
+    csm_str = GU_STR_CSM_VIDEO_ACTIVE;
+  else if (MenuCsmStatus == GU_CSM_LEGACY_BIOS)
+    csm_str = GU_STR_CSM_LEGACY_BIOS;
+  GuBootSay(GuBootUiStr(csm_str));
+  if (GuIsUnlocked()) {
+    GuBootSay(GuBootUiStr(GU_STR_ALREADY_UNLOCKED));
+  }
+  GuBootSay(GuBootUiStr(GU_STR_SEP_LINE));
+  if (hide_s3) {
+    GuBootSay(GuBootUiStr(GU_STR_OPT_U_NOS3));
+    GuBootSay(GuBootUiStr(GU_STR_OPT_I_NOS3));
+  } else {
+    GuBootSay(GuBootUiStr(GU_STR_OPT_U_STD));
+    GuBootSay(GuBootUiStr(GU_STR_OPT_P));
+    GuBootSay(GuBootUiStr(GU_STR_OPT_I_S3));
+  }
+  GuBootSay(GuBootUiStr(GU_STR_OPT_R));
+  GuBootSay(GuBootUiStr(GU_STR_OPT_S));
+  GuBootSay(GuBootUiStr(GU_STR_SEP_LINE));
+  GuBootSay(L"\r\n");
 }
 
 EFI_STATUS GuBootChoose(CHAR16 *choice) {
@@ -938,30 +1070,21 @@ EFI_STATUS GuBootChoose(CHAR16 *choice) {
     }
   }
 
-  GuBootSay(
-      L"\r\n=======================================================\r\n"
-      L" UNIVERSAL GPU UNLOCK " GU_VERSION_TAG_WIDE L" (Multi-Gen Edition)\r\n"
-      L"=======================================================\r\n"
-      L" >>> 30-SECOND TIMER ACTIVE - PRESS [U] TO UNLOCK <<<\r\n"
-      L" (Press [Space] to pause countdown and read in peace)\r\n"
-      L"=======================================================\r\n");
-  if (GuIsUnlocked()) {
-    GuBootSay(
-        L" [OK] GPU Silicon Status: ALREADY UNLOCKED (by DXE Driver in POST)\r\n"
-        L"      Select [P] for S3 Standby Persistence, or [U] for RAM-only boot.\r\n"
-        L"=======================================================\r\n");
+  if (GopCon.enabled) {
+    if (!GopCon.gop && GopConNeedsInit) {
+      GopConNeedsInit = FALSE;
+      (VOID)GuGopConAttach(&GopCon, Table, TRUE);
+    }
+    if (GopCon.gop) {
+      if (!MenuLangExplicit)
+        MenuLang = GuReadLangConfig();
+      GuLog("Boot console: GOP %ux%u scaled %ux lang=%u csm=%u\n",
+            (unsigned)GopCon.h_res, (unsigned)GopCon.v_res,
+            (unsigned)GopCon.scale, (unsigned)MenuLang, (unsigned)MenuCsmStatus);
+    }
   }
-  if (hide_s3) {
-    GuBootSay(L"  [U] Full GPU Unlock (RAM-only)\r\n"
-              L"  [I] Install DXE Driver to internal ESP and UEFI NVRAM (Auto-boot)\r\n");
-  } else {
-    GuBootSay(L"  [U] Standard Unlock (RAM-only, no S3 hook)\r\n"
-              L"  [P] S3 Standby Persistence Unlock (ACPI FACS Low-Trampoline)\r\n"
-              L"  [I] Install DXE Driver to internal ESP and UEFI NVRAM (Auto-boot / S3)\r\n");
-  }
-  GuBootSay(L"  [R] Remove DXE Driver from UEFI NVRAM\r\n"
-            L"  [S] Stock Windows (Diagnostic hardware scan, logs to USB, normal boot)\r\n"
-            L"=======================================================\r\n\r\n");
+
+  GuRenderChooseMenu(hide_s3);
 
 #define GU_BOOT_TIMEOUT_SEC 30U
   BOOLEAN timed_out = TRUE;
@@ -980,30 +1103,50 @@ EFI_STATUS GuBootChoose(CHAR16 *choice) {
     if (s == EFI_SUCCESS) {
       if (key.UnicodeChar == ' ' && !paused) {
         paused = TRUE;
-        GuBootSay(hide_s3 ? L"\r\n[PAUSED] Countdown stopped. Take your time to select [U/I/R/S]: "
-                          : L"\r\n[PAUSED] Countdown stopped. Take your time to select [U/P/I/R/S]: ");
+        GuBootSay(GuBootUiStr(hide_s3 ? GU_STR_PAUSED_NOS3 : GU_STR_PAUSED_ALL));
         continue;
       }
-
-      GuBootSay(L"\r\n");
-      timed_out = FALSE;
 
       CHAR16 c = key.UnicodeChar;
       if (c >= L'a' && c <= L'z')
         c = (CHAR16)(c - L'a' + L'A');
+
+      if (c == L'L' && GopCon.enabled && GopCon.gop) {
+        MenuLang = (MenuLang + 1U) % GU_LANG_COUNT;
+        MenuLangExplicit = TRUE;
+        GuLog("Boot menu language switched: lang=%u\n", (unsigned)MenuLang);
+        GuRenderChooseMenu(hide_s3);
+        if (paused) {
+          GuBootSay(GuBootUiStr(hide_s3 ? GU_STR_PAUSED_NOS3 : GU_STR_PAUSED_ALL));
+        } else {
+          tick = 0;
+        }
+        continue;
+      }
+
       if (key.ScanCode == 0x17 || c == 27)
         c = L'S'; /* Esc */
       if (c == L'U' || c == L'I' || c == L'R' || c == L'S' || (c == L'P' && !hide_s3)) {
+        GuBootSay(L"\r\n");
+        timed_out = FALSE;
         *choice = c;
+        if (GopCon.enabled && GopCon.gop)
+          GuGopConClear(&GopCon, Table);
         return EFI_SUCCESS;
       }
 
-    } else if (s != EFI_NOT_READY)
+    } else if (s != EFI_NOT_READY) {
+      if (GopCon.enabled && GopCon.gop)
+        GuGopConClear(&GopCon, Table);
       return s;
+    }
 
     s = Table->BootServices->Stall(100000);
-    if (s != EFI_SUCCESS)
+    if (s != EFI_SUCCESS) {
+      if (GopCon.enabled && GopCon.gop)
+        GuGopConClear(&GopCon, Table);
       return s;
+    }
 
     if (!paused)
       tick++;
@@ -1011,11 +1154,9 @@ EFI_STATUS GuBootChoose(CHAR16 *choice) {
 
   if (timed_out) {
     GuPrintCountdownPrompt(hide_s3, 0, TRUE);
-    GuBootSay(L"\r\n\r\n[TIMEOUT] 30s elapsed - booting Stock Windows.\r\n"
-              L"  Diagnostic log: ");
+    GuBootSay(GuBootUiStr(GU_STR_TIMEOUT_HDR));
     GuBootSay(ActiveLogName);
-    GuBootSay(L"\r\n  Need help or want to report your hardware? Open an issue:\r\n"
-              L"  https://github.com/BrightRaider/universal-gpu-unlock/issues\r\n\r\n");
+    GuBootSay(GuBootUiStr(GU_STR_TIMEOUT_FTR));
     if (Table->BootServices && Table->BootServices->Stall)
       Table->BootServices->Stall(2000000);
   }
@@ -1050,6 +1191,8 @@ EFI_STATUS GuBootSyncLog(VOID) {
 EFI_STATUS GuBootClose(VOID) {
 
   EFI_STATUS s = EFI_SUCCESS;
+  GuGopConDetach(&GopCon);
+  GopCon.enabled = FALSE;
 
   if (Log) {
     s = Log->Flush(Log);
@@ -1141,6 +1284,7 @@ EFI_STATUS GuBootWindows(VOID) {
   (VOID)GuAcpiApplyShadowConfigTable();
 
   GuLog("GuBootWindows: Calling StartImage(Windows=%p)...\n", Windows);
+  GuGopConClose(&GopCon, Table, TRUE);
   (VOID)GuBootClose();
 
   EFI_STATUS s = Table->BootServices->StartImage(Windows, NULL, NULL);
@@ -1160,36 +1304,27 @@ VOID GuBootHalt(VOID) {
   /* Ensure any active ExitBootServices hook is cleanly uninstalled on halt */
   (VOID)GuAcpiUninstallEbsHook(Table);
 
-  GuBootUnsilence();
-
   if (Table && Table->ConIn && Table->ConIn->ReadKeyStroke) {
     EFI_INPUT_KEY discard;
     while (Table->ConIn->ReadKeyStroke(Table->ConIn, &discard) == EFI_SUCCESS)
       ;
   }
-  if (Table && Table->ConOut && Table->ConOut->Reset) {
+  if (!GopCon.enabled && Table && Table->ConOut && Table->ConOut->Reset) {
     Table->ConOut->Reset(Table->ConOut, FALSE);
   }
+  GuBootUnsilence();
 
-  GuBootSay(
-      L"\r\n=======================================================\r\n"
-      L" UNIVERSAL GPU UNLOCK - TRANSACTION HALTED\r\n"
-      L"=======================================================\r\n"
-      L" [!] Hardware unlock could not be completed safely.\r\n"
-      L" [!] The GPU may be partially changed. The reboot below resets it.\r\n"
-      L" [+] Diagnostic log: ");
+  GuBootSay(GuBootUiStr(GU_STR_HALT_HDR));
   GuBootSay(ActiveLogName);
-  GuBootSay(
-      L"\r\n=======================================================\r\n"
-      L" Please report this issue with your log file on GitHub:\r\n"
-      L" https://github.com/BrightRaider/universal-gpu-unlock/issues\r\n\r\n");
+  GuBootSay(GuBootUiStr(GU_STR_HALT_FTR));
 
   /* Live countdown for the automatic reboot. A key press ends it early. */
 #define GU_HALT_REBOOT_SEC 15U
   BOOLEAN key_pressed = FALSE;
   for (UINTN sec = GU_HALT_REBOOT_SEC; sec > 0 && !key_pressed; sec--) {
-    GuBootSayCountdown(sec == GU_HALT_REBOOT_SEC ? L"Rebooting in " : L"\rRebooting in ",
-                       sec, L"s (press any key to reboot now)... ");
+    GuBootSayCountdown(GuBootUiStr(sec == GU_HALT_REBOOT_SEC ? GU_STR_REBOOT_PFX_INIT
+                                                             : GU_STR_REBOOT_PFX_OVER),
+                       sec, GuBootUiStr(GU_STR_REBOOT_SFX));
     for (UINTN tick = 0; tick < 10 && !key_pressed; tick++) {
       EFI_INPUT_KEY key;
       if (Table && Table->ConIn && Table->ConIn->ReadKeyStroke &&
@@ -1200,7 +1335,7 @@ VOID GuBootHalt(VOID) {
     }
   }
 
-  GuBootSay(L"\r\nRebooting now...\r\n");
+  GuBootSay(GuBootUiStr(GU_STR_REBOOT_NOW));
   if (Table && Table->BootServices && Table->BootServices->Stall)
     Table->BootServices->Stall(500000);
 

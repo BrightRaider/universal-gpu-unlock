@@ -7,7 +7,7 @@
 Pre-Boot-UEFI-Tensor-Core-Unlocker für NVIDIA RTX 40 (Ada), RTX 30 (Ampere) & RTX 20 (Turing) GPUs.
 
 [![GitHub Release](https://img.shields.io/github/v/release/BrightRaider/universal-gpu-unlock?color=blue&logo=github)](https://github.com/BrightRaider/universal-gpu-unlock/releases/latest)
-[![Release Version](https://img.shields.io/badge/Release-v2.0.0-blue?logo=github)](https://github.com/BrightRaider/universal-gpu-unlock/releases/tag/v2.0.0)
+[![Release Version](https://img.shields.io/badge/Release-v2.1.0-blue?logo=github)](https://github.com/BrightRaider/universal-gpu-unlock/releases/tag/v2.1.0)
 [![Downloads](https://img.shields.io/github/downloads/BrightRaider/universal-gpu-unlock/total?color=green&logo=github)](https://github.com/BrightRaider/universal-gpu-unlock/releases)
 [![Stars](https://img.shields.io/github/stars/BrightRaider/universal-gpu-unlock?style=social)](https://github.com/BrightRaider/universal-gpu-unlock)
 [![Safety](https://img.shields.io/badge/Safety-RAM--Only-success.svg)](#sicherheit--anti-cheat)
@@ -27,17 +27,23 @@ Ich habe Universal GPU Unlock als PC-Gamer gebaut, der auf demselben Alltagsrech
 
 ## Schnellstart
 
-1. **Vorbereiten (`Setup.bat`):** **[Universal_GPU_Unlock_v2.0.0.zip](https://github.com/BrightRaider/universal-gpu-unlock/releases/latest)** herunterladen und entpacken, einen FAT32-USB-Stick einstecken und `Setup.bat` starten:
+1. **Vorbereiten (`Setup.bat`):** **[Universal_GPU_Unlock_v2.1.0.zip](https://github.com/BrightRaider/universal-gpu-unlock/releases/latest)** herunterladen und entpacken, einen FAT32-USB-Stick einstecken und `Setup.bat` starten:
    - `[1]` **USB-Stick neu einrichten** *(inkl. BitLocker-, Secure-Boot- und S0ix-Vorabprüfung)*
    - `[2]` **Vorhandenen USB-Stick aktualisieren**
    - `[3]` **Versteckte `512 MB` `GPU_UNLOCK`-Partition anlegen** *(optional — ermöglicht sticklosen Auto-Boot auch bei `100 MB` kleinen Windows-ESPs)*
    - `[4]` **Dashboard Cockpit öffnen** / `[5]` **Neuestes Boot-Log exportieren** *(kopiert `RUN*.TXT` auch von versteckten `GPU_UNLOCK`- oder geschützten ESP-Partitionen nach `Boot-Logs\`)*
-2. **Booten & Entdrosseln:** Vom USB-Stick starten (`F8` / `F11` / `F12`) und eine Taste drücken *(mit `[Space]` lässt sich der 30s-Countdown jederzeit pausieren)*:
+2. **Booten & Entdrosseln:** Vom USB-Stick starten (`F8` / `F11` / `F12`). Das groß skalierte UEFI-Bootmenü prüft vor der Auswahl live den **BIOS-CSM-Status** (`[OK] BIOS CSM: AUS` bzw. Warnung), unterstützt **`[L]`** zum Umschalten der Sprache (`EN` / `简体中文` / `DE`, vorab aus Windows synchronisiert) und **`[Space]`** zum Pausieren des 30s-Countdowns:
    - `[U]` **Standard-Unlock:** Flüchtiger RAM-Unlock nur für die aktuelle Sitzung (nach vollständigem Ausschalten wieder im Werkszustand).
    - `[P]` **S3-Persistenz:** Hält den Unlock über den Windows-Standby (klassisches ACPI S3) hinweg aktiv.
    - `[I]` **Stickloser Auto-Unlock (`NVRAM`):** Installiert `AdaUnlockDxe.efi` (`Driver####`), sodass Windows bei Kaltstarts automatisch entsperrt und ACPI S3 Sleep überlebt — ganz ohne USB-Stick.
    - `[R]` **DXE-Treiber entfernen:** Entfernt `[I]` sauber aus dem UEFI NVRAM und den internen Partitionen.
    - `[S]` **Stock Windows:** Führt nur einen schreibgeschützten Diagnosescan aus und bootet Windows im Werkszustand.
+
+   <details>
+   <summary><b>Vorschau: Vergrößertes UEFI-Bootmenü (<code>[L] EN / 中文 / DE</code> &amp; Live-CSM-Prüfung)</b></summary>
+   <br>
+   <img src="images/uefi-boot-menu-de.png" alt="Universal GPU Unlock v2.1.0 Vergrößertes UEFI-Bootmenü mit Live-CSM-Prüfung und Sprachumschalter" width="760" />
+   </details>
 3. **Unter Windows prüfen & optimieren:** **`Launch-Dashboard.bat`** starten (GUI Cockpit mit `EN` / `简体中文` / `DE`-Umschalter: Live-`S3 ARMED`-Anzeige, 1-W-Power-Limit-Regler, SM-Clock-Cap (`-lgc`) mit S3-Wake-Re-Apply, Baseline-Vergleich) oder **`Check-GPU-Unlock.bat`** (CLI-Benchmark & `FMLA32/16`-Check).
 
 > [!TIP]

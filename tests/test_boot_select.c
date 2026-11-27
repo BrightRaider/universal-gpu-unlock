@@ -115,12 +115,36 @@ static EFI_STATUS EFIAPI MockDirRead(EFI_FILE_PROTOCOL *This, UINTN *BufSize, VO
   *BufSize = needed;
   return EFI_SUCCESS;
 }
+static const char *MockLangCfgData = NULL;
+static UINTN MockLangCfgCursor = 0U;
+static EFI_FILE_PROTOCOL MockLangCfgFile;
+
+static EFI_STATUS EFIAPI MockLangCfgRead(EFI_FILE_PROTOCOL *This, UINTN *Size, VOID *Buf) {
+  (void)This;
+  if (!Size || !Buf || !MockLangCfgData) return EFI_DEVICE_ERROR;
+  UINTN avail = strlen(MockLangCfgData);
+  UINTN rem = (MockLangCfgCursor < avail) ? (avail - MockLangCfgCursor) : 0U;
+  UINTN copy = (*Size < rem) ? *Size : rem;
+  if (copy > 0U) memcpy(Buf, MockLangCfgData + MockLangCfgCursor, copy);
+  MockLangCfgCursor += copy;
+  *Size = copy;
+  return EFI_SUCCESS;
+}
+
 static EFI_STATUS EFIAPI MockDirOpen(EFI_FILE_PROTOCOL *This, EFI_FILE_PROTOCOL **NewH,
                                      CHAR16 *FileName, UINT64 Mode, UINT64 Attr) {
   (void)Attr;
   const CHAR16 *clean = SkipLeadingSlash(FileName);
   if (This == &MockRootDir) {
     if (MockNameEqNoCase(clean, L"GPU-UNLOCK")) { *NewH = &MockUnlockDir; MockReadCursor = 0; return EFI_SUCCESS; }
+    if (MockLangCfgData && MockNameEqNoCase(clean, L"EFI\\BOOT\\lang.cfg")) {
+      memset(&MockLangCfgFile, 0, sizeof(MockLangCfgFile));
+      MockLangCfgFile.Read = MockLangCfgRead;
+      MockLangCfgFile.Close = MockFileClose;
+      MockLangCfgCursor = 0U;
+      *NewH = &MockLangCfgFile;
+      return EFI_SUCCESS;
+    }
     return EFI_NOT_FOUND;
   }
   for (UINTN i = 0; i < 256; i++) {
@@ -201,6 +225,56 @@ static BOOLEAN HasAliveEntry(const CHAR16 *name) {
   for (UINTN i = 0; i < 256; i++)
     if (MockEntries[i].alive && MockNameEqNoCase(MockEntries[i].name, name)) return TRUE;
   return FALSE;
+}
+
+static UINTN MockGopFillCalls, MockGopBufCalls, MockGopOobCalls;
+static UINTN MockConOutClears, MockConOutSayCalls, MockGopKeyPos;
+static CHAR16 MockGopKeys[8];
+static EFI_HANDLE MockGopConHandle = (EFI_HANDLE)(UINTN)0x7009;
+static EFI_GRAPHICS_OUTPUT_MODE_INFORMATION MockGopInfo;
+static EFI_GRAPHICS_OUTPUT_PROTOCOL_MODE MockGopMode;
+static EFI_GRAPHICS_OUTPUT_PROTOCOL MockGopProto;
+
+static EFI_STATUS EFIAPI MockGopBlt(
+    EFI_GRAPHICS_OUTPUT_PROTOCOL *This, EFI_GRAPHICS_OUTPUT_BLT_PIXEL *BltBuffer,
+    EFI_GRAPHICS_OUTPUT_BLT_OPERATION BltOperation, UINTN SourceX, UINTN SourceY,
+    UINTN DestinationX, UINTN DestinationY, UINTN Width, UINTN Height, UINTN Delta) {
+  (void)SourceX; (void)SourceY;
+  if (!This || !This->Mode || !This->Mode->Info || !BltBuffer) return EFI_INVALID_PARAMETER;
+  UINT32 h = This->Mode->Info->HorizontalResolution, v = This->Mode->Info->VerticalResolution;
+  if (DestinationX + Width > h || DestinationY + Height > v) MockGopOobCalls++;
+  if (BltOperation == EfiBltVideoFill) MockGopFillCalls++;
+  else if (BltOperation == EfiBltBufferToVideo) {
+    if (Delta != Width * sizeof(EFI_GRAPHICS_OUTPUT_BLT_PIXEL)) MockGopOobCalls++;
+    MockGopBufCalls++;
+  }
+  return EFI_SUCCESS;
+}
+static EFI_STATUS EFIAPI MockGopHandleProto(EFI_HANDLE H, EFI_GUID *G, VOID **Out) {
+  EFI_GUID gop_guid = EFI_GRAPHICS_OUTPUT_PROTOCOL_GUID;
+  if (H == MockGopConHandle && G && memcmp(G, &gop_guid, sizeof(gop_guid)) == 0) {
+    *Out = &MockGopProto; return EFI_SUCCESS;
+  }
+  return EFI_UNSUPPORTED;
+}
+static EFI_STATUS EFIAPI MockGopStall(UINTN us) { (void)us; return EFI_SUCCESS; }
+static EFI_STATUS EFIAPI MockGopReadKey(EFI_SIMPLE_TEXT_INPUT_PROTOCOL *This, EFI_INPUT_KEY *Key) {
+  (void)This;
+  if (MockGopKeyPos >= (sizeof(MockGopKeys) / sizeof(MockGopKeys[0])) || MockGopKeys[MockGopKeyPos] == 0) return EFI_NOT_READY;
+  Key->ScanCode = 0; Key->UnicodeChar = MockGopKeys[MockGopKeyPos++];
+  return EFI_SUCCESS;
+}
+static EFI_STATUS EFIAPI MockGopConOutStr(EFI_SIMPLE_TEXT_OUTPUT_PROTOCOL *This, CHAR16 *S) {
+  (void)This; (void)S; MockConOutSayCalls++; return EFI_SUCCESS;
+}
+static EFI_STATUS EFIAPI MockGopConOutClear(EFI_SIMPLE_TEXT_OUTPUT_PROTOCOL *This) {
+  (void)This; MockConOutClears++; return EFI_SUCCESS;
+}
+static EFI_STATUS EFIAPI MockGopConOutCursorPos(EFI_SIMPLE_TEXT_OUTPUT_PROTOCOL *This, UINTN C, UINTN R) {
+  (void)This; (void)C; (void)R; return EFI_SUCCESS;
+}
+static EFI_STATUS EFIAPI MockGopConOutEnableCursor(EFI_SIMPLE_TEXT_OUTPUT_PROTOCOL *This, BOOLEAN V) {
+  (void)This; (void)V; return EFI_SUCCESS;
 }
 
 int main(void) {
@@ -329,6 +403,166 @@ int main(void) {
     CHECK(HasAliveEntry(L"RUN9999.TXT"));
     CHECK(HasAliveEntry(L"RUN0049.TXT"));
     CHECK(GuBootClose() == EFI_SUCCESS);
+  }
+
+  /* Scaled 2x-3x scrolling GOP console tests (menu + follow-up status + silence/unsilence) */
+  {
+    CHECK(GuGopConPickScale(3840U, 2160U) == 3U);
+    CHECK(GuGopConPickScale(2560U, 1440U) == 2U);
+    CHECK(GuGopConPickScale(1920U, 1080U) == 2U);
+    CHECK(GuGopConPickScale(1280U, 720U) == 2U);
+    CHECK(GuGopConPickScale(1024U, 768U) == 0U);
+
+    static EFI_SYSTEM_TABLE gm_st;
+    static EFI_BOOT_SERVICES gm_bs;
+    static EFI_SIMPLE_TEXT_INPUT_PROTOCOL gm_in;
+    static EFI_SIMPLE_TEXT_OUTPUT_PROTOCOL gm_out;
+    memset(&gm_st, 0, sizeof(gm_st)); memset(&gm_bs, 0, sizeof(gm_bs));
+    memset(&gm_in, 0, sizeof(gm_in)); memset(&gm_out, 0, sizeof(gm_out));
+    memset(&MockGopInfo, 0, sizeof(MockGopInfo)); memset(&MockGopMode, 0, sizeof(MockGopMode));
+    memset(&MockGopProto, 0, sizeof(MockGopProto));
+    gm_bs.HandleProtocol = MockGopHandleProto; gm_bs.Stall = MockGopStall;
+    gm_in.ReadKeyStroke = MockGopReadKey;
+    gm_out.OutputString = MockGopConOutStr; gm_out.ClearScreen = MockGopConOutClear;
+    gm_out.SetCursorPosition = MockGopConOutCursorPos; gm_out.EnableCursor = MockGopConOutEnableCursor;
+    gm_st.BootServices = &gm_bs; gm_st.ConsoleOutHandle = MockGopConHandle;
+    gm_st.ConOut = &gm_out; gm_st.ConIn = &gm_in;
+    MockGopInfo.HorizontalResolution = 2560U; MockGopInfo.VerticalResolution = 1440U;
+    MockGopMode.Info = &MockGopInfo; MockGopProto.Mode = &MockGopMode; MockGopProto.Blt = MockGopBlt;
+
+    Table = &gm_st; Root = NULL; Silent = FALSE;
+    MockGopFillCalls = 0; MockGopBufCalls = 0; MockGopOobCalls = 0;
+    MockConOutClears = 0; MockConOutSayCalls = 0; MockGopKeyPos = 0;
+    MockGopKeys[0] = L' '; MockGopKeys[1] = L'p'; MockGopKeys[2] = 0;
+    GuBootEnableLargeConsole();
+    CHAR16 picked = L'S';
+    CHECK(GuBootChoose(&picked) == EFI_SUCCESS);
+    CHECK(picked == L'P');
+    CHECK(GopCon.scale == 2U);
+    CHECK(MockGopFillCalls >= 4U);
+    CHECK(MockGopBufCalls > 0U);
+    CHECK(MockGopOobCalls == 0U);
+    CHECK(MockConOutSayCalls == 0U);
+
+    /* Follow-up status messages before/after Silence->Unsilence stay in GOP console */
+    GuBootSay(L" [1/4] Discovery [ OK ]\r\n");
+    UINTN before_buf = MockGopBufCalls;
+    CHECK(before_buf > 0U);
+    GuBootSilence();
+    CHECK(GopCon.gop == NULL);
+    GuBootUnsilence();
+    CHECK(GopCon.gop == &MockGopProto);
+    CHECK(MockGopBufCalls > before_buf);
+    GuBootSay(L" [3/4] Handover [ OK ]\r\n");
+    GuGopConClose(&GopCon, Table, TRUE);
+    CHECK(MockConOutClears >= 1U);
+
+    /* Fallback to standard ConOut when resolution is too small for 2x scaling */
+    MockGopInfo.HorizontalResolution = 1024U; MockGopInfo.VerticalResolution = 768U;
+    MockGopFillCalls = 0; MockGopBufCalls = 0; MockConOutSayCalls = 0; MockGopKeyPos = 0;
+    MockGopKeys[0] = L'u'; MockGopKeys[1] = 0;
+    GuBootEnableLargeConsole();
+    CHECK(GuBootChoose(&picked) == EFI_SUCCESS);
+    CHECK(picked == L'U');
+    CHECK(MockGopFillCalls == 0U);
+    CHECK(MockGopBufCalls == 0U);
+    CHECK(MockConOutSayCalls > 0U);
+    (VOID)GuBootClose();
+    Table = NULL;
+  }
+
+  /* Trilingual GOP boot menu: lang.cfg preset, [L] cycle EN->ZH->DE->EN, wide CJK wrap, and CSM colors */
+  {
+    EFI_BOOT_SERVICES gm_bs;
+    EFI_SIMPLE_TEXT_INPUT_PROTOCOL gm_in;
+    EFI_SIMPLE_TEXT_OUTPUT_PROTOCOL gm_out;
+    EFI_SYSTEM_TABLE gm_st;
+    memset(&gm_bs, 0, sizeof(gm_bs)); memset(&gm_in, 0, sizeof(gm_in));
+    memset(&gm_out, 0, sizeof(gm_out)); memset(&gm_st, 0, sizeof(gm_st));
+    memset(&MockGopInfo, 0, sizeof(MockGopInfo)); memset(&MockGopMode, 0, sizeof(MockGopMode));
+    memset(&MockGopProto, 0, sizeof(MockGopProto));
+    gm_bs.HandleProtocol = MockGopHandleProto; gm_bs.Stall = MockGopStall;
+    gm_in.ReadKeyStroke = MockGopReadKey;
+    gm_out.OutputString = MockGopConOutStr; gm_out.ClearScreen = MockGopConOutClear;
+    gm_out.SetCursorPosition = MockGopConOutCursorPos; gm_out.EnableCursor = MockGopConOutEnableCursor;
+    gm_st.BootServices = &gm_bs; gm_st.ConsoleOutHandle = MockGopConHandle;
+    gm_st.ConIn = &gm_in; gm_st.ConOut = &gm_out;
+    MockGopInfo.HorizontalResolution = 3840U; MockGopInfo.VerticalResolution = 2160U;
+    MockGopMode.Info = &MockGopInfo; MockGopProto.Mode = &MockGopMode; MockGopProto.Blt = MockGopBlt;
+
+    InitMockLogFs();
+    Root = &MockRootDir;
+    Table = &gm_st;
+    MenuLang = GU_LANG_EN;
+    MenuLangExplicit = FALSE;
+    MockLangCfgData = "zh\n";
+    MockGopFillCalls = 0; MockGopBufCalls = 0; MockGopOobCalls = 0;
+    MockConOutSayCalls = 0; MockGopKeyPos = 0;
+    MockGopKeys[0] = L'l'; /* ZH -> DE */
+    MockGopKeys[1] = L'L'; /* DE -> EN */
+    MockGopKeys[2] = L'l'; /* EN -> ZH */
+    MockGopKeys[3] = L' '; /* pause in ZH */
+    MockGopKeys[4] = L'u'; /* select U */
+    MockGopKeys[5] = 0;
+
+    GuBootSetCsmStatus(GU_CSM_LEGACY_BIOS);
+    GuBootEnableLargeConsole();
+    CHAR16 picked = 0;
+    CHECK(GuBootChoose(&picked) == EFI_SUCCESS);
+    CHECK(picked == L'U');
+    CHECK(GopCon.scale == 3U);
+    CHECK(GuBootGetLanguage() == GU_LANG_ZH);
+    CHECK(MockGopOobCalls == 0U);
+    CHECK(MockGopBufCalls > 0U);
+
+    /* Wrap guard: writing 75 ASCII columns + 1 wide CJK glyph wraps cleanly without overflow */
+    GopCon.enabled = TRUE;
+    GopCon.gop = &MockGopProto;
+    GopCon.scale = 3U;
+    GuGopConClear(&GopCon, Table);
+    CHAR16 edge_buf[77];
+    for (UINTN k = 0; k < 75U; k++) edge_buf[k] = L'A';
+    edge_buf[75] = 0x89E3U; /* '解' */
+    edge_buf[76] = L'\0';
+    GuGopConWrite(&GopCon, edge_buf);
+    CHECK(GopCon.cur_row == 1U);
+    CHECK(GopCon.cur_col == 2U);
+    CHECK(GopCon.rows[0][75] == L'\0');
+    CHECK(GopCon.rows[1][0] == 0x89E3U);
+    CHECK(GopCon.rows[1][1] == GU_GOP_WIDE_TRAIL);
+    CHECK(MockGopOobCalls == 0U);
+
+    /* Semantic CSM colors across all 3 languages */
+    for (UINT32 l = 0; l < GU_LANG_COUNT; l++) {
+      CHECK(GuGopPickLineColor(GuTr(l, GU_STR_CSM_OFF)) == 0x3FB950U);
+      CHECK(GuGopPickLineColor(GuTr(l, GU_STR_CSM_LEGACY_BIOS)) == 0xD29922U);
+      CHECK(GuGopPickLineColor(GuTr(l, GU_STR_CSM_VIDEO_ACTIVE)) == 0xF85149U);
+    }
+
+    /* Small GOP (<1280x680) must force ASCII English fallback and ignore [L] */
+    (VOID)GuBootClose();
+    InitMockLogFs();
+    Root = &MockRootDir;
+    Table = &gm_st;
+    MenuLang = GU_LANG_EN;
+    MenuLangExplicit = FALSE;
+    MockLangCfgData = "zh\n";
+    MockGopInfo.HorizontalResolution = 1024U; MockGopInfo.VerticalResolution = 768U;
+    MockGopKeyPos = 0; MockGopKeys[0] = L'l'; MockGopKeys[1] = L'u'; MockGopKeys[2] = 0;
+    GuBootEnableLargeConsole();
+    picked = 0;
+    CHECK(GuBootChoose(&picked) == EFI_SUCCESS);
+    CHECK(picked == L'U');
+    CHECK(GopCon.gop == NULL);
+    CHECK(GuBootGetLanguage() == GU_LANG_EN);
+
+    MockLangCfgData = NULL;
+    GuBootSetCsmStatus(GU_CSM_DISABLED);
+    GuBootSetLanguage(GU_LANG_EN);
+    MenuLangExplicit = FALSE;
+    (VOID)GuBootClose();
+    Root = NULL;
+    Table = NULL;
   }
 
   if (failures) printf("test_boot_select: %d FAILED\n", failures);
