@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: GPL-2.0-only */
 #include "s3_facs.h"
+#include "diag_decode.h"
 #include "port.h"
 #include "compat/compat.h"
 #include <Protocol/PciRootBridgeIo.h>
@@ -2536,21 +2537,28 @@ EFI_STATUS GuAcpiInstallShadowFacs(
       UINT32 gfw_boot      = *(UINT32 *)(unlk_page + GU_TELEM_GFW_BOOT_STATUS_OFF);
       UINT32 gsp_hwcfg2    = *(UINT32 *)(unlk_page + GU_TELEM_GSP_HWCFG2_OFF);
       UINT32 gsp_cpuctl    = *(UINT32 *)(unlk_page + GU_TELEM_GSP_CPUCTL_OFF);
+      CHAR8 ss0_b[64], ss0_a[64], ss1_b[24], ss1_a[24], plm_dec[48];
+      CHAR8 p_ss0[64], p_ss1[24];
       GuLog("S3 Wake Hardware Unlock Telemetry: Magic=UNLK Status=%u Chip=%#08x AssignedBAR0=%#08x\n"
             "  BCR_Post: %#08x CPUCTL_Post: %#08x Booter_CPUCTL: %#08x Mailbox0/Marker: %#08x\n"
             "  Pre-Booter: WPR2_LO=%#08x WPR2_HI=%#08x LMR=%#08x GFW_BOOT=%#08x GSP_HWCFG2=%#08x GSP_CPUCTL=%#08x\n"
-            "  SS0: %#08x -> %#08x (Target 0x88888888)\n"
-            "  SS1: %#08x -> %#08x (Target 0x00000008)\n"
+            "  SS0: %#08x [%s] -> %#08x [%s] (Target 0x88888888)\n"
+            "  SS1: %#08x [%s] -> %#08x [%s] (Target 0x00000008)\n"
             "  Readout1: %#08x (Full-Rate = 0x00000000)\n"
-            "  Post-FLR: WPR2_HI=%#08x (HI.VAL=%u) SS0=%#08x SS1=%#08x PLM=%#08x\n",
+            "  Post-FLR: WPR2_HI=%#08x (HI.VAL=%u) SS0=%#08x [%s] SS1=%#08x [%s] PLM=%#08x [%s]\n",
             (unsigned)unlk_status, (unsigned)unlk_chip, (unsigned)unlk_bar0,
             (unsigned)bcr_post, (unsigned)cpuctl_post, (unsigned)booter_cpuctl, (unsigned)booter_marker,
             (unsigned)pre_wpr2_lo, (unsigned)pre_wpr2_hi, (unsigned)mmu_lmr,
             (unsigned)gfw_boot, (unsigned)gsp_hwcfg2, (unsigned)gsp_cpuctl,
-            (unsigned)ss0_before, (unsigned)ss0_after,
-            (unsigned)ss1_before, (unsigned)ss1_after,
+            (unsigned)ss0_before, GuRateSelectorDecode(ss0_before, 1, ss0_b, sizeof(ss0_b)),
+            (unsigned)ss0_after, GuRateSelectorDecode(ss0_after, 1, ss0_a, sizeof(ss0_a)),
+            (unsigned)ss1_before, GuRateSelectorDecode(ss1_before, 0, ss1_b, sizeof(ss1_b)),
+            (unsigned)ss1_after, GuRateSelectorDecode(ss1_after, 0, ss1_a, sizeof(ss1_a)),
             (unsigned)ro_after,
-            (unsigned)post_wpr2, (unsigned)(post_wpr2 >> 4), (unsigned)post_ss0, (unsigned)post_ss1, (unsigned)post_plm);
+            (unsigned)post_wpr2, (unsigned)(post_wpr2 >> 4),
+            (unsigned)post_ss0, GuRateSelectorDecode(post_ss0, 1, p_ss0, sizeof(p_ss0)),
+            (unsigned)post_ss1, GuRateSelectorDecode(post_ss1, 0, p_ss1, sizeof(p_ss1)),
+            (unsigned)post_plm, GuPlmDecode(post_plm, plm_dec, sizeof(plm_dec)));
       if (unlk_page != telemetry_page) {
         *(UINT32 *)(unlk_page + GU_TELEM_UNLOCK_MAGIC_OFF) = 0;
       }

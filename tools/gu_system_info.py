@@ -1031,6 +1031,29 @@ def export_latest_boot_logs(repo_dir=None, max_files=10, allow_uac=True):
     return True, latest_path, f"Exported {len(exported_files)} log(s) from EFI System Partition to Boot-Logs ({os.path.basename(latest_path)})."
 
 
+def decode_plm_mask(plm_val):
+    """Return a concise human-readable PLM decode string (read L0-L3, write L0-L3)."""
+    if plm_val is None:
+        return None
+    if (plm_val & 0xFFFF0000) == 0xBADF0000:
+        return "badf-pri (PRI error)"
+    rmask = plm_val & 0x0F
+    wmask = (plm_val >> 4) & 0x0F
+    if plm_val == 0xFFFFFFFF:
+        tag = "OPEN (L0-3 write)"
+    elif plm_val == 0xFFFFFF8F:
+        tag = "STOCK-LOCK (L3-only write)"
+    elif plm_val == 0xFFFFFFEF:
+        tag = "RELOCK-L0 (Host/L0 locked, L1-3 write)"
+    elif plm_val == 0xFFFFFFCF:
+        tag = "DEEP-LOCK (L2-3 write only)"
+    elif (wmask & 0x01) == 0:
+        tag = f"L0-LOCKED (R:0x{rmask:x} W:0x{wmask:x})"
+    else:
+        tag = f"CUSTOM (R:0x{rmask:x} W:0x{wmask:x})"
+    return tag
+
+
 def find_latest_run_log():
     """Find the most recent RUN*.TXT log across mounted drives & hidden FAT32 volumes and parse S3 markers."""
     boot_ts = _get_windows_boot_timestamp()
@@ -1055,6 +1078,9 @@ def find_latest_run_log():
         "stock_mode": False,
         "shadow_facs": None,
         "real_facs": None,
+        "plm_hex": None,
+        "plm_summary": None,
+        "relock_detected": False,
     }
     try:
         with open(full_path, "r", encoding="utf-8", errors="ignore") as f:
@@ -1078,6 +1104,12 @@ def find_latest_run_log():
         m_rf = re.search(r"RealFACS=(0x[0-9a-fA-F]+)", txt)
         if m_rf:
             info["real_facs"] = int(m_rf.group(1), 16)
+        plm_matches = re.findall(r"\b(?:PLM|plm)=(0x[0-9a-fA-F]+)\b", txt)
+        if plm_matches:
+            plm_val = int(plm_matches[-1], 16)
+            info["plm_hex"] = f"0x{plm_val:08x}"
+            info["plm_summary"] = decode_plm_mask(plm_val)
+            info["relock_detected"] = plm_val in (0xFFFFFFEF, 0xFFFFFF8F, 0xFFFFFFCF)
     except Exception:
         pass
     return info
@@ -1198,6 +1230,11 @@ def get_s3_armed_status():
 
 
 CARD_PROFILES = {
+    # Laptop variants MUST appear before desktop substrings ("4090 laptop" before "4090", etc.).
+    "4090 laptop": {"min_unlocked": 140.0, "threshold": 120.0, "stock_typical": 90.0},
+    "4080 laptop": {"min_unlocked": 100.0, "threshold": 82.0, "stock_typical": 60.0},
+    "4070 laptop": {"min_unlocked": 56.0, "threshold": 46.0, "stock_typical": 33.0},
+    "4060 laptop": {"min_unlocked": 42.0, "threshold": 32.0, "stock_typical": 24.0},
     "4090": {"min_unlocked": 200.0, "threshold": 175.0, "stock_typical": 135.0},
     "4080": {"min_unlocked": 115.0, "threshold": 98.0, "stock_typical": 80.0},
     "4070 ti super": {"min_unlocked": 100.0, "threshold": 88.0, "stock_typical": 70.0},
@@ -1206,6 +1243,7 @@ CARD_PROFILES = {
     "4070": {"min_unlocked": 78.0, "threshold": 68.0, "stock_typical": 52.0},
     "4060 ti": {"min_unlocked": 55.0, "threshold": 48.0, "stock_typical": 36.0},
     "4060": {"min_unlocked": 40.0, "threshold": 34.0, "stock_typical": 26.0},
+    "3060 laptop": {"min_unlocked": 38.0, "threshold": 30.0, "stock_typical": 22.0},
     "3090 ti": {"min_unlocked": 125.0, "threshold": 105.0, "stock_typical": 78.0},
     "3090": {"min_unlocked": 115.0, "threshold": 95.0, "stock_typical": 72.0},
     "3080 ti": {"min_unlocked": 110.0, "threshold": 92.0, "stock_typical": 70.0},

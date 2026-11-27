@@ -29,6 +29,7 @@ from gu_system_info import (  # noqa: E402
     apply_saved_power_limits,
     benchmark_gemm,
     classify_unlock_status,
+    find_latest_run_log,
     find_nvidia_smi,
     get_clock_cap_info,
     get_firmware_mode,
@@ -221,6 +222,9 @@ def evaluate_gpu(dev_idx, dev_count, fw_str):
         print(f"  {C_RED_BOLD}STATUS: [WARNING] STOCK RATE-LIMITER ACTIVE! ({tflops_fp16:.1f} TFLOPS){C_RESET}")
         print(f"  Expected unlocked performance: > {profile['threshold']:.0f} TFLOPS (typical ~{profile['min_unlocked']:.0f} TFLOPS).")
         print("  Recommendation: Boot via USB [U]/[P]/[I] (or S4 Hibernation without pre-boot ReBAR overrides).")
+        latest_log = find_latest_run_log()
+        if latest_log and latest_log.get("relock_detected"):
+            print(f"  Boot Log PLM State ({latest_log['name']}): {latest_log['plm_hex']} [{latest_log['plm_summary']}]")
         if props.major == 7:
             print("  Note for Turing: Verify EnableGpuFirmware = 1 is configured in Windows Registry.")
 

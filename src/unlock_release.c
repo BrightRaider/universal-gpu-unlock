@@ -5,6 +5,7 @@
  * No firmware variables, controller reconnects or reset fallback are used.
  */
 #include "unlock_release.h"
+#include "diag_decode.h"
 #include "port.h"
 #include "boot_io.h"
 #include "profile.h"
@@ -813,6 +814,13 @@ static BOOLEAN GuVerifyHardwareRegisters(VOID) {
 
   GuLog("Hardware register verify: chip=%#x chip_ok=%u cpu=%#x hi=%#x ss0=%#x ss1=%#x readout=%#x plm=%#x\n",
         chip, chip_ok, cpu, hi, ss0, ss1, readout, plm);
+  {
+    CHAR8 plm_dec[48], ss0_dec[64], ss1_dec[24];
+    GuLog("Hardware decode: PLM=%s SS0=%s SS1=%s\n",
+          GuPlmDecode(plm, plm_dec, sizeof(plm_dec)),
+          GuRateSelectorDecode(ss0, 1, ss0_dec, sizeof(ss0_dec)),
+          GuRateSelectorDecode(ss1, 0, ss1_dec, sizeof(ss1_dec)));
+  }
 
   if (Gu.fault || !chip_ok || !(cpu & 0x10) || cpu == 0xffffffff ||
       (cpu & 0xffff0000) == 0xbadf0000 || (hi >> 4) != 0 ||

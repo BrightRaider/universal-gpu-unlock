@@ -2,6 +2,7 @@
 /* Universal GPU profile definitions (AD102/GA102). A matched profile is not hardware qualification. */
 #include "profile.h"
 #include "checks.h"
+#include "diag_decode.h"
 #include "sha256.h"
 #include "compat/compat.h"
 #include "port.h"
@@ -136,7 +137,13 @@ static BOOLEAN Registers(UINT32 *Ss0,UINT32 *Ss1) {
     return FALSE;
   }
   *Ss0=GuRead32(0x82381c);*Ss1=GuRead32(0x823820);
-  GuLog("Selectors: SS0=0x%x, SS1=0x%x (fault=%u)\n", *Ss0, *Ss1, (unsigned)Gu.fault);
+  {
+    CHAR8 ss0_dec[64], ss1_dec[24];
+    GuLog("Selectors: SS0=0x%x [%s], SS1=0x%x [%s] (fault=%u)\n",
+          *Ss0, GuRateSelectorDecode(*Ss0, 1, ss0_dec, sizeof(ss0_dec)),
+          *Ss1, GuRateSelectorDecode(*Ss1, 0, ss1_dec, sizeof(ss1_dec)),
+          (unsigned)Gu.fault);
+  }
   if (Gu.is_turing) {
     /* On Turing (TU102), speed select registers at 0x82381c/0x823820 are unmapped (0xbadf5040).
      * Verify cold state via PMC architecture nibble (0x16) and clean WPR2. */

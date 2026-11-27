@@ -8,15 +8,21 @@
   X(0x2704U) /* RTX 4080 (AD103) */ \
   X(0x2703U) /* RTX 4080 SUPER (AD103) */ \
   X(0x2705U) /* RTX 4070 Ti SUPER (AD103) */ \
+  X(0x2717U) /* RTX 4090 Laptop (AD103) */ \
+  X(0x2757U) /* RTX 4090 Laptop (AD103) */ \
   X(0x2782U) /* RTX 4070 Ti (AD104) */ \
   X(0x2783U) /* RTX 4070 SUPER (AD104) */ \
   X(0x2786U) /* RTX 4070 (AD104) */ \
+  X(0x27a0U) /* RTX 4080 Laptop (AD104) */ \
+  X(0x27e0U) /* RTX 4080 Laptop (AD104) */ \
   X(0x2803U) /* RTX 4060 Ti 8GB (AD106) */ \
   X(0x2805U) /* RTX 4060 Ti 16GB (AD106) */ \
   X(0x2807U) /* RTX 4060 Ti Variant (AD106) */ \
-  X(0x2860U) /* RTX 4060 Ti Mobile (AD106) */ \
+  X(0x2820U) /* RTX 4070 Laptop (AD106) */ \
+  X(0x2860U) /* RTX 4070 Laptop (AD106) */ \
   X(0x2882U) /* RTX 4060 Desktop (AD107) */ \
-  X(0x28a0U) /* RTX 4060 Laptop (AD107) */
+  X(0x28a0U) /* RTX 4060 Laptop (AD107) */ \
+  X(0x28e0U) /* RTX 4060 Laptop (AD107) */
 
 #define GU_AMPERE_DEVICE_IDS(X) \
   X(0x2203U) /* RTX 3090 Ti (GA102) */ \

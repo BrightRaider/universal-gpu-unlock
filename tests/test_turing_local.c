@@ -12,6 +12,7 @@ typedef int      BOOLEAN;
 #define FALSE 0
 
 #include "../src/gpu_device_ids.h"
+#include "../src/diag_decode.h"
 
 #define GU_DEV_MATCH(id) (dev == (id)) ||
 
@@ -88,11 +89,32 @@ int main(void) {
   CHECK(GuIsAmpereDeviceId(0x25edU), "RTX 2050 Mobile (25ed) must match Ampere");
   CHECK(GuIsAmpereDeviceId(0x2560U), "RTX 3060 FrankenCard (2560) must match Ampere");
 
+  /* Ada Laptop device ID tests */
+  CHECK(GuIsAdaDeviceId(0x2717U), "RTX 4090 Laptop (2717) must match Ada");
+  CHECK(GuIsAdaDeviceId(0x2757U), "RTX 4090 Laptop (2757) must match Ada");
+  CHECK(GuIsAdaDeviceId(0x27a0U), "RTX 4080 Laptop (27a0) must match Ada");
+  CHECK(GuIsAdaDeviceId(0x27e0U), "RTX 4080 Laptop (27e0) must match Ada");
+  CHECK(GuIsAdaDeviceId(0x2820U), "RTX 4070 Laptop (2820) must match Ada");
+  CHECK(GuIsAdaDeviceId(0x2860U), "RTX 4070 Laptop (2860) must match Ada");
+  CHECK(GuIsAdaDeviceId(0x28a0U), "RTX 4060 Laptop (28a0) must match Ada");
+  CHECK(GuIsAdaDeviceId(0x28e0U), "RTX 4060 Laptop (28e0) must match Ada");
+
+  /* GTX 16xx (TU116/TU117) must stay excluded */
+  CHECK(!GuIsTuringDeviceId(0x21c4U) && !GuIsSupportedDeviceId(0x21c4U), "GTX 1660 SUPER TU116 (21c4) must stay excluded");
+  CHECK(!GuIsTuringDeviceId(0x1f82U) && !GuIsSupportedDeviceId(0x1f82U), "GTX 1650 TU117 (1f82) must stay excluded");
+  CHECK(!GuIsTuringDeviceId(0x1f83U) && !GuIsSupportedDeviceId(0x1f83U), "GTX 1630 TU117 (1f83) must stay excluded");
+
   /* Full PCI ID matching */
   CHECK(GuIsSupportedPciId(0x1e0410deU), "RTX 2080 Ti 0x1e0410de must be supported");
   CHECK(GuIsSupportedPciId(0x1e8910deU), "RTX 2060 TU104 0x1e8910de must be supported");
   CHECK(GuIsSupportedPciId(0x1f0b10deU), "CMP 40HX 0x1f0b10de must be supported");
   CHECK(GuIsSupportedPciId(0x268410deU), "RTX 4090 0x268410de must be supported");
+  CHECK(GuIsSupportedPciId(0x271710deU), "RTX 4090 Laptop 0x271710de must be supported");
+  CHECK(GuIsSupportedPciId(0x275710deU), "RTX 4090 Laptop 0x275710de must be supported");
+  CHECK(GuIsSupportedPciId(0x27a010deU), "RTX 4080 Laptop 0x27a010de must be supported");
+  CHECK(GuIsSupportedPciId(0x27e010deU), "RTX 4080 Laptop 0x27e010de must be supported");
+  CHECK(GuIsSupportedPciId(0x282010deU), "RTX 4070 Laptop 0x282010de must be supported");
+  CHECK(GuIsSupportedPciId(0x28e010deU), "RTX 4060 Laptop 0x28e010de must be supported");
   CHECK(GuIsSupportedPciId(0x280310deU), "RTX 4060 Ti 8GB 0x280310de must be supported");
   CHECK(GuIsSupportedPciId(0x280510deU), "RTX 4060 Ti 16GB 0x280510de must be supported");
   CHECK(GuIsSupportedPciId(0x288210deU), "RTX 4060 Desktop 0x288210de must be supported");
@@ -101,6 +123,28 @@ int main(void) {
   CHECK(GuIsSupportedPciId(0x25ed10deU), "RTX 2050 Mobile 0x25ed10de must be supported");
   CHECK(GuIsSupportedPciId(0x256010deU), "RTX 3060 FrankenCard 0x256010de must be supported");
   CHECK(!GuIsSupportedPciId(0x1e041002U), "Non-NVIDIA vendor must be rejected");
+
+  /* 1b. PLM & Rate Selector Decode Tests */
+  printf("[1b] Testing PLM & Rate-Selector decoders...\n");
+  {
+    char pbuf[48], sbuf[64];
+    CHECK(strcmp(GuPlmDecode(0xffffffffU, pbuf, sizeof(pbuf)), "OPEN(R:L0-3 W:L0-3)") == 0, "PLM ff decode");
+    CHECK(strcmp(GuPlmDecode(0xffffff8fU, pbuf, sizeof(pbuf)), "STOCK-LOCK(R:L0-3 W:L3)") == 0, "PLM 8f decode");
+    CHECK(strcmp(GuPlmDecode(0xffffffefU, pbuf, sizeof(pbuf)), "RELOCK-L0(R:L0-3 W:L1,L2,L3)") == 0, "PLM ef decode");
+    CHECK(strcmp(GuPlmDecode(0xffffffcfU, pbuf, sizeof(pbuf)), "DEEP-LOCK(R:L0-3 W:L2,L3)") == 0, "PLM cf decode");
+    CHECK(strcmp(GuPlmDecode(0x0004cb8fU, pbuf, sizeof(pbuf)), "L0-LOCKED(R:L0-3 W:L3)") == 0, "PLM wpr_cfg decode");
+    CHECK(strcmp(GuPlmDecode(0xbadf5040U, pbuf, sizeof(pbuf)), "badf-pri") == 0, "PLM badf decode");
+
+    CHECK(strcmp(GuRateSelectorDecode(0x88888888U, 1, sbuf, sizeof(sbuf)), "8/8 ovr:1x") == 0, "SS0 unlock decode");
+    CHECK(strcmp(GuRateSelectorDecode(0x00000000U, 1, sbuf, sizeof(sbuf)), "0/8 fuse-def") == 0, "SS0 default decode");
+    CHECK(strcmp(GuRateSelectorDecode(0x89ab014cU, 1, sbuf, sizeof(sbuf)), "1x 1/2 1/4 1/8 def def* def* oos") == 0, "SS0 mixed nibble decode");
+    CHECK(strcmp(GuRateSelectorDecode(0x00000008U, 0, sbuf, sizeof(sbuf)), "ovr:1x") == 0, "SS1 unlock decode");
+    CHECK(strcmp(GuRateSelectorDecode(0x00000009U, 0, sbuf, sizeof(sbuf)), "ovr:1/2") == 0, "SS1 half decode");
+    CHECK(strcmp(GuRateSelectorDecode(0x0000000aU, 0, sbuf, sizeof(sbuf)), "ovr:1/4") == 0, "SS1 quarter decode");
+    CHECK(strcmp(GuRateSelectorDecode(0x0000000bU, 0, sbuf, sizeof(sbuf)), "ovr:1/8") == 0, "SS1 eighth decode");
+    CHECK(strcmp(GuRateSelectorDecode(0x00000000U, 0, sbuf, sizeof(sbuf)), "fuse:def") == 0, "SS1 default decode");
+    CHECK(strcmp(GuRateSelectorDecode(0xbadf5040U, 1, sbuf, sizeof(sbuf)), "badf-pri") == 0, "SS0 badf decode");
+  }
 
   /* 2. TU102 Asset Verification */
   printf("[2] Verifying assets/TU102-ASSETS directory and payload files...\n");

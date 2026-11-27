@@ -20,6 +20,7 @@
 #include "prep_610.h"
 #include "unlock_610.h"
 #include "vbios_610.h"
+#include "../diag_decode.h"
 #include "../profile.h"
 
 #define SEC2_BASE 0x00840000u
@@ -417,11 +418,15 @@ static int ad102_sample_permissions(struct unlock_transaction_work *work,
 		values[i] = 0;
 		valid = !read_bar(work, ad102_permissions[i].offset, &values[i]) &&
 			(values[i] & 0xffff0000u) != 0xbadf0000u && accessible;
-		dev_info(&work->pdev->dev,
-			 "AD102 permission %s: %s[%#x]=%#x before=%#x expected=%#x required=%u valid=%u pci=%#x chip=%#x\n",
-			 phase, ad102_permissions[i].name, ad102_permissions[i].offset,
-			 values[i], work->permission_before[i], ad102_permissions[i].expected,
-			 ad102_permissions[i].required, valid, identity, chip);
+		{
+			char dec_buf[48];
+			dev_info(&work->pdev->dev,
+				 "AD102 permission %s: %s[%#x]=%#x [%s] before=%#x expected=%#x required=%u valid=%u pci=%#x chip=%#x\n",
+				 phase, ad102_permissions[i].name, ad102_permissions[i].offset,
+				 values[i], GuPlmDecode(values[i], dec_buf, sizeof(dec_buf)),
+				 work->permission_before[i], ad102_permissions[i].expected,
+				 ad102_permissions[i].required, valid, identity, chip);
+		}
 		if (!valid)
 			ret = -ENODEV;
 	}
@@ -1539,6 +1544,13 @@ static int unlock_transaction_gfw(struct unlock_transaction_work *work)
 			}
 			dev_info(&work->pdev->dev, "entry: plm=%#x ss0=%#x ss1=%#x wpr2_hi=%#x gfw_plm=%#x gfw_boot=%#x gfw_cpuctl=%#x\n",
 				 work->plm_entry, ss0, ss1, wpr_hi, sample.plm, sample.boot, sample.cpuctl);
+			{
+				char plm_dec[48], ss0_dec[64], ss1_dec[24];
+				dev_info(&work->pdev->dev, "entry decode: plm=%s ss0=%s ss1=%s\n",
+					 GuPlmDecode(work->plm_entry, plm_dec, sizeof(plm_dec)),
+					 GuRateSelectorDecode(ss0, 1, ss0_dec, sizeof(ss0_dec)),
+					 GuRateSelectorDecode(ss1, 0, ss1_dec, sizeof(ss1_dec)));
+			}
 			/* An open PLM means the card was already unlocked or not cold. */
 			if (work->plm_entry == ~0u)
 				return GU_RESULT(-EALREADY);
