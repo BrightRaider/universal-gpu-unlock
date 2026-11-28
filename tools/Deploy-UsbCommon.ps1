@@ -1,4 +1,4 @@
-# SPDX-License-Identifier: GPL-2.0-only
+﻿# SPDX-License-Identifier: GPL-2.0-only
 # Common USB Deployment Module for Universal GPU Unlock
 
 # The single source of the version is src/version.h. Returns 'unknown' if it is missing.
@@ -61,6 +61,89 @@ function Get-GuUsbToolFiles {
         'Toggle-Turing-GSP.bat',
         'Toggle-Sleep-Button.bat'
     )
+}
+
+# Shared Windows Pre-Flight check for BIOS CSM (blocker if ON) and Resizable BAR (optional tuning).
+function Show-GuCsmAndRebarPreFlight {
+    param(
+        [scriptblock]$OnLog = $null
+    )
+    function _Emit($Text, $Color = 'Gray') {
+        if ($OnLog) { & $OnLog $Text $Color }
+        elseif ($Color) { Write-Host $Text -ForegroundColor $Color }
+        else { Write-Host $Text }
+    }
+
+    # 1. BIOS CSM / Firmware Mode check
+    $fwMode = $null
+    if ($env:firmware_type -eq 'UEFI') { $fwMode = 'UEFI' }
+    elseif ($env:firmware_type -eq 'Legacy') { $fwMode = 'Legacy' }
+    if (-not $fwMode) {
+        try {
+            $peFw = (Get-ItemProperty -LiteralPath 'HKLM:\SYSTEM\CurrentControlSet\Control' -Name PEFirmwareType -ErrorAction SilentlyContinue).PEFirmwareType
+            if ($peFw -eq 2) { $fwMode = 'UEFI' }
+            elseif ($peFw -eq 1) { $fwMode = 'Legacy' }
+        } catch { }
+    }
+    if (-not $fwMode) {
+        try {
+            $null = Confirm-SecureBootUEFI -ErrorAction Stop
+            $fwMode = 'UEFI'
+        } catch {
+            if ($_.Exception.Message -match 'not supported on this platform') { $fwMode = 'Legacy' }
+        }
+    }
+
+    if ($fwMode -eq 'UEFI') {
+        _Emit "  [OK] BIOS CSM: Disabled (Pure UEFI mode)." "Green"
+    } elseif ($fwMode -eq 'Legacy') {
+        _Emit "  [!] BLOCKER - BIOS CSM: ENABLED (Legacy BIOS detected)!" "Red"
+        _Emit "      Set BIOS CSM = [Disabled] before booting USB (CSM blocks/breaks unlock with Code 43)." "Red"
+    } else {
+        _Emit "  [i] BIOS CSM: Could not read via Windows (UEFI menu still checks live before unlock)." "Yellow"
+    }
+
+    # 2. Resizable BAR (ReBAR) check via nvidia-smi (strictly optional performance check)
+    $nvSmi = (Get-Command nvidia-smi -ErrorAction SilentlyContinue).Source
+    if (-not $nvSmi) {
+        foreach ($cand in @("$env:ProgramFiles\NVIDIA Corporation\NVSMI\nvidia-smi.exe", "$env:SystemRoot\System32\nvidia-smi.exe")) {
+            if (Test-Path -LiteralPath $cand) { $nvSmi = $cand; break }
+        }
+    }
+    if (-not $nvSmi) {
+        _Emit "  [i] Resizable BAR: nvidia-smi not found (optional check skipped — does not stop unlock)." "DarkGray"
+        return
+    }
+
+    try {
+        $gpuLines = & $nvSmi --query-gpu=index,name --format=csv,noheader 2>$null
+        foreach ($gl in $gpuLines) {
+            if ($gl -notmatch '^\s*(\d+)\s*,\s*(.+?)\s*$') { continue }
+            $idx = $matches[1]
+            $gName = $matches[2].Trim()
+            $isGtx16 = ($gName -match '(?i)\bgtx\s*16\d{2}\b|\b16(?:30|50|60)\b')
+            $memOut = (& $nvSmi -i $idx -q -d MEMORY 2>$null) -join "`n"
+            $bar1 = if ($memOut -match 'BAR1 Memory Usage[\s\S]*?Total\s*:\s*(\d+)\s*MiB') { [int]$matches[1] } else { $null }
+            $fb   = if ($memOut -match 'FB Memory Usage[\s\S]*?Total\s*:\s*(\d+)\s*MiB') { [int]$matches[1] } else { $null }
+            if ($null -eq $bar1) {
+                _Emit "  [i] Resizable BAR ($gName): Unavailable (optional check only — does not stop unlock)." "DarkGray"
+                continue
+            }
+            $rebarOn = ($bar1 -gt 1024) -or ($null -ne $fb -and $bar1 -ge $fb)
+            if ($rebarOn) {
+                $fbTxt = if ($null -ne $fb) { " / VRAM: ${fb} MiB" } else { "" }
+                _Emit "  [OK] Resizable BAR ($gName): ENABLED (BAR1: ${bar1} MiB${fbTxt})." "Green"
+            } elseif ($isGtx16) {
+                _Emit "  [i] Resizable BAR ($gName): Unsupported natively (${bar1} MiB, Turing GTX 16xx) — bypassed cleanly." "Cyan"
+            } else {
+                _Emit "  [i] Resizable BAR ($gName): DISABLED (BAR1: ${bar1} MiB restricted)." "Yellow"
+                _Emit "      Optional tuning only: unlike BIOS CSM, disabled ReBAR does NOT stop or interrupt the unlock." "Cyan"
+                _Emit "      Tip: Enable 'Above 4G Decoding' + 'Re-Size BAR Support' in BIOS for extra AI & gaming speed." "DarkCyan"
+            }
+        }
+    } catch {
+        _Emit "  [i] Resizable BAR: Check skipped ($($_.Exception.Message)) — does not stop unlock." "DarkGray"
+    }
 }
 
 function Deploy-UniversalToUsb {

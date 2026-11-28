@@ -1,7 +1,7 @@
 # Technical Documentation: Universal GPU Unlock (Multi-Gen)
 
 > **Tool:** Universal GPU Unlock  
-> **Version:** v2.1.0  
+> **Version:** v2.1.1  
 > **Architectures:** NVIDIA Ada Lovelace (RTX 40), Ampere (RTX 30), Turing (RTX 20 / CMP)  
 > **Supported Operating Systems:** Windows 10, Windows 11, WSL2 / Ubuntu CUDA Containers  
 
@@ -31,6 +31,7 @@ When booting from the USB flash drive, a 30-second countdown menu appears:
 | **`[R]`** | **Remove DXE Driver** | Cleanly removes the DXE driver from UEFI NVRAM and all internal FAT32 partitions. |
 | **`[S]`** | **Stock Windows** | Performs hardware diagnostic scans and logs to the USB drive, skips the unlock, and boots stock Windows. |
 | **`[Space]`** | **Pause Countdown** | Pauses the 30-second menu timer so you can read and select options without time pressure. |
+| **`[L]`** | **Switch Language (Pauses)** | Cycles `EN` ➔ `简体中文` ➔ `DE`, redraws the menu immediately, and automatically pauses the 30-second countdown. |
 
 ### 2.1 EFI System Partition (ESP) Space Requirements for Option `[I]`
 By default, Windows Setup creates an EFI System Partition (ESP) of only 100 MB, of which Windows itself already consumes 30–50 MB.
@@ -41,7 +42,7 @@ By default, Windows Setup creates an EFI System Partition (ESP) of only 100 MB, 
   1. **Option `[P]` (S3 Sleep Persistence - Recommended):** Users who put their PC to sleep (ACPI S3 Suspend-to-RAM) rather than shutting down do not need `[I]` at all. Unlock once from USB—the ACPI NVS dispatcher restores the unlock on wake in under 3 seconds with zero ESP footprint.
   2. **Dedicated FAT32 Partition (1-Click Tool `Setup.bat [3]` / `tools\Create-Unlock-Partition.bat`):** `Setup.bat` option `[3]` (`tools/Create-Unlock-Partition.ps1 -TargetDrive C -Hidden`, also accessible in Universal Control Center) shrinks an internal SSD by 512 MB and formats it directly via `Format-Volume -Partition` as FAT32 labeled `GPU_UNLOCK` (eliminating premature Windows format popups). With `-Hidden` (`NoDefaultDriveLetter` without a drive letter), the partition stays hidden in Windows Explorer while UEFI mounts it at boot and option `[I]` (`v1.9.6+`) automatically deploys the DXE driver and assets there (the USB stick can then be unplugged).
   3. **Expand ESP:** Enlarge the existing 100 MB ESP to ~500 MB using a partition manager.
-* **Automatic Detection in Setup & Control Center:** Both `Setup.bat` (`tools\Setup-AdaUnlock.ps1` — in `v2.0.0` including BitLocker, Secure Boot, and S0ix pre-flight checks) and Universal Control Center inspect the Windows ESP size automatically and recommend option `[P]` or `GPU_UNLOCK` when a 100 MB ESP is detected.
+* **Automatic Detection in Setup & Control Center:** Both `Setup.bat` (`tools\Setup-AdaUnlock.ps1` / `tools\Update-USB.bat` — including BitLocker, Secure Boot, S0ix, and color-coded BIOS CSM vs. optional Resizable BAR pre-flight checks via `Show-GuCsmAndRebarPreFlight`) and Universal Control Center inspect the Windows ESP size automatically and recommend option `[P]` or `GPU_UNLOCK` when a 100 MB ESP is detected.
 
 ### 2.2 Architecture Note: Stickless `[I]` with S3 Included vs. Optional No-S3 Opt-Out
 
@@ -787,9 +788,20 @@ Controlled `25`-run measurements on an unlocked RTX 4090 (MiniMax-H3 Video DiT, 
    - `GuBootEnableLargeConsole()` (invoked exclusively by `BOOTX64.EFI` in `UefiMain()`, leaving `AdaUnlockDxe.efi` silent POST completely untouched) backs `GuBootSay()` and `GuBootChoose()` with a scrolling `76x20` GOP console (`GuGopCon`): `2x` (`16x32` px narrow / `32x32` px wide) on `1280x680`–`3199x1599` displays (HD/1080p/1440p) and `3x` (`24x48` px narrow / `48x48` px wide) on `>= 3200x1400` (4K) panels over a calm pure-black terminal palette (`~22 KiB` static `.bss`, zero heap allocations).
    - Both the `[U/P/I/R/S]` boot selection menu and all follow-up status screens (`[1/4]`–`[4/4]` unlock progress, DXE NVRAM install/removal, safeguard, and halt countdowns) share the same readable scale. `GuBootSilence()` detaches the pre-unlock `GOP` pointer prior to `DisconnectController` / FLR, and `GuBootUnsilence()` re-queries `ConsoleOutHandle` GOP to redraw preserved lines seamlessly; displays below `1280x680` (including Legacy CSM `1024x768` fallback GOP) use standard `ConOut->OutputString`.
 2. **Trilingual Boot Menu (`EN` / `简体中文` / `DE`) & Preset Sync (`src/uefi_lang.h`, `tools/Deploy-UsbCommon.ps1`, `tools/gu_system_info.py`, `tools/dashboard_i18n.py`):**
-   - Pressing **`[L]`** inside `GuBootChoose()` cycles `MenuLang` (`EN` ➔ `ZH` ➔ `DE` ➔ `EN`), immediately redraws the selection menu, and keeps the chosen language across follow-up `[1/4]`–`[4/4]` status, install/remove, safeguard, and halt screens.
+   - Pressing **`[L]`** inside `GuBootChoose()` cycles `MenuLang` (`EN` ➔ `ZH` ➔ `DE` ➔ `EN`), sets `paused = TRUE` to stop the 30-second countdown, immediately redraws the selection menu with the localized `[PAUSED]`/`[已暂停]`/`[PAUSIERT]` prompt, and keeps the chosen language across follow-up `[1/4]`–`[4/4]` status, install/remove, safeguard, and halt screens.
    - `GuFont8x16German` provides crisp `8x16` German umlauts/eszett (`Ä`, `Ö`, `Ü`, `ß`, `ä`, `ö`, `ü`) and `GuFont16x16Wide` embeds curated sorted GNU Unifont `18.0.01` `16x16` (`GU_GOP_WIDE_TRAIL` 2-cell tracking with automatic column-75 wrap guard). When `!GopCon.gop` (`<1280x680` / serial ConOut), `GuBootActiveLang()` enforces pure English ASCII so BIOS ROMs without CJK fonts never render `□`. `RUNxxxx.TXT` logs via `GuLog()` always remain pure English ASCII.
    - `GuReadLangConfig()` reads `EFI\BOOT\lang.cfg` (`en` / `zh` / `de`) at boot menu entry; USB deployment (`tools/Deploy-UsbCommon.ps1`) and the Cockpit Dashboard (`tools/dashboard_i18n.py` ➔ `sync_boot_lang_cfg()`) keep `lang.cfg` synchronized across attached USB drives and hidden `GPU_UNLOCK` volumes. Verified in `tests/test_boot_select.c` and `tests/test_clock_cap.py`.
 3. **Read-Only Pre-Menu BIOS CSM Probe (`src/unlock_release.c`, `src/unlock_release.h`, `tests/test_csm_handover.c`):**
    - Right before `GuBootChoose()`, `UefiMain()` calls `GuProbePreMenuCsmStatus(t)` which inspects `EFI_LEGACY_BIOS_PROTOCOL` (`0xdb9a1e3d-...`), target GPU PCI I/O decode attributes (`EfiPciIoAttributeOperationGet`), and bound `EFI_DRIVER_BINDING_PROTOCOL` / `EFI_LOADED_IMAGE_PROTOCOL` image metrics via `GuDetectCsmVideoDriver()` without mutating `Plan`.
    - Displays `[OK] BIOS CSM: OFF` (green), `[!] BIOS CSM: ENABLED` (amber), or `[!] LEGACY CSM VIDEO ACTIVE` (red, Code 43 warning) directly inside the boot menu in all three languages, covered by `TestProbePreMenuCsmStatus()` in `tests/test_csm_handover.c`.
+
+### 13.56 `v2.1.1` Maintenance Release: Multi-GPU Benchmark Fix, `[L]` Timer Pause & Setup ReBAR Pre-Flight
+
+1. **Multi-GPU CUDA Event Stream Synchronization & `GTX 16xx` Benchmark Classification (`tools/gu_system_info.py`, `tools/quick_check.py`, `tools/gpu_dashboard.py`, `tools/dashboard_i18n.py`, `tests/test_clock_cap.py`, `refs #23`):**
+   - `benchmark_gemm()` now binds `torch.cuda.Event(enable_timing=True)` explicitly to `with torch.cuda.device(device):` and `stream = torch.cuda.current_stream(device)` (`start.record(stream)` / `end.record(stream)` / `end.synchronize()`), ensuring secondary GPUs (`cuda:1+`) measure real Tensor Core kernel duration rather than empty `cuda:0` stream intervals.
+   - `GTX 16xx` (`TU116`/`TU117`) display GPUs without Tensor Cores are detected via `is_gtx16_no_tensor()` / `classify_unlock_status()` and reported as `NO_TENSOR_CORES` (`[SKIPPED] NO TENSOR CORES`, without stock warnings or ReBAR warnings) across CLI, trilingual Dashboard, and exit logic. Verified by `@V85Sf` in `#23` on VeraCrypt `1.25.9` UEFI (`GTX 1660 SUPER` + `RTX 3060 Ti`: `60.95 TFLOPS FP16`, `69.34 TFLOPS BF16`, `BAR1: 8192 MiB`, `S3 ARMED`).
+2. **`[L]` Language Switch Auto-Pauses Countdown & Single-Source `GU_VERSION_TAG_WIDE` (`src/boot_io.c`, `src/uefi_lang.h`, `src/version.h`, `tests/test_boot_select.c`):**
+   - Pressing `L`/`l` in `GuBootChoose()` sets `paused = TRUE`, redraws the menu, and renders `GU_STR_PAUSED_ALL` / `GU_STR_PAUSED_NOS3`, covered by the timeout-suppression mock test in `tests/test_boot_select.c`.
+   - `src/uefi_lang.h` includes `"version.h"` and renders `GU_VERSION_TAG_WIDE` in `MENU_TITLE` and `STATUS_HDR` instead of hardcoded version strings.
+3. **Color-Coded BIOS CSM vs. Optional Resizable BAR Pre-Flight (`tools/Deploy-UsbCommon.ps1`, `tools/Setup-AdaUnlock.ps1`, `tools/Update-USB.bat`):**
+   - Added shared `Show-GuCsmAndRebarPreFlight` checking `$env:firmware_type`, `PEFirmwareType`, and `Confirm-SecureBootUEFI` for BIOS CSM (`Green` OK vs. `Red` `[!] BLOCKER`) and querying `nvidia-smi` (`--query-gpu=index,name` + `-q -d MEMORY`) for per-GPU Resizable BAR (`Green` ENABLED, `Cyan` N/A for `GTX 16xx`, or `Yellow` DISABLED + explicit `Cyan` notice clarifying that disabled ReBAR is optional performance tuning and **never** blocks or interrupts the unlock, unlike BIOS CSM). Integrated into `Setup.bat [1]` (`Pre-Flight Safety Checks` + step-3 BIOS summary) and `Setup.bat [2]` / `Update-USB.bat`.

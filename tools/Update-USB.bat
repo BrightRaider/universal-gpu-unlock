@@ -63,7 +63,7 @@ echo  Target USB drive: %CLEAN_DRIVE%
 echo  Deploying latest binaries, assets, and tools...
 echo.
 
-powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "& { try { . '%DEPLOY_PS1%'; Deploy-UniversalToUsb -Drive '%CLEAN_DRIVE%' -RepoRoot '%REPO_ROOT%' -OnLog { param($m, $c) if ($c) { Write-Host $m -ForegroundColor $c } else { Write-Host $m } } } catch { Write-Host ('[ERROR] ' + $_.Exception.Message) -ForegroundColor Red; exit 1 } }"
+powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "& { try { . '%DEPLOY_PS1%'; Deploy-UniversalToUsb -Drive '%CLEAN_DRIVE%' -RepoRoot '%REPO_ROOT%' -OnLog { param($m, $c) if ($c) { Write-Host $m -ForegroundColor $c } else { Write-Host $m } }; Write-Host ''; Write-Host 'Pre-Flight Hardware Check (CSM & ReBAR):' -ForegroundColor Cyan; Show-GuCsmAndRebarPreFlight -OnLog { param($m, $c) if ($c) { Write-Host $m -ForegroundColor $c } else { Write-Host $m } } } catch { Write-Host ('[ERROR] ' + $_.Exception.Message) -ForegroundColor Red; exit 1 } }"
 set "RC=%ERRORLEVEL%"
 
 echo.

@@ -258,8 +258,17 @@ static EFI_STATUS EFIAPI MockGopHandleProto(EFI_HANDLE H, EFI_GUID *G, VOID **Ou
   return EFI_UNSUPPORTED;
 }
 static EFI_STATUS EFIAPI MockGopStall(UINTN us) { (void)us; return EFI_SUCCESS; }
+static UINTN MockGopFillCalls, MockGopBufCalls, MockGopOobCalls;
+static UINTN MockConOutClears, MockConOutSayCalls, MockGopKeyPos;
+static CHAR16 MockGopKeys[8];
+static UINTN MockGopStallUntilKey = 0U;
+
 static EFI_STATUS EFIAPI MockGopReadKey(EFI_SIMPLE_TEXT_INPUT_PROTOCOL *This, EFI_INPUT_KEY *Key) {
   (void)This;
+  if (MockGopKeyPos == 1U && MockGopStallUntilKey > 0U) {
+    MockGopStallUntilKey--;
+    return EFI_NOT_READY;
+  }
   if (MockGopKeyPos >= (sizeof(MockGopKeys) / sizeof(MockGopKeys[0])) || MockGopKeys[MockGopKeyPos] == 0) return EFI_NOT_READY;
   Key->ScanCode = 0; Key->UnicodeChar = MockGopKeys[MockGopKeyPos++];
   return EFI_SUCCESS;
@@ -538,6 +547,27 @@ int main(void) {
       CHECK(GuGopPickLineColor(GuTr(l, GU_STR_CSM_LEGACY_BIOS)) == 0xD29922U);
       CHECK(GuGopPickLineColor(GuTr(l, GU_STR_CSM_VIDEO_ACTIVE)) == 0xF85149U);
     }
+
+    /* Pressing [L] must also pause the 30s countdown (>300 ticks without timing out to [S]) */
+    (VOID)GuBootClose();
+    InitMockLogFs();
+    Root = &MockRootDir;
+    Table = &gm_st;
+    MenuLang = GU_LANG_EN;
+    MenuLangExplicit = FALSE;
+    MockLangCfgData = NULL;
+    MockGopInfo.HorizontalResolution = 1920U; MockGopInfo.VerticalResolution = 1080U;
+    MockGopKeyPos = 0;
+    MockGopStallUntilKey = 350U;
+    MockGopKeys[0] = L'l'; /* EN -> ZH and pause timer */
+    MockGopKeys[1] = L'u'; /* arrives after 350 idle ticks (>30s) */
+    MockGopKeys[2] = 0;
+    GuBootEnableLargeConsole();
+    picked = 0;
+    CHECK(GuBootChoose(&picked) == EFI_SUCCESS);
+    CHECK(picked == L'U');
+    CHECK(GuBootGetLanguage() == GU_LANG_ZH);
+    MockGopStallUntilKey = 0U;
 
     /* Small GOP (<1280x680) must force ASCII English fallback and ignore [L] */
     (VOID)GuBootClose();

@@ -1114,13 +1114,10 @@ EFI_STATUS GuBootChoose(CHAR16 *choice) {
       if (c == L'L' && GopCon.enabled && GopCon.gop) {
         MenuLang = (MenuLang + 1U) % GU_LANG_COUNT;
         MenuLangExplicit = TRUE;
-        GuLog("Boot menu language switched: lang=%u\n", (unsigned)MenuLang);
+        paused = TRUE;
+        GuLog("Boot menu language switched: lang=%u (countdown paused)\n", (unsigned)MenuLang);
         GuRenderChooseMenu(hide_s3);
-        if (paused) {
-          GuBootSay(GuBootUiStr(hide_s3 ? GU_STR_PAUSED_NOS3 : GU_STR_PAUSED_ALL));
-        } else {
-          tick = 0;
-        }
+        GuBootSay(GuBootUiStr(hide_s3 ? GU_STR_PAUSED_NOS3 : GU_STR_PAUSED_ALL));
         continue;
       }
 

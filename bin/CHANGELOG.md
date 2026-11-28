@@ -7,7 +7,14 @@ For packaged binaries and downloads, visit [GitHub Releases](https://github.com/
 
 ---
 
-## [Unreleased]
+## [v2.1.1] - 2026-11-28
+### Added
+- **USB Setup & Updater Color-Coded BIOS CSM & Optional Resizable BAR Pre-Flight (`tools/Deploy-UsbCommon.ps1`, `tools/Setup-AdaUnlock.ps1`, `tools/Update-USB.bat`):** Added shared `Show-GuCsmAndRebarPreFlight` helper displaying BIOS CSM status (`[OK]` green vs. `[!] BLOCKER` red) alongside per-GPU Resizable BAR status (`[OK]` green, `N/A` cyan for `GTX 16xx`, or `[TIP]` yellow when disabled with an explicit cyan clarification that disabled ReBAR is optional performance tuning and never interrupts or blocks the unlock, unlike BIOS CSM). Wired directly into `Setup.bat [1]` (`Pre-Flight Safety Checks` + step-3 BIOS summary) and `Setup.bat [2]` / `tools/Update-USB.bat`.
+
+### Changed
+- **`[L]` Language Switch Now Pauses the 30s Boot Countdown (`src/boot_io.c`, `src/uefi_lang.h`, `tests/test_boot_select.c`):** Pressing `[L]` inside `GuBootChoose()` immediately sets `paused = TRUE`, refreshes the scaled GOP menu in the newly selected language, and renders the localized `[PAUSED]` / `[已暂停]` / `[PAUSIERT]` prompt so reading options never races the timer; updated the menu hint line (`[L] Language (pauses)` / `[L] 语言(暂停)` / `[L] Sprache (pausiert)`) and added timeout-suppression unit coverage in `tests/test_boot_select.c`.
+- **Single-Source UEFI Header Version Tag (`src/version.h`, `src/uefi_lang.h`, `bin/version.h`):** Replaced hardcoded `v2.1.0` string literals in `MENU_TITLE` and `STATUS_HDR` with `GU_VERSION_TAG_WIDE` from `version.h`.
+
 ### Fixed
 - **Multi-GPU CUDA Event Stream Synchronization & `GTX 16xx` Benchmark Classification (`tools/gu_system_info.py`, `tools/quick_check.py`, `tools/gpu_dashboard.py`, `tools/dashboard_i18n.py`, `tests/test_clock_cap.py`, `refs #23`):** Bound `benchmark_gemm()` CUDA timing events explicitly to the target GPU context (`torch.cuda.device(device)`) and active stream (`current_stream(device)`) so secondary GPUs (`cuda:1+`) measure real compute kernels instead of empty `cuda:0` launch overhead; classified Tensor-Core-less `GTX 16xx` (`TU116`/`TU117`) display GPUs cleanly as `[SKIPPED] NO TENSOR CORES` (`NO_TENSOR_CORES`, without spurious stock or ReBAR warnings) across CLI, trilingual Dashboard, and multi-GPU exit/summary logic. Hardware-verified by `@V85Sf` in `#23` on `v2.1.0` + `v2.1.0-multigpu-bench-patch.zip` (VeraCrypt `1.25.9` UEFI, `GTX 1660 SUPER` skipped cleanly, `RTX 3060 Ti` **`60.95 TFLOPS FP16` / `69.34 TFLOPS BF16`**, `BAR1: 8192 MiB`, `S3 ARMED`; `#23` closed as completed).
 

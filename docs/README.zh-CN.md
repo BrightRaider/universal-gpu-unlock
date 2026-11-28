@@ -7,7 +7,7 @@
 面向 NVIDIA RTX 40 (Ada)、RTX 30 (Ampere) 与 RTX 20 (Turing) 显卡的 UEFI 预引导 Tensor Core 解锁工具。
 
 [![GitHub Release](https://img.shields.io/github/v/release/BrightRaider/universal-gpu-unlock?color=blue&logo=github)](https://github.com/BrightRaider/universal-gpu-unlock/releases/latest)
-[![Release Version](https://img.shields.io/badge/Release-v2.1.0-blue?logo=github)](https://github.com/BrightRaider/universal-gpu-unlock/releases/tag/v2.1.0)
+[![Release Version](https://img.shields.io/badge/Release-v2.1.1-blue?logo=github)](https://github.com/BrightRaider/universal-gpu-unlock/releases/tag/v2.1.1)
 [![Downloads](https://img.shields.io/github/downloads/BrightRaider/universal-gpu-unlock/total?color=green&logo=github)](https://github.com/BrightRaider/universal-gpu-unlock/releases)
 [![Stars](https://img.shields.io/github/stars/BrightRaider/universal-gpu-unlock?style=social)](https://github.com/BrightRaider/universal-gpu-unlock)
 [![Safety](https://img.shields.io/badge/Safety-RAM--Only-success.svg)](#安全模式与反作弊)
@@ -27,12 +27,12 @@
 
 ## 快速开始
 
-1. **制作启动环境（`Setup.bat`）：** 下载并解压 **[Universal_GPU_Unlock_v2.1.0.zip](https://github.com/BrightRaider/universal-gpu-unlock/releases/latest)**，插入一个 FAT32 格式的 U 盘，然后运行 `Setup.bat`：
-   - `[1]` **全新制作启动 U 盘** *（自动检查 BitLocker / Secure Boot / 现代待机 S0ix）*
-   - `[2]` **更新现有启动 U 盘**
+1. **制作启动环境（`Setup.bat`）：** 下载并解压 **[Universal_GPU_Unlock_v2.1.1.zip](https://github.com/BrightRaider/universal-gpu-unlock/releases/latest)**，插入一个 FAT32 格式的 U 盘，然后运行 `Setup.bat`：
+   - `[1]` **全新制作启动 U 盘** *（自动检查 BitLocker / Secure Boot / 现代待机 S0ix / BIOS CSM 与 ReBAR）*
+   - `[2]` **更新现有启动 U 盘** *（更新程序并在末尾检测 BIOS CSM 与 ReBAR 状态）*
    - `[3]` **创建隐藏的 `512 MB` `GPU_UNLOCK` 分区** *（可选——当 Windows 默认 ESP 只有 `100 MB` 时，用于实现免 U 盘启动）*
    - `[4]` **打开控制面板（Dashboard）** / `[5]` **导出最新启动日志** *（可从隐藏 `GPU_UNLOCK` 或受保护 ESP 中将 `RUN*.TXT` 复制到 `Boot-Logs\`）*
-2. **开机引导与解锁：** 重启从 U 盘引导（`F8` / `F11` / `F12`）。放大后的 UEFI 预引导菜单会在选择前实时检测 **BIOS CSM** 状态（显示 `[OK] BIOS CSM: 已关闭` 或警告），支持按 **`[L]`** 实时切换菜单语言（`EN` / `简体中文` / `DE`，默认随 Windows 控制面板语言自动同步），按 **`[Space]`** 空格键可随时暂停 30 秒倒计时：
+2. **开机引导与解锁：** 重启从 U 盘引导（`F8` / `F11` / `F12`）。放大后的 UEFI 预引导菜单会在选择前实时检测 **BIOS CSM** 状态（显示 `[OK] BIOS CSM: 已关闭` 或警告），支持按 **`[L]`** 实时切换菜单语言（`EN` / `简体中文` / `DE`，默认随 Windows 控制面板语言自动同步——切换后会自动暂停 30 秒倒计时），按 **`[Space]`** 空格键也可手动暂停：
    - `[U]` **标准解锁（仅限当前会话）：** 仅写入易失性内存与寄存器，完全断电关机后自动恢复原厂状态。
    - `[P]` **S3 睡眠保持解锁：** 支持 Windows 传统 ACPI S3 睡眠/待机唤醒后继续保持解锁。
    - `[I]` **免 U 盘自动解锁（写入 `NVRAM`）：** 安装 `AdaUnlockDxe.efi`（`Driver####`）。之后每次冷启动自动解锁并支持 S3 睡眠保持，无需再插着 U 盘。
@@ -42,12 +42,12 @@
    <details>
    <summary><b>预览：放大版 UEFI 启动菜单（支持 <code>[L]</code> 中/英/德切换与 CSM 实时检测）</b></summary>
    <br>
-   <img src="images/uefi-boot-menu-zh.png" alt="Universal GPU Unlock v2.1.0 中文 UEFI 预引导菜单预览（含 CSM 状态与语言切换）" width="760" />
+   <img src="images/uefi-boot-menu-zh.png" alt="Universal GPU Unlock v2.1.1 中文 UEFI 预引导菜单预览（含 CSM 状态与语言切换）" width="760" />
    </details>
 3. **在 Windows 中验证与调优：** 运行 **`Launch-Dashboard.bat`**（支持右上角 `EN` / `简体中文` / `DE` 切换的图形控制面板：实时 `S3 ARMED` 指示、1 W 步进功耗上限滑块、`-lgc` 核心锁频控制与 S3 唤醒重设、基准对比）或 **`Check-GPU-Unlock.bat`**（命令行跑分与 `FMLA32/16` 检测）。
 
 > [!TIP]
-> **首次启动 BIOS 检查项：** 请在 BIOS 中将 **CSM 设为 Disabled**（纯 UEFI 模式），以免黑屏或报 Error Code 43；同时开启 **Above 4G Decoding** 和 **Resizable BAR** 以获得完整的显存带宽（+10% 至 +15%）。
+> **首次启动 BIOS 检查项：** 请务必在 BIOS 中将 **CSM 设为 Disabled**（纯 UEFI 模式），以免黑屏或报 Error Code 43；**Above 4G Decoding** 与 **Resizable BAR** 属于可选性能调优（+10% 至 +15% 显存带宽），未开启 ReBAR **不会**像 CSM 那样中断或阻止解锁。
 
 ---
 

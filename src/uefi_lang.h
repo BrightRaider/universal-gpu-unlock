@@ -4,6 +4,7 @@
 #define GU_UEFI_LANG_H
 
 #include "port.h"
+#include "version.h"
 
 #define GU_LANG_EN 0U
 #define GU_LANG_ZH 1U
@@ -353,9 +354,9 @@ static const CHAR16 *const GuUiStrings[GU_STR_COUNT][GU_LANG_COUNT] = {
   },
   /* MENU_TITLE */
   {
-    L" UNIVERSAL GPU UNLOCK v2.1.0 (Multi-Gen Edition)\r\n",
-    L" UNIVERSAL GPU UNLOCK v2.1.0 (" L"\x901A" L"\x7528" L"\x591A" L"\x4EE3" L"\x663E" L"\x5361" L"\x89E3" L"\x9501" L")\r\n",
-    L" UNIVERSAL GPU UNLOCK v2.1.0 (Multi-Gen Edition)\r\n"
+    L" UNIVERSAL GPU UNLOCK " GU_VERSION_TAG_WIDE L" (Multi-Gen Edition)\r\n",
+    L" UNIVERSAL GPU UNLOCK " GU_VERSION_TAG_WIDE L" (" L"\x901A" L"\x7528" L"\x591A" L"\x4EE3" L"\x663E" L"\x5361" L"\x89E3" L"\x9501" L")\r\n",
+    L" UNIVERSAL GPU UNLOCK " GU_VERSION_TAG_WIDE L" (Multi-Gen Edition)\r\n"
   },
   /* MENU_TIMER_HDR */
   {
@@ -365,9 +366,9 @@ static const CHAR16 *const GuUiStrings[GU_STR_COUNT][GU_LANG_COUNT] = {
   },
   /* MENU_HINT_LINE */
   {
-    L" [Space] Pause countdown   |   [L] Language: EN / " L"\x4E2D" L"\x6587" L" / DE\r\n",
-    L" [" L"\x7A7A" L"\x683C" L"] " L"\x6682" L"\x505C" L"\x5012" L"\x8BA1" L"\x65F6" L"         |   [L] " L"\x8BED" L"\x8A00" L"\x5207" L"\x6362" L": EN / " L"\x7B80" L"\x4F53" L"\x4E2D" L"\x6587" L" / DE\r\n",
-    L" [Leertaste] Pause         |   [L] Sprache: EN / " L"\x4E2D" L"\x6587" L" / DE\r\n"
+    L" [Space] Pause   |   [L] Language (pauses): EN / " L"\x4E2D" L"\x6587" L" / DE\r\n",
+    L" [" L"\x7A7A" L"\x683C" L"] " L"\x6682" L"\x505C" L"     |   [L] " L"\x8BED" L"\x8A00" L"(" L"\x6682" L"\x505C" L"): EN / " L"\x7B80" L"\x4F53" L"\x4E2D" L"\x6587" L" / DE\r\n",
+    L" [Leertaste] Pause   |   [L] Sprache (pausiert): EN / " L"\x4E2D" L"\x6587" L" / DE\r\n"
   },
   /* MENU_HINT_ASCII */
   {
@@ -485,9 +486,9 @@ static const CHAR16 *const GuUiStrings[GU_STR_COUNT][GU_LANG_COUNT] = {
   },
   /* STATUS_HDR */
   {
-    L"\r\n=======================================================================\r\n UNIVERSAL GPU UNLOCK v2.1.0 - Status Monitor\r\n=======================================================================\r\n",
-    L"\r\n=======================================================================\r\n UNIVERSAL GPU UNLOCK v2.1.0 - " L"\x72B6" L"\x6001" L"\x76D1" L"\x63A7" L"\r\n=======================================================================\r\n",
-    L"\r\n=======================================================================\r\n UNIVERSAL GPU UNLOCK v2.1.0 - Statusmonitor\r\n=======================================================================\r\n"
+    L"\r\n=======================================================================\r\n UNIVERSAL GPU UNLOCK " GU_VERSION_TAG_WIDE L" - Status Monitor\r\n=======================================================================\r\n",
+    L"\r\n=======================================================================\r\n UNIVERSAL GPU UNLOCK " GU_VERSION_TAG_WIDE L" - " L"\x72B6" L"\x6001" L"\x76D1" L"\x63A7" L"\r\n=======================================================================\r\n",
+    L"\r\n=======================================================================\r\n UNIVERSAL GPU UNLOCK " GU_VERSION_TAG_WIDE L" - Statusmonitor\r\n=======================================================================\r\n"
   },
   /* ST_STEP12 */
   {

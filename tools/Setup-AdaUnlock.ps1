@@ -48,7 +48,12 @@ if ($gpus) {
 }
 
 Write-Host ""
-Write-Host "[2/5] Pre-Flight Safety Checks (ESP, BitLocker, Secure Boot, ACPI S3)..." -ForegroundColor Cyan
+Write-Host "[2/5] Pre-Flight Safety Checks (CSM, ReBAR, ESP, BitLocker, Secure Boot, S3)..." -ForegroundColor Cyan
+
+Show-GuCsmAndRebarPreFlight -OnLog {
+    param($msg, $color)
+    if ($color) { Write-Host $msg -ForegroundColor $color } else { Write-Host $msg }
+}
 
 # 2a. Check Windows EFI System Partition (ESP) size
 try {
@@ -274,8 +279,9 @@ Write-Host "HOW TO BOOT & UNLOCK:" -ForegroundColor Yellow
 Write-Host "1. Restart your PC and press your Boot Menu key (F11 on MSI/ASRock, F12 on Gigabyte, F8 on ASUS)."
 Write-Host "2. Select your USB drive ('UEFI: USB...')."
 Write-Host "3. BIOS Setup Prerequisites:"
-Write-Host "   - REQUIRED: Set CSM (Compatibility Support Module) to [Disabled] (pure UEFI mode)."
-Write-Host "   - PRO-TIP: Enable 'Above 4G Decoding' and 'Re-Size BAR Support' for extra AI & gaming speed!"
+Write-Host "   - REQUIRED: Set CSM (Compatibility Support Module) to [Disabled] (pure UEFI mode)." -ForegroundColor Red
+Write-Host "   - OPTIONAL TIP: Enable 'Above 4G Decoding' + 'Re-Size BAR Support' for extra AI & gaming speed" -ForegroundColor Cyan
+Write-Host "     (ReBAR OFF does NOT block or break the unlock, unlike CSM)." -ForegroundColor DarkCyan
 Write-Host "   - SECURE BOOT (Append Key): In BIOS -> Key Management -> 'Append db', select 'AdaUnlock_SecureBoot.cer'."
 Write-Host "4. Choose [U] (one-shot), [P] (S3 Sleep Persistence), or [I] (Stickless NVRAM DXE Driver)."
 Write-Host "5. In Windows, run Launch-Dashboard.bat (GUI Cockpit) or Check-GPU-Unlock.bat (CLI Benchmark)!"
