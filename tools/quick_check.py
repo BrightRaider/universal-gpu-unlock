@@ -38,6 +38,7 @@ from gu_system_info import (  # noqa: E402
     get_power_limit_info,
     get_rebar_info,
     get_s3_armed_status,
+    is_gtx16_no_tensor,
     measure_fmla_ratio,
     resolve_card_profile,
 )
@@ -150,6 +151,8 @@ def evaluate_gpu(dev_idx, dev_count, fw_str):
             print(f"  {prefix}Pre-Bench Load  : {C_GREEN}[OK] {u_gpu:.0f}% GPU{mem_txt} (Idle){C_RESET}")
     if rebar_active is True:
         print(f"  {prefix}Resizable BAR   : {C_GREEN}[OK] ENABLED (BAR1: {bar1} MiB / VRAM: {fb} MiB){C_RESET}")
+    elif rebar_active is False and (code == "NO_TENSOR_CORES" or is_gtx16_no_tensor(gpu_name)):
+        print(f"  {prefix}Resizable BAR   : {C_CYAN}Unsupported natively (Turing GTX 16xx {bar1} MiB){C_RESET}")
     elif rebar_active is False:
         print(f"  {prefix}Resizable BAR   : {C_RED_BOLD}[!] DISABLED (BAR1: {bar1} MiB restricted) -> Turn ON in BIOS!{C_RESET}")
     else:

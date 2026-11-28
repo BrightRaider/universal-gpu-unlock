@@ -102,6 +102,7 @@
 | **Palit GeForce RTX 3060 12GB** | Ampere (GA106 LHR) | MSI MPG Z390 GAMING PLUS | **46.08 TFLOPS**（ComfyUI 提速约 45%） | [#11](https://github.com/BrightRaider/universal-gpu-unlock/issues/11) |
 | **Gigabyte GeForce RTX 3060 12GB (`10DE:2504`)** | Ampere (GA106) | Gigabyte B760M D2H (ReBAR 16GB) | **47.0 TFLOPS**（`24.2 -> 47.0`，+94.2%，USB 与免 U 盘 `[I]` 均验证） | [@henry-richard7 in #24](https://github.com/BrightRaider/universal-gpu-unlock/issues/24) |
 | **NVIDIA GeForce RTX 3060 Ti 8GB (`10DE:2489`)** | Ampere (GA104) | MSI PRO Z790-A WIFI DDR4 (i5-14600KF) | **61.23 TFLOPS FP16 (+104.4%) / 61.97 TFLOPS BF16** | [@karadeveci in #22](https://github.com/BrightRaider/universal-gpu-unlock/issues/22) |
+| **NVIDIA GeForce RTX 3060 Ti 8GB (`10DE:2489`)** | Ampere (GA104) | VeraCrypt `1.25.9` UEFI + 双卡 (`GTX 1660 SUPER` 亮机, `ReBAR 8GB`, `S3`) | **60.95–61.23 TFLOPS FP16 / 69.34 TFLOPS BF16**（`S3 ARMED` 已验证） | [@V85Sf in #23](https://github.com/BrightRaider/universal-gpu-unlock/issues/23) |
 | **Gainward GeForce RTX 3080 Phoenix 10GB** | Ampere (GA102) | ASRock A520M-HVS (AM4) | **106.05 TFLOPS**（+95.7%） | [#17](https://github.com/BrightRaider/universal-gpu-unlock/issues/17) |
 | **EVGA GeForce RTX 3080 Ti 12GB** | Ampere (GA102) | ASUS PRIME Z690-A | **127.61 TFLOPS** | [#16](https://github.com/BrightRaider/universal-gpu-unlock/issues/16) |
 | **EVGA GeForce RTX 3080 Ti 12GB** | Ampere (GA102) | MSI X570-A PRO | **119.0 TFLOPS**（+84.5%） | [#12](https://github.com/BrightRaider/universal-gpu-unlock/issues/12) |
